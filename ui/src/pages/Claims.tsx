@@ -33,26 +33,34 @@ export default function ClaimsPage() {
   const [error, setError] = useState<string | null>(null);
   const [band, setBand] = useState("");
   const [disposition, setDisposition] = useState("");
+  const [q, setQ] = useState("");
   const { page, setPage, pageCount, total, slice } = usePaged(rows ?? [], 25);
 
   useEffect(() => {
     let alive = true;
-    setRows(null);
-    setError(null);
-    api
-      .listClaims({
-        band: band || undefined,
-        disposition: disposition || undefined,
-        limit: 200,
-      })
-      .then((r) => alive && setRows(r))
-      .catch((e) =>
-        alive && setError(e instanceof ApiError ? e.message : "Failed to load"),
-      );
+    // Debounce the search so typing doesn't fire a request per keystroke;
+    // band / disposition changes settle just as quickly.
+    const handle = setTimeout(() => {
+      setRows(null);
+      setError(null);
+      api
+        .listClaims({
+          band: band || undefined,
+          disposition: disposition || undefined,
+          q: q || undefined,
+          limit: 200,
+        })
+        .then((r) => alive && setRows(r))
+        .catch((e) =>
+          alive &&
+          setError(e instanceof ApiError ? e.message : "Failed to load"),
+        );
+    }, 250);
     return () => {
       alive = false;
+      clearTimeout(handle);
     };
-  }, [band, disposition]);
+  }, [band, disposition, q]);
 
   const selectCls =
     "rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm outline-none focus:border-slate-500 focus:ring-1 focus:ring-slate-500";
@@ -61,7 +69,14 @@ export default function ClaimsPage() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-xl font-semibold text-slate-900">Claims</h1>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search claim or accident id…"
+            aria-label="Search by claim or accident id"
+            className="w-60 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm outline-none focus:border-slate-500 focus:ring-1 focus:ring-slate-500"
+          />
           <select
             value={band}
             onChange={(e) => setBand(e.target.value)}
@@ -88,11 +103,12 @@ export default function ClaimsPage() {
               </option>
             ))}
           </select>
-          {(band || disposition) && (
+          {(band || disposition || q) && (
             <button
               onClick={() => {
                 setBand("");
                 setDisposition("");
+                setQ("");
               }}
               className="rounded-md border border-slate-300 px-2.5 py-1.5 text-sm text-slate-600 transition hover:bg-slate-100"
             >

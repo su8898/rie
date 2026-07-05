@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import date
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
-from sqlalchemy import desc, select
+from sqlalchemy import desc, or_, select
 from sqlalchemy.orm import Session
 
 from .. import (
@@ -63,12 +63,17 @@ def submit(payload: dict = Body(...), db: Session = Depends(get_db),
 @router.get("")
 def list_claims(db: Session = Depends(get_db), user: dict = Depends(current_user),
                 band: str | None = None, disposition: str | None = None,
+                q: str | None = None,
                 limit: int = Query(50, le=200), offset: int = 0) -> list[dict]:
     stmt = select(Determination).order_by(desc(Determination.id))
     if band:
         stmt = stmt.where(Determination.band == band)
     if disposition:
         stmt = stmt.where(Determination.disposition == disposition)
+    if q and q.strip():
+        like = f"%{q.strip()}%"
+        stmt = stmt.where(or_(Determination.claim_id.ilike(like),
+                              Determination.accident_id.ilike(like)))
     return [_det_dict(r) for r in db.scalars(stmt.limit(limit).offset(offset))]
 
 

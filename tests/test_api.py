@@ -72,6 +72,22 @@ def test_submit_clean_and_read_back():
     assert body["claim"]["claim_type"] == "SUPPLIER"
 
 
+def test_list_claims_search():
+    _login("handler")
+    c = {**CLAIM, "claim_id": "R_SRCH1", "party_token": "P_srch",
+         "case_number_raw": "CAS 909/04/2026"}
+    acc = client.post("/api/claims", json=c).json()["accident_id"]
+    # case-insensitive substring match on claim_id
+    hits = client.get("/api/claims", params={"q": "srch1"}).json()
+    assert any(r["claim_id"] == "R_SRCH1" for r in hits)
+    assert all("SRCH1" in r["claim_id"] or "SRCH1" in r["accident_id"] for r in hits)
+    # the same claim is reachable by its accident_id
+    assert any(r["claim_id"] == "R_SRCH1"
+               for r in client.get("/api/claims", params={"q": acc}).json())
+    # a non-matching needle returns nothing
+    assert client.get("/api/claims", params={"q": "ZZ_NO_MATCH"}).json() == []
+
+
 def test_submit_over_rpl_reprices():
     _login("handler")
     c = {**CLAIM, "claim_id": "R_over", "party_token": "P_over",

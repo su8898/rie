@@ -130,12 +130,14 @@ export const api = {
   listClaims: (params: {
     band?: string;
     disposition?: string;
+    q?: string;
     limit?: number;
     offset?: number;
   } = {}) => {
     const q = new URLSearchParams();
     if (params.band) q.set("band", params.band);
     if (params.disposition) q.set("disposition", params.disposition);
+    if (params.q && params.q.trim()) q.set("q", params.q.trim());
     if (params.limit != null) q.set("limit", String(params.limit));
     if (params.offset != null) q.set("offset", String(params.offset));
     const qs = q.toString();
