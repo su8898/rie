@@ -3,16 +3,23 @@
 
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth";
+import type { Role } from "../types";
 
-const NAV = [
+const NAV: { to: string; label: string; role?: Role }[] = [
   { to: "/dashboard", label: "Dashboard" },
   { to: "/claims", label: "Claims" },
   { to: "/submit", label: "Submit" },
   { to: "/payments", label: "Payments" },
+  { to: "/cases", label: "Cases" },
+  { to: "/disputes", label: "Disputes" },
   { to: "/audit", label: "Audit" },
   { to: "/accidents", label: "Accidents" },
   { to: "/intelligence", label: "Intelligence" },
+  { to: "/coding", label: "Coding" },
+  { to: "/governance", label: "Governance" },
+  { to: "/notifications", label: "Notifications" },
   { to: "/reasons", label: "Reasons" },
+  { to: "/admin", label: "Admin", role: "ADMIN" },
 ];
 
 export default function Layout() {
@@ -40,7 +47,7 @@ export default function Layout() {
           </div>
         </div>
         <nav className="flex-1 space-y-0.5 p-2">
-          {NAV.map((item) => (
+          {NAV.filter((item) => !item.role || user?.role === item.role).map((item) => (
             <NavLink
               key={item.to}
               to={item.to}

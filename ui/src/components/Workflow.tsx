@@ -16,6 +16,7 @@ import { ApiError, api } from "../api";
 import { useAuth } from "../auth";
 import { rand } from "../format";
 import type {
+  AwardClass,
   LitigationRecord,
   MeritsGround,
   OfferHeadsInput,
@@ -466,27 +467,50 @@ function OfferPanel({ wf, claimId, busyKey, can, run }: PanelProps) {
   const o = wf.offer;
   const [useLoe, setUseLoe] = useState(false);
   const [annualLosses, setAnnualLosses] = useState("100000, 100000, 100000");
+  const [useLos, setUseLos] = useState(false);
+  const [supportLosses, setSupportLosses] = useState("120000, 120000, 120000");
   const [useGd, setUseGd] = useState(false);
   const [proposed, setProposed] = useState(0);
   const [p25, setP25] = useState(0);
   const [p75, setP75] = useState(0);
+  const [injuryClass, setInjuryClass] = useState("");
+  const [severityTier, setSeverityTier] = useState("");
+  const [awardClasses, setAwardClasses] = useState<AwardClass[]>([]);
+  const [useFun, setUseFun] = useState(false);
+  const [necessary, setNecessary] = useState(0);
+  const [nonNecessary, setNonNecessary] = useState(0);
+
+  useEffect(() => {
+    api
+      .awardClasses()
+      .then(setAwardClasses)
+      .catch(() => setAwardClasses([]));
+  }, []);
+
+  const tiers =
+    awardClasses.find((c) => c.injury_class === injuryClass)?.severity_tiers ??
+    [];
+
+  function parseLosses(s: string): number[] {
+    return s
+      .split(",")
+      .map((x) => Number(x.trim()))
+      .filter((n) => !Number.isNaN(n));
+  }
 
   function buildOffer() {
     const heads: OfferHeadsInput = {};
-    if (useLoe) {
-      const losses = annualLosses
-        .split(",")
-        .map((s) => Number(s.trim()))
-        .filter((n) => !Number.isNaN(n));
-      heads.loss_of_earnings = { annual_losses: losses };
-    }
+    if (useLoe) heads.loss_of_earnings = { annual_losses: parseLosses(annualLosses) };
+    if (useLos) heads.loss_of_support = { annual_losses: parseLosses(supportLosses) };
     if (useGd) {
-      heads.general_damages = {
-        proposed,
-        band_p25: p25,
-        band_p75: p75,
-      };
+      // An injury class routes general damages through the comparable-awards
+      // store (band computed, §5d); otherwise the manual p25/p75 band is used.
+      heads.general_damages = injuryClass
+        ? { proposed, injury_class: injuryClass, severity_tier: severityTier || undefined }
+        : { proposed, band_p25: p25, band_p75: p75 };
     }
+    if (useFun)
+      heads.funeral = { necessary_costs: necessary, non_necessary: nonNecessary };
     return api.buildOffer(claimId, heads);
   }
 
@@ -547,6 +571,7 @@ function OfferPanel({ wf, claimId, busyKey, can, run }: PanelProps) {
           {o ? "Rebuild offer" : "Build offer"}
         </div>
 
+        {/* loss of earnings */}
         <label className="flex items-center gap-2 text-xs text-slate-600">
           <input
             type="checkbox"
@@ -568,6 +593,29 @@ function OfferPanel({ wf, claimId, busyKey, can, run }: PanelProps) {
           </div>
         )}
 
+        {/* loss of support (dependants of a deceased breadwinner) */}
+        <label className="flex items-center gap-2 text-xs text-slate-600">
+          <input
+            type="checkbox"
+            checked={useLos}
+            onChange={(e) => setUseLos(e.target.checked)}
+            className="h-3.5 w-3.5 rounded border-slate-300"
+          />
+          loss of support
+        </label>
+        {useLos && (
+          <div>
+            <label className={microLabel}>annual support losses (comma-separated)</label>
+            <input
+              value={supportLosses}
+              onChange={(e) => setSupportLosses(e.target.value)}
+              className={`${fieldCls} tnum`}
+              placeholder="120000, 120000"
+            />
+          </div>
+        )}
+
+        {/* general damages — manual band, or computed from the comparable-awards store */}
         <label className="flex items-center gap-2 text-xs text-slate-600">
           <input
             type="checkbox"
@@ -578,31 +626,109 @@ function OfferPanel({ wf, claimId, busyKey, can, run }: PanelProps) {
           general damages
         </label>
         {useGd && (
-          <div className="grid grid-cols-3 gap-2">
+          <div className="space-y-2">
+            <div className="grid grid-cols-3 gap-2">
+              <div>
+                <label className={microLabel}>proposed</label>
+                <input
+                  type="number"
+                  value={proposed}
+                  onChange={(e) => setProposed(Number(e.target.value))}
+                  className={`${fieldCls} tnum`}
+                />
+              </div>
+              <div>
+                <label className={microLabel}>injury class</label>
+                <select
+                  value={injuryClass}
+                  onChange={(e) => {
+                    setInjuryClass(e.target.value);
+                    setSeverityTier("");
+                  }}
+                  className={fieldCls}
+                >
+                  <option value="">— manual band —</option>
+                  {awardClasses.map((c) => (
+                    <option key={c.injury_class} value={c.injury_class}>
+                      {c.injury_class}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className={microLabel}>severity</label>
+                <select
+                  value={severityTier}
+                  onChange={(e) => setSeverityTier(e.target.value)}
+                  disabled={!injuryClass}
+                  className={fieldCls}
+                >
+                  <option value="">any</option>
+                  {tiers.map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            {injuryClass ? (
+              <p className="text-[11px] text-slate-400">
+                Band computed from the comparable-awards store (CPI-adjusted
+                p25–p75, §5d).
+              </p>
+            ) : (
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className={microLabel}>band p25</label>
+                  <input
+                    type="number"
+                    value={p25}
+                    onChange={(e) => setP25(Number(e.target.value))}
+                    className={`${fieldCls} tnum`}
+                  />
+                </div>
+                <div>
+                  <label className={microLabel}>band p75</label>
+                  <input
+                    type="number"
+                    value={p75}
+                    onChange={(e) => setP75(Number(e.target.value))}
+                    className={`${fieldCls} tnum`}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* funeral (deceased claimant) */}
+        <label className="flex items-center gap-2 text-xs text-slate-600">
+          <input
+            type="checkbox"
+            checked={useFun}
+            onChange={(e) => setUseFun(e.target.checked)}
+            className="h-3.5 w-3.5 rounded border-slate-300"
+          />
+          funeral
+        </label>
+        {useFun && (
+          <div className="grid grid-cols-2 gap-2">
             <div>
-              <label className={microLabel}>proposed</label>
+              <label className={microLabel}>necessary costs</label>
               <input
                 type="number"
-                value={proposed}
-                onChange={(e) => setProposed(Number(e.target.value))}
+                value={necessary}
+                onChange={(e) => setNecessary(Number(e.target.value))}
                 className={`${fieldCls} tnum`}
               />
             </div>
             <div>
-              <label className={microLabel}>band p25</label>
+              <label className={microLabel}>non-necessary (flagged)</label>
               <input
                 type="number"
-                value={p25}
-                onChange={(e) => setP25(Number(e.target.value))}
-                className={`${fieldCls} tnum`}
-              />
-            </div>
-            <div>
-              <label className={microLabel}>band p75</label>
-              <input
-                type="number"
-                value={p75}
-                onChange={(e) => setP75(Number(e.target.value))}
+                value={nonNecessary}
+                onChange={(e) => setNonNecessary(Number(e.target.value))}
                 className={`${fieldCls} tnum`}
               />
             </div>

@@ -4,24 +4,45 @@
 
 import type {
   Accident,
+  AdminAuditRow,
+  AdminUser,
   Attorney,
   AuditItem,
   AuditRoi,
   AuthUser,
+  AwardBand,
+  AwardClass,
   BatchDict,
+  CaseAnalytics,
+  CaseItem,
+  CaseNote,
   ClaimDetail,
   Claimant,
+  CodeAgg,
+  ConditionRow,
+  CostEstimate,
   Dashboard,
   Determination,
+  DisputeAnalytics,
+  DisputeItem,
   Fairness,
   Health,
+  LabelRow,
+  NegotiatedRate,
+  Notification,
+  NotifPref,
   Offer,
   OfferHeadsInput,
   PaymentSource,
+  PrecisionRow,
   Provider,
   QueueRow,
   Reason,
+  RecallEstimate,
+  RecallSample,
   RiskSweep,
+  SignalMode,
+  StatutoryCap,
   SweepResult,
   TariffRate,
   Workflow,
@@ -264,6 +285,180 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+
+  // — cases (investigation / review case machine) —
+  cases: (params: { lane?: string; status?: string; mine?: boolean } = {}) => {
+    const q = new URLSearchParams();
+    if (params.lane) q.set("lane", params.lane);
+    if (params.status) q.set("status", params.status);
+    if (params.mine) q.set("mine", "true");
+    const qs = q.toString();
+    return request<CaseItem[]>(`/api/cases${qs ? `?${qs}` : ""}`);
+  },
+  openCase: (body: {
+    lane: string;
+    reason: string;
+    claim_id?: string | null;
+    priority?: number;
+    rand_at_stake?: number;
+  }) =>
+    request<CaseItem>("/api/cases", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  caseAnalytics: () => request<CaseAnalytics>("/api/cases/analytics"),
+  caseAction: (
+    id: number,
+    action: string,
+    body: {
+      verdict?: string;
+      root_cause?: string;
+      recovered?: number;
+      prevented?: number;
+    } = {},
+  ) =>
+    request<CaseItem>(`/api/cases/${id}/${action}`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  caseNotes: (id: number) => request<CaseNote[]>(`/api/cases/${id}/notes`),
+  addCaseNote: (id: number, body: string) =>
+    request<{ id: number }>(`/api/cases/${id}/notes`, {
+      method: "POST",
+      body: JSON.stringify({ body }),
+    }),
+
+  // — disputes (objection register) —
+  disputes: (
+    params: { subject?: string; status?: string; claim_id?: string } = {},
+  ) => {
+    const q = new URLSearchParams();
+    if (params.subject) q.set("subject", params.subject);
+    if (params.status) q.set("status", params.status);
+    if (params.claim_id) q.set("claim_id", params.claim_id);
+    const qs = q.toString();
+    return request<DisputeItem[]>(`/api/disputes${qs ? `?${qs}` : ""}`);
+  },
+  lodgeDispute: (body: {
+    claim_id: string;
+    subject: string;
+    raised_by: string;
+    grounds?: string;
+  }) =>
+    request<DisputeItem>("/api/disputes", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  disputeAnalytics: () => request<DisputeAnalytics>("/api/disputes/analytics"),
+  disputeAction: (
+    id: number,
+    action: string,
+    body: { outcome?: string; channel?: string; linked_ref?: string } = {},
+  ) =>
+    request<DisputeItem>(`/api/disputes/${id}/${action}`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  // — governance (precision / recall / promotion lifecycle) —
+  precision: () => request<PrecisionRow[]>("/api/governance/precision"),
+  promotions: () => request<PrecisionRow[]>("/api/governance/promotions"),
+  recall: () => request<RecallEstimate>("/api/governance/recall"),
+  recallSample: (n: number) =>
+    request<RecallSample>(`/api/governance/recall/sample?n=${n}`),
+  labels: () => request<LabelRow[]>("/api/governance/labels"),
+
+  // — admin (users / statutory config / signal-mode overrides / audit) —
+  adminUsers: () => request<AdminUser[]>("/api/admin/users"),
+  createUser: (body: { username: string; role: string; password: string }) =>
+    request<AdminUser>("/api/admin/users", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  setUserRole: (username: string, role: string) =>
+    request<AdminUser>(
+      `/api/admin/users/${encodeURIComponent(username)}/role`,
+      { method: "POST", body: JSON.stringify({ role }) },
+    ),
+  setUserActive: (username: string, active: boolean) =>
+    request<AdminUser>(
+      `/api/admin/users/${encodeURIComponent(username)}/active`,
+      { method: "POST", body: JSON.stringify({ active }) },
+    ),
+  adminCaps: () => request<StatutoryCap[]>("/api/admin/caps"),
+  upsertCap: (effective_from: string, annual_cap: number) =>
+    request<StatutoryCap>("/api/admin/caps", {
+      method: "POST",
+      body: JSON.stringify({ effective_from, annual_cap }),
+    }),
+  adminNegotiated: () => request<NegotiatedRate[]>("/api/admin/negotiated"),
+  upsertNegotiated: (body: { kind: string; code: string; rate: number }) =>
+    request<NegotiatedRate>("/api/admin/negotiated", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  signalModes: () => request<SignalMode[]>("/api/admin/signal-modes"),
+  setSignalMode: (body: { code: string; mode: string; note?: string }) =>
+    request<{ signal: string; mode: string; effective_from: string }>(
+      "/api/admin/signal-modes",
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  clearSignalMode: (code: string) =>
+    request<{ ok: boolean }>(
+      `/api/admin/signal-modes/${encodeURIComponent(code)}`,
+      { method: "DELETE" },
+    ),
+  adminAudit: () => request<AdminAuditRow[]>("/api/admin/audit"),
+
+  // — coding intelligence (aggregation / negotiation targets / condition bands) —
+  codingCodes: (kind?: string) =>
+    request<CodeAgg[]>(
+      `/api/coding/codes${kind ? `?kind=${encodeURIComponent(kind)}` : ""}`,
+    ),
+  negotiationTargets: () =>
+    request<CodeAgg[]>("/api/coding/negotiation-targets"),
+  conditions: () => request<ConditionRow[]>("/api/coding/conditions"),
+  estimateCondition: (injuryClass: string, amount: number) =>
+    request<CostEstimate>(
+      `/api/coding/estimate?injury_class=${encodeURIComponent(injuryClass)}&amount=${amount}`,
+    ),
+
+  // — notifications (POPIA-minimal outbox + opt-in) —
+  notifications: (params: { status?: string; claim_id?: string } = {}) => {
+    const q = new URLSearchParams();
+    if (params.status) q.set("status", params.status);
+    if (params.claim_id) q.set("claim_id", params.claim_id);
+    const qs = q.toString();
+    return request<Notification[]>(`/api/notifications${qs ? `?${qs}` : ""}`);
+  },
+  notifPref: (token: string) =>
+    request<NotifPref>(
+      `/api/notifications/prefs/${encodeURIComponent(token)}`,
+    ),
+  setNotifPref: (token: string, channel: string, opted_in: boolean) =>
+    request<NotifPref>(
+      `/api/notifications/prefs/${encodeURIComponent(token)}`,
+      { method: "POST", body: JSON.stringify({ channel, opted_in }) },
+    ),
+  notifMarkSent: (id: number) =>
+    request<Notification>(`/api/notifications/${id}/sent`, {
+      method: "POST",
+      body: "{}",
+    }),
+  notifMarkFailed: (id: number) =>
+    request<Notification>(`/api/notifications/${id}/failed`, {
+      method: "POST",
+      body: "{}",
+    }),
+
+  // — comparable awards (general-damages quantum) —
+  awardClasses: () => request<AwardClass[]>("/api/reference/awards/classes"),
+  awardBand: (injuryClass: string, severity?: string) =>
+    request<AwardBand>(
+      `/api/reference/awards?injury_class=${encodeURIComponent(injuryClass)}${
+        severity ? `&severity=${encodeURIComponent(severity)}` : ""
+      }`,
+    ),
 };
 
 // Thin POST helper for transition/create endpoints whose exact response body

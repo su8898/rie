@@ -218,14 +218,19 @@ export interface Workflow {
 // Ground options for a merits reject / dismiss (s19 exclusion grounds).
 export type MeritsGround = "S19_EXCLUSION" | "SOLE_NEGLIGENCE" | "NO_MVA_NEXUS";
 
-// Payload for POST /api/offer/{claim_id}.
+// Payload for POST /api/offer/{claim_id}. General damages may pass explicit bands, or an
+// injury_class/severity_tier for the comparable-awards store to compute the band (§5d).
 export interface OfferHeadsInput {
   loss_of_earnings?: { annual_losses: number[] };
+  loss_of_support?: { annual_losses: number[] };
   general_damages?: {
     proposed: number;
-    band_p25: number;
-    band_p75: number;
+    band_p25?: number;
+    band_p75?: number;
+    injury_class?: string;
+    severity_tier?: string;
   };
+  funeral?: { necessary_costs: number; non_necessary?: number };
 }
 
 // ── Payments (payment-batch layer, /api/payments) ────────────────────────────
@@ -389,4 +394,273 @@ export interface SweepResult {
   opened: number[];
   n: number;
   threshold: number;
+}
+
+// ── Cases (/api/cases) ───────────────────────────────────────────────────────
+export type CaseLane = "REVIEW" | "BLOCK" | "CLAWBACK";
+export type CaseVerdict =
+  | "CONFIRMED_FRAUD"
+  | "CLEARED"
+  | "ADJUSTED"
+  | "NO_ACTION"
+  | "REFERRED_LEGAL";
+
+export interface CaseItem {
+  id: number;
+  claim_id: string | null;
+  lane: CaseLane;
+  status: string; // OPEN | IN_REVIEW | ESCALATED | CLOSED
+  priority: number; // 1..5
+  reason: string;
+  rand_at_stake: number;
+  owner_role: string | null;
+  assigned_to: string | null;
+  verdict: string | null;
+  root_cause: string | null;
+  rand_recovered: number;
+  rand_prevented: number;
+  opened_by: string;
+  opened_at: string | null;
+  due_at: string | null;
+  closed_at: string | null;
+  sla_days: number | null;
+  days_to_sla: number | null;
+  overdue: boolean;
+  actions: string[];
+}
+
+export interface CaseAnalytics {
+  n: number;
+  open: number;
+  by_lane: Record<string, number>;
+  by_status: Record<string, number>;
+  by_verdict: Record<string, number>;
+  rand_at_stake_open: number;
+  rand_recovered: number;
+  rand_prevented: number;
+  overdue: number;
+}
+
+export interface CaseNote {
+  id: number;
+  author: string;
+  body: string;
+  created_at: string | null;
+}
+
+// ── Disputes (/api/disputes) ─────────────────────────────────────────────────
+export type DisputeSubject =
+  | "MERITS"
+  | "QUANTUM"
+  | "TARIFF"
+  | "REPUDIATION"
+  | "SERIOUS_INJURY";
+export type DisputeRaiser = "CLAIMANT" | "PROVIDER" | "ATTORNEY";
+
+export interface DisputeItem {
+  id: number;
+  claim_id: string;
+  subject: DisputeSubject;
+  raised_by: DisputeRaiser;
+  grounds: string;
+  status: string; // LODGED | UNDER_RECONSIDERATION | UPHELD | REJECTED | REFERRED | RESOLVED | WITHDRAWN
+  channel: string | null; // INTERNAL | HPCSA_TRIBUNAL | LITIGATION
+  outcome: string | null;
+  linked_ref: string | null;
+  opened_by: string;
+  opened_at: string | null;
+  deadline: string | null;
+  days_to_deadline: number | null;
+  overdue: boolean;
+  closed_at: string | null;
+  actions: string[];
+}
+
+export interface DisputeAnalytics {
+  n: number;
+  open: number;
+  by_subject: Record<string, number>;
+  by_status: Record<string, number>;
+  by_channel: Record<string, number>;
+  by_raised_by: Record<string, number>;
+}
+
+// ── Governance / precision (/api/governance) ─────────────────────────────────
+export interface PrecisionRow {
+  signal: string;
+  category: string | null;
+  maturity: string | null;
+  current_mode: string;
+  recommended_mode: string;
+  fired: number;
+  labeled: number;
+  substantiated: number;
+  substantiation: number | null;
+  wilson_lower: number | null;
+  wilson_upper: number | null;
+  action?: "PROMOTE" | "DEMOTE";
+}
+
+export interface RecallEstimate {
+  reviewed: number;
+  misses: number;
+  miss_rate: number | null;
+  miss_rate_wilson_upper: number | null;
+  recall_floor: number | null;
+}
+
+export interface RecallSample {
+  population: number;
+  sample_size: number;
+  claims: string[];
+}
+
+export interface LabelRow {
+  claim_id: string;
+  verdict: string;
+  label: string;
+  lane: string;
+  case_id: number;
+}
+
+// ── Admin (/api/admin) ───────────────────────────────────────────────────────
+export interface AdminUser {
+  id: number;
+  username: string;
+  role: Role;
+  active: boolean;
+}
+
+export interface StatutoryCap {
+  effective_from: string;
+  annual_cap: number;
+}
+
+export interface NegotiatedRate {
+  kind: string;
+  code: string;
+  rate: number;
+}
+
+export interface SignalMode {
+  signal: string;
+  maturity: string;
+  category: string;
+  default_mode: string;
+  effective_mode: string;
+  overridden: boolean;
+  effective_from: string | null;
+  set_by: string | null;
+  note: string;
+  overridable: boolean;
+  substantiation: number | null;
+  wilson_lower: number | null;
+  recommended_mode: string | null;
+}
+
+export interface AdminAuditRow {
+  id: number;
+  actor: string;
+  action: string;
+  target: string;
+  detail: Record<string, unknown>;
+  at: string | null;
+}
+
+// ── Coding intelligence (/api/coding) ────────────────────────────────────────
+export interface CodeAgg {
+  kind: string;
+  code: string;
+  n_lines: number;
+  n_claims: number;
+  n_providers: number;
+  billed: number;
+  payable: number;
+  repricing_captured: number;
+  over_reference_signal: number;
+  uncovered_billed: number;
+  uncovered_lines: number;
+  top_src: string | null;
+  legal_status: string | null;
+  potential_saving?: number;
+}
+
+export interface ConditionBand {
+  p25: number;
+  p50: number;
+  p75: number;
+  p90: number;
+  min: number;
+  max: number;
+}
+
+export interface ConditionRow {
+  injury_class: string;
+  n: number;
+  robust: boolean;
+  bands: ConditionBand | null;
+  by_intensity: Record<
+    string,
+    { n: number; robust: boolean; bands: ConditionBand | null }
+  >;
+}
+
+export interface CostEstimate {
+  injury_class: string;
+  n: number;
+  robust: boolean;
+  classification: string; // BELOW_TYPICAL | TYPICAL | HIGH | OUTLIER | UNKNOWN
+  amount: number;
+  bands?: ConditionBand;
+}
+
+// ── Notifications (/api/notifications) ───────────────────────────────────────
+export type NotifChannel = "SMS" | "EMAIL" | "NONE";
+
+export interface Notification {
+  id: number;
+  claim_id: string;
+  party_token: string | null;
+  channel: string;
+  event: string;
+  body: string;
+  status: string; // PENDING | SENT | FAILED | SUPPRESSED
+  created_at: string | null;
+  sent_at: string | null;
+}
+
+export interface NotifPref {
+  party_token: string;
+  channel: string;
+  opted_in: boolean;
+}
+
+// ── Comparable awards (/api/reference/awards) ────────────────────────────────
+export interface AwardAuthority {
+  citation: string;
+  court: string;
+  severity_tier: string;
+  award_year: number;
+  award_rand: number;
+  adjusted: number;
+  notes: string;
+}
+
+export interface AwardBand {
+  injury_class: string;
+  severity_tier: string | null;
+  n: number;
+  robust: boolean;
+  current_year: number;
+  awards: AwardAuthority[];
+  band_min?: number;
+  band_max?: number;
+  band_p25?: number;
+  band_median?: number;
+  band_p75?: number;
+}
+
+export interface AwardClass {
+  injury_class: string;
+  severity_tiers: string[];
 }
