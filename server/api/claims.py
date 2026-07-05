@@ -7,6 +7,10 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
+from .. import (
+    lifecycle_service, litigation_service, merits_service, models, offers_service,
+    serious_injury_service, undertaking_service,
+)
 from ..db import get_db
 from ..models import ClaimRecord, Determination
 from ..pipeline_service import assess_and_store
@@ -74,3 +78,46 @@ def get_claim(claim_id: str, db: Session = Depends(get_db),
     if det is None:
         raise HTTPException(status_code=404, detail="claim not found")
     return {"claim": _claim_dict(db.get(ClaimRecord, claim_id)), "determination": _det_dict(det)}
+
+
+@router.get("/{claim_id}/workflow")
+def workflow(claim_id: str, db: Session = Depends(get_db),
+             user: dict = Depends(current_user)) -> dict:
+    """Every operational machine for one claim + its available actions — the UI workflow panel."""
+    lc = db.get(models.ClaimLifecycle, claim_id)
+    m = db.get(models.MeritsDetermination, claim_id)
+    sis = db.scalars(select(models.SeriousInjury)
+                     .where(models.SeriousInjury.claim_id == claim_id)
+                     .order_by(models.SeriousInjury.id))
+    us = db.scalars(select(models.Undertaking)
+                    .where(models.Undertaking.claim_id == claim_id)
+                    .order_by(models.Undertaking.id))
+    lits = db.scalars(select(models.Litigation)
+                      .where(models.Litigation.claim_id == claim_id)
+                      .order_by(models.Litigation.id))
+    return {
+        "claim_id": claim_id,
+        "lifecycle": None if lc is None else {
+            "stage": lc.stage, "actions": lifecycle_service.LIFECYCLE.actions_from(lc.stage)},
+        "merits": None if m is None else {
+            "status": m.status, "fault_pct": m.fault_pct, "ground": m.ground,
+            "actions": merits_service.MERITS.actions_from(m.status)},
+        "offer": offers_service.latest_offer(db, claim_id),
+        "serious_injury": [
+            {"id": s.id, "status": s.status, "list_match": s.list_match, "wpi": s.wpi,
+             "narrative": s.narrative, "actions": serious_injury_service.SI.actions_from(s.status)}
+            for s in sis],
+        "undertakings": [
+            {"id": u.id, "origin": u.origin, "status": u.status, "scope_dx": u.scope_dx,
+             "actions": undertaking_service.UNDERTAKING.actions_from(u.status),
+             "invoices": [
+                 {"id": i.id, "status": i.status, "billed": i.billed, "payable": i.payable,
+                  "reasons": i.reasons,
+                  "actions": undertaking_service.INVOICE.actions_from(i.status)}
+                 for i in undertaking_service.invoices_for(db, u.id)]}
+            for u in us],
+        "litigation": [
+            {"id": lt.id, "status": lt.status, "default_judgment": lt.default_judgment,
+             "actions": litigation_service.LITIGATION.actions_from(lt.status)}
+            for lt in lits],
+    }
