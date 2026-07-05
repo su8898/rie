@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, ApiError } from "../api";
 import {
@@ -8,9 +8,11 @@ import {
   ErrorBox,
   Empty,
   Pagination,
+  SearchInput,
   Toast,
   StateChip,
   CodePill,
+  matchQ,
   usePaged,
 } from "../components/ui";
 import { num } from "../format";
@@ -107,7 +109,15 @@ export default function NotificationsPage() {
   }, [pref, tokenInput, prefChannel, prefOptedIn]);
 
   const disabled = busyKey !== null;
-  const { page, setPage, pageCount, total, slice } = usePaged(notifs ?? [], 25);
+  const [q, setQ] = useState("");
+  const filtered = useMemo(
+    () =>
+      (notifs ?? []).filter((n) =>
+        matchQ(q, n.claim_id, n.event, n.channel, n.status, n.body, `#${n.id}`),
+      ),
+    [notifs, q],
+  );
+  const { page, setPage, pageCount, total, slice } = usePaged(filtered, 25);
 
   return (
     <div className="space-y-4">
@@ -135,9 +145,18 @@ export default function NotificationsPage() {
             ))}
           </select>
         </label>
-        {notifs && (
-          <Stat label="In view" value={num(notifs.length)} />
-        )}
+        <label className="flex flex-1 flex-col gap-1">
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+            Search
+          </span>
+          <SearchInput
+            value={q}
+            onChange={setQ}
+            placeholder="Claim, event, channel, message…"
+            className="w-full"
+          />
+        </label>
+        {notifs && <Stat label="In view" value={num(filtered.length)} />}
       </div>
 
       <Card title="Channel preference">
@@ -218,8 +237,8 @@ export default function NotificationsPage() {
         <ErrorBox message={loadError} />
       ) : notifs === null ? (
         <Loading />
-      ) : notifs.length === 0 ? (
-        <Empty label="No notifications." />
+      ) : filtered.length === 0 ? (
+        <Empty label={q ? "No notifications match your search." : "No notifications."} />
       ) : (
         <div className="space-y-1">
           <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">

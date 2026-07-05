@@ -12,7 +12,7 @@
 // beyond disabling in-flight buttons — its 403/409 {detail} is surfaced
 // verbatim via Toast. Analytics + list re-fetch on every success.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiError, api } from "../api";
 import { useAuth } from "../auth";
@@ -22,9 +22,11 @@ import {
   ErrorBox,
   Loading,
   Pagination,
+  SearchInput,
   Stat,
   StateChip,
   Toast,
+  matchQ,
   usePaged,
 } from "../components/ui";
 import { rand } from "../format";
@@ -146,7 +148,15 @@ export default function CasesPage() {
   }
 
   const anyInFlight = busyKey !== null;
-  const { page, setPage, pageCount, total, slice } = usePaged(cases ?? [], 20);
+  const [q, setQ] = useState("");
+  const filtered = useMemo(
+    () =>
+      (cases ?? []).filter((c) =>
+        matchQ(q, c.claim_id, c.assigned_to, c.lane, c.status, c.verdict, `#${c.id}`),
+      ),
+    [cases, q],
+  );
+  const { page, setPage, pageCount, total, slice } = usePaged(filtered, 20);
 
   return (
     <div className="space-y-4">
@@ -221,6 +231,17 @@ export default function CasesPage() {
               </option>
             ))}
           </select>
+        </div>
+        <div className="min-w-[16rem] flex-1">
+          <label className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-slate-400">
+            Search
+          </label>
+          <SearchInput
+            value={q}
+            onChange={setQ}
+            placeholder="Claim, assignee, verdict, #id…"
+            className="w-full"
+          />
         </div>
       </div>
 
@@ -312,8 +333,8 @@ export default function CasesPage() {
       {/* Table */}
       {cases === null ? (
         <Loading label="Loading cases…" />
-      ) : cases.length === 0 ? (
-        <Empty label="No cases match — open one above." />
+      ) : filtered.length === 0 ? (
+        <Empty label={q ? "No cases match your search." : "No cases match — open one above."} />
       ) : (
         <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
           <div className="overflow-x-auto">

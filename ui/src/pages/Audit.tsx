@@ -10,7 +10,7 @@
 // 403/409 {detail} (wrong role, illegal transition, invalid outcome) is
 // surfaced verbatim via Toast. Queue + ROI re-fetch on every success.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiError, api } from "../api";
 import { useAuth } from "../auth";
@@ -20,8 +20,10 @@ import {
   ErrorBox,
   Loading,
   Pagination,
+  SearchInput,
   Stat,
   Toast,
+  matchQ,
   usePaged,
 } from "../components/ui";
 import { num, rand } from "../format";
@@ -149,7 +151,15 @@ export default function AuditPage() {
   const selectCls =
     "rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm outline-none focus:border-slate-500 focus:ring-1 focus:ring-slate-500";
 
-  const { page, setPage, pageCount, total, slice } = usePaged(items ?? [], 20);
+  const [q, setQ] = useState("");
+  const filtered = useMemo(
+    () =>
+      (items ?? []).filter((it) =>
+        matchQ(q, it.claim_id, it.reason, it.status, it.recovery_outcome, `#${it.id}`),
+      ),
+    [items, q],
+  );
+  const { page, setPage, pageCount, total, slice } = usePaged(filtered, 20);
 
   return (
     <div className="space-y-4">
@@ -227,10 +237,16 @@ export default function AuditPage() {
       </div>
 
       {/* Queue */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
           Recovery queue
         </h2>
+        <div className="flex flex-wrap items-center gap-2">
+        <SearchInput
+          value={q}
+          onChange={setQ}
+          placeholder="Claim, reason, #id…"
+        />
         <select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
@@ -244,12 +260,13 @@ export default function AuditPage() {
             </option>
           ))}
         </select>
+        </div>
       </div>
 
       {items === null ? (
         <Loading label="Loading recovery queue…" />
-      ) : items.length === 0 ? (
-        <Empty label="No audit items match — run a recovery sweep to open some." />
+      ) : filtered.length === 0 ? (
+        <Empty label={q ? "No audit items match your search." : "No audit items match — run a recovery sweep to open some."} />
       ) : (
         <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
           <div className="overflow-x-auto">

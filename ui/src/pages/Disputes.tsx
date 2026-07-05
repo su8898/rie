@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, ApiError } from "../api";
 import {
@@ -8,8 +8,10 @@ import {
   ErrorBox,
   Empty,
   Pagination,
+  SearchInput,
   Toast,
   StateChip,
+  matchQ,
   usePaged,
 } from "../components/ui";
 import { num } from "../format";
@@ -168,7 +170,16 @@ export default function DisputesPage() {
   };
 
   const busy = busyKey !== null;
-  const { page, setPage, pageCount, total, slice } = usePaged(items ?? [], 20);
+  const [search, setSearch] = useState("");
+  const filtered = useMemo(
+    () =>
+      (items ?? []).filter((it) =>
+        matchQ(search, it.claim_id, it.subject, it.raised_by, it.status,
+               it.channel, it.outcome, `#${it.id}`),
+      ),
+    [items, search],
+  );
+  const { page, setPage, pageCount, total, slice } = usePaged(filtered, 20);
 
   if (items === null || analytics === null) {
     if (loadError) return <ErrorBox message={loadError} />;
@@ -256,6 +267,15 @@ export default function DisputesPage() {
               ))}
             </select>
           </label>
+          <label className="flex flex-1 flex-col gap-1 text-xs font-medium text-slate-500">
+            Search
+            <SearchInput
+              value={search}
+              onChange={setSearch}
+              placeholder="Claim, subject, channel, #id…"
+              className="w-full"
+            />
+          </label>
         </div>
       </Card>
 
@@ -318,8 +338,8 @@ export default function DisputesPage() {
         </div>
       </Card>
 
-      {items.length === 0 ? (
-        <Empty />
+      {filtered.length === 0 ? (
+        <Empty label={search ? "No disputes match your search." : "No disputes yet."} />
       ) : (
         <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
           <div className="overflow-x-auto">

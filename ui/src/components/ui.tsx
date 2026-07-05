@@ -418,3 +418,41 @@ export function Pagination({
     </div>
   );
 }
+
+// ── Search ───────────────────────────────────────────────────────────────────
+// A styled text input for filtering a list, plus `matchQ` — a case-insensitive
+// substring test across an arbitrary set of fields. Pages filter their loaded
+// rows with matchQ (complete, since these lists load their full set) and feed
+// the result into usePaged.
+export function SearchInput({
+  value,
+  onChange,
+  placeholder = "Search…",
+  className = "w-60",
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  className?: string;
+}) {
+  return (
+    <input
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+      aria-label={placeholder}
+      className={`${className} rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm outline-none focus:border-slate-500 focus:ring-1 focus:ring-slate-500`}
+    />
+  );
+}
+
+export function matchQ(
+  q: string,
+  ...fields: Array<string | number | null | undefined>
+): boolean {
+  const needle = q.trim().toLowerCase();
+  if (!needle) return true;
+  return fields.some(
+    (f) => f != null && String(f).toLowerCase().includes(needle),
+  );
+}

@@ -23,6 +23,8 @@ import {
   LowNTag,
   Pagination,
   RatingChip,
+  SearchInput,
+  matchQ,
   usePaged,
 } from "../components/ui";
 import { num, rand } from "../format";
@@ -114,17 +116,20 @@ function ProvidersTab() {
   const { data, error } = useFetch<Provider[]>(() => api.providers());
   const [sort, setSort] = useState<ProvSort>("score");
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [q, setQ] = useState("");
 
   const rows = useMemo(() => {
     if (!data) return null;
-    return [...data].sort((a, b) => b[sort] - a[sort]);
-  }, [data, sort]);
+    return [...data]
+      .sort((a, b) => b[sort] - a[sort])
+      .filter((p) => matchQ(q, p.provider_id, p.archetype, p.rating));
+  }, [data, sort, q]);
 
   const { page, setPage, pageCount, total, slice } = usePaged(rows ?? [], 20);
 
   if (error) return <ErrorBox message={error} />;
-  if (rows === null) return <Loading label="Scoring providers…" />;
-  if (rows.length === 0)
+  if (data === null) return <Loading label="Scoring providers…" />;
+  if (data.length === 0)
     return <Empty label="No providers in the corpus yet." />;
 
   const SortHead = ({ k, label, align = "left" }: { k: ProvSort; label: string; align?: string }) => (
@@ -140,6 +145,15 @@ function ProvidersTab() {
   );
 
   return (
+    <div className="space-y-3">
+      <SearchInput
+        value={q}
+        onChange={setQ}
+        placeholder="Search provider, cohort, rating…"
+      />
+      {total === 0 ? (
+        <Empty label="No providers match your search." />
+      ) : (
     <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
       <div className="overflow-x-auto">
         <table className="min-w-full divide-y divide-slate-200 text-sm">
@@ -224,6 +238,8 @@ function ProvidersTab() {
         onPage={setPage}
         unit="providers"
       />
+    </div>
+      )}
     </div>
   );
 }

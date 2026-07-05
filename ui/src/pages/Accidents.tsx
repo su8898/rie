@@ -1,7 +1,7 @@
 // Accident graph table. Convergence shown as a 0–100 bar; plus n_claims,
 // case number, and parties.
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ApiError, api } from "../api";
 import {
   ConvergenceBar,
@@ -9,6 +9,8 @@ import {
   ErrorBox,
   Loading,
   Pagination,
+  SearchInput,
+  matchQ,
   usePaged,
 } from "../components/ui";
 import type { Accident } from "../types";
@@ -16,7 +18,16 @@ import type { Accident } from "../types";
 export default function AccidentsPage() {
   const [rows, setRows] = useState<Accident[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const { page, setPage, pageCount, total, slice } = usePaged(rows ?? [], 25);
+  const [q, setQ] = useState("");
+
+  const filtered = useMemo(
+    () =>
+      (rows ?? []).filter((a) =>
+        matchQ(q, a.accident_id, a.case_number, a.where, a.parties.join(" ")),
+      ),
+    [rows, q],
+  );
+  const { page, setPage, pageCount, total, slice } = usePaged(filtered, 25);
 
   useEffect(() => {
     let alive = true;
@@ -33,14 +44,21 @@ export default function AccidentsPage() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-xl font-semibold text-slate-900">Accidents</h1>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h1 className="text-xl font-semibold text-slate-900">Accidents</h1>
+        <SearchInput
+          value={q}
+          onChange={setQ}
+          placeholder="Search accident, case or party id…"
+        />
+      </div>
 
       {error ? (
         <ErrorBox message={error} />
       ) : rows === null ? (
         <Loading label="Loading accident graph…" />
-      ) : rows.length === 0 ? (
-        <Empty label="No accidents in the graph yet." />
+      ) : filtered.length === 0 ? (
+        <Empty label={q ? "No accidents match your search." : "No accidents in the graph yet."} />
       ) : (
         <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
           <div className="overflow-x-auto">

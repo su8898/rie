@@ -2,7 +2,7 @@
 // per-condition medical cost bands with an on-demand estimate tool. Read-only
 // (three GET aggregations + one GET estimate); no mutations.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, ApiError } from "../api";
 import { useAuth } from "../auth";
 import {
@@ -13,7 +13,9 @@ import {
   Loading,
   LowNTag,
   Pagination,
+  SearchInput,
   Toast,
+  matchQ,
   usePaged,
 } from "../components/ui";
 import { num, rand } from "../format";
@@ -166,10 +168,15 @@ function CodesTab({
   kind: CodeKind;
   onKind: (k: CodeKind) => void;
 }) {
-  const { page, setPage, pageCount, total, slice } = usePaged(codes, 25);
+  const [q, setQ] = useState("");
+  const filtered = useMemo(
+    () => codes.filter((r) => matchQ(q, r.code, r.kind)),
+    [codes, q],
+  );
+  const { page, setPage, pageCount, total, slice } = usePaged(filtered, 25);
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <label className="text-xs font-medium text-slate-500">Kind</label>
         <select
           value={kind}
@@ -180,10 +187,11 @@ function CodesTab({
           <option value="TARIFF">TARIFF</option>
           <option value="NAPPI">NAPPI</option>
         </select>
+        <SearchInput value={q} onChange={setQ} placeholder="Search code…" />
       </div>
 
-      {codes.length === 0 ? (
-        <Empty label="No codes." />
+      {filtered.length === 0 ? (
+        <Empty label={q ? "No codes match your search." : "No codes."} />
       ) : (
         <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
           <div className="overflow-x-auto">
@@ -259,18 +267,28 @@ function CodesTab({
 
 // ── Negotiation targets ──────────────────────────────────────────────────────
 function TargetsTab({ targets }: { targets: CodeAgg[] }) {
-  const { page, setPage, pageCount, total, slice } = usePaged(targets, 25);
-  if (targets.length === 0) {
-    return (
-      <Empty label="No negotiation targets — everything is benchmarked or already negotiated." />
-    );
-  }
+  const [q, setQ] = useState("");
+  const filtered = useMemo(
+    () => targets.filter((r) => matchQ(q, r.code, r.kind)),
+    [targets, q],
+  );
+  const { page, setPage, pageCount, total, slice } = usePaged(filtered, 25);
   return (
     <div className="space-y-3">
       <p className="text-sm text-slate-500">
         Codes where a negotiated ENFORCEABLE rate would control currently-uncaptured
         spend (over-reference signal + uncovered).
       </p>
+      <SearchInput value={q} onChange={setQ} placeholder="Search code…" />
+      {filtered.length === 0 ? (
+        <Empty
+          label={
+            q
+              ? "No targets match your search."
+              : "No negotiation targets — everything is benchmarked or already negotiated."
+          }
+        />
+      ) : (
       <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-slate-200 text-sm">
@@ -318,6 +336,7 @@ function TargetsTab({ targets }: { targets: CodeAgg[] }) {
           unit="targets"
         />
       </div>
+      )}
     </div>
   );
 }
@@ -344,7 +363,12 @@ function ConditionsTab({
   onRun: () => void;
   note: string | null;
 }) {
-  const { page, setPage, pageCount, total, slice } = usePaged(rows, 25);
+  const [q, setQ] = useState("");
+  const filtered = useMemo(
+    () => rows.filter((r) => matchQ(q, r.injury_class)),
+    [rows, q],
+  );
+  const { page, setPage, pageCount, total, slice } = usePaged(filtered, 25);
   return (
     <div className="space-y-3">
       <Card title="Estimate">
@@ -394,8 +418,9 @@ function ConditionsTab({
         {note && <div className="mt-2 text-xs text-slate-400">{note}</div>}
       </Card>
 
-      {rows.length === 0 ? (
-        <Empty label="No conditions." />
+      <SearchInput value={q} onChange={setQ} placeholder="Search injury class…" />
+      {filtered.length === 0 ? (
+        <Empty label={q ? "No conditions match your search." : "No conditions."} />
       ) : (
         <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
           <div className="overflow-x-auto">

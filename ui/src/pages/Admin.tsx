@@ -12,7 +12,7 @@
 // controls while in flight, refetches the affected data, and surfaces the
 // backend's 400 {detail} (bad role, Grounded override, …) verbatim via Toast.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ApiError, api } from "../api";
 import { useAuth } from "../auth";
 import {
@@ -23,8 +23,10 @@ import {
   MaturityChip,
   ModeChip,
   Pagination,
+  SearchInput,
   Toast,
   YesNo,
+  matchQ,
   usePaged,
 } from "../components/ui";
 import { rand } from "../format";
@@ -397,12 +399,24 @@ function SignalModesTab({
   busyKey,
   run,
 }: TabProps & { rows: SignalMode[] | null }) {
-  const { page, setPage, pageCount, total, slice } = usePaged(rows ?? [], 20);
+  const [q, setQ] = useState("");
+  const filtered = useMemo(
+    () =>
+      (rows ?? []).filter((r) =>
+        matchQ(q, r.signal, r.maturity, r.effective_mode, r.default_mode,
+               r.recommended_mode),
+      ),
+    [rows, q],
+  );
+  const { page, setPage, pageCount, total, slice } = usePaged(filtered, 20);
   if (rows === null) return <Loading label="Loading signal modes…" />;
-  if (rows.length === 0) return <Empty label="No signals." />;
 
   return (
     <div className="space-y-2">
+      <SearchInput value={q} onChange={setQ} placeholder="Search signal…" />
+      {filtered.length === 0 ? (
+        <Empty label={q ? "No signals match your search." : "No signals."} />
+      ) : (
       <div className={tableShell}>
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-slate-200 text-sm">
@@ -438,6 +452,7 @@ function SignalModesTab({
           unit="signals"
         />
       </div>
+      )}
       <p className="px-1 text-xs text-slate-400">
         Mode changes are audit-logged, effective-dated reference data — never a
         code deploy.

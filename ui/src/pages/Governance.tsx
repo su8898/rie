@@ -11,6 +11,8 @@ import {
   CodePill,
   Bar,
   Pagination,
+  SearchInput,
+  matchQ,
   usePaged,
 } from "../components/ui";
 import { num } from "../format";
@@ -83,12 +85,26 @@ export default function GovernancePage() {
     void load();
   }, [load]);
 
+  const [precQ, setPrecQ] = useState("");
+  const [labelQ, setLabelQ] = useState("");
   const precisionSorted = useMemo(
-    () => [...(precision ?? [])].sort((a, b) => b.labeled - a.labeled),
-    [precision],
+    () =>
+      [...(precision ?? [])]
+        .sort((a, b) => b.labeled - a.labeled)
+        .filter((r) =>
+          matchQ(precQ, r.signal, r.maturity, r.current_mode, r.recommended_mode),
+        ),
+    [precision, precQ],
+  );
+  const labelsFiltered = useMemo(
+    () =>
+      (labels ?? []).filter((r) =>
+        matchQ(labelQ, r.claim_id, r.verdict, r.label, r.lane),
+      ),
+    [labels, labelQ],
   );
   const precPg = usePaged(precisionSorted, 20);
-  const labelsPg = usePaged(labels ?? [], 25);
+  const labelsPg = usePaged(labelsFiltered, 25);
 
   if (loadError) return <ErrorBox message={loadError} />;
   if (
@@ -175,8 +191,15 @@ export default function GovernancePage() {
       </Card>
 
       <Card title="Precision by signal">
+        <div className="mb-2">
+          <SearchInput
+            value={precQ}
+            onChange={setPrecQ}
+            placeholder="Search signal…"
+          />
+        </div>
         {precPg.total === 0 ? (
-          <Empty label="No signals labeled yet." />
+          <Empty label={precQ ? "No signals match your search." : "No signals labeled yet."} />
         ) : (
           <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
             <div className="overflow-x-auto">
@@ -249,8 +272,15 @@ export default function GovernancePage() {
       </Card>
 
       <Card title="Recent labels (ground truth)">
+        <div className="mb-2">
+          <SearchInput
+            value={labelQ}
+            onChange={setLabelQ}
+            placeholder="Search claim, verdict, label, lane…"
+          />
+        </div>
         {labelsPg.total === 0 ? (
-          <Empty label="No closed-case labels yet." />
+          <Empty label={labelQ ? "No labels match your search." : "No closed-case labels yet."} />
         ) : (
           <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
             <div className="overflow-x-auto">
