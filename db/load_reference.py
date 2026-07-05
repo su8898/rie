@@ -111,9 +111,31 @@ def load(db, ref_path: str = REFERENCE_DB) -> dict:
     return counts
 
 
+def ensure_schema() -> None:
+    """Bring the database to head via Alembic (the production schema path — the app emits no DDL).
+
+    Handles three states: a fresh DB is created by `upgrade head`; a DB already under Alembic has
+    its pending migrations applied; a pre-existing schema built by create_all (no alembic_version)
+    is *adopted* with `stamp head` rather than re-created. Falls back to create_all only when
+    Alembic isn't installed, so local dev / tests stay hermetic."""
+    try:
+        from alembic import command
+        from alembic.config import Config
+        from sqlalchemy import inspect
+    except ImportError:
+        Base.metadata.create_all(engine)
+        return
+    cfg = Config(os.path.join(_ROOT, "alembic.ini"))
+    insp = inspect(engine)
+    if insp.has_table("app_users") and not insp.has_table("alembic_version"):
+        command.stamp(cfg, "head")                      # adopt a schema previously built by create_all
+    else:
+        command.upgrade(cfg, "head")                    # fresh -> create; migrated -> apply pending
+
+
 def main() -> None:
     t0 = time.time()
-    Base.metadata.create_all(engine)
+    ensure_schema()
     with SessionLocal() as db:
         counts = load(db)
         seed(db)                                            # users + statutory (demo pricing skipped)

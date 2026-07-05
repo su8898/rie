@@ -1,5 +1,6 @@
--- Canonical RIE schema (PostgreSQL 16). Generated from server/models.py.
--- Dev uses SQLite via create_all(); this file is the reviewed production DDL.
+-- Canonical RIE schema (PostgreSQL 16), mirroring server/models.py — a human-readable reference.
+-- Production applies the schema via Alembic (`alembic upgrade head`, db/migrations/); the baseline
+-- migration is kept at parity with the ORM (CI: `alembic check`). Dev/tests may use create_all().
 
 CREATE TABLE accidents (
 	accident_id VARCHAR NOT NULL, 
