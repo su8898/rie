@@ -84,6 +84,9 @@ def _persist(db: Session, claim: engine.Claim, payload: dict, record: dict,
         ))
         for ld in lines:                                        # billing lines feed leakage
             db.add(models.BillingLineRecord(claim_id=claim.claim_id, **ld))
+        db.add(models.ClaimLifecycle(claim_id=claim.claim_id, stage="LODGED"))
+        if claim.claim_type == "PERSONAL":                      # merits determination opens PENDING
+            db.add(models.MeritsDetermination(claim_id=claim.claim_id, status="PENDING"))
 
     db.add(models.Determination(
         claim_id=record["claim_id"], accident_id=aid, accident_action=record["accident_action"],

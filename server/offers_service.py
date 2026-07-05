@@ -1,15 +1,19 @@
-"""Offer builder — assemble heads of damage into an offer (domain-logic §5, §8).
+"""Offer builder + persistence — assemble heads of damage into an offer (domain-logic §5, §8).
 
-Read-only "what-if": given a claim payload (+ heads_input), compute each head via the engine —
-past medical from adjudicated lines, loss of earnings through the Sweatman cap engine, general
-damages gated by the serious-injury process — and gate the offer on merits acceptance.
+`compute_offer` is the stateless what-if (from a raw payload). `persist_offer` is the
+operational version: it reads the *stored* claim and the *merits machine* state, computes each
+head via the engine (past medical from adjudicated lines, loss of earnings through the Sweatman
+cap engine, general damages gated by the serious-injury process), and stores an Offer + its
+heads. An offer is ASSEMBLED only when merits are accepted; otherwise it is HELD. The lifecycle
+`make_offer` gate requires an ASSEMBLED offer.
 """
 from __future__ import annotations
 
 from datetime import date
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import desc, select
+from sqlalchemy.orm import Session
 
 import engine
 
@@ -17,7 +21,7 @@ from . import adapter, models
 from .reference_data import build_refbook, build_ruleset
 
 
-def compute_offer(db, payload: dict, today: Optional[date] = None) -> dict:
+def compute_offer(db: Session, payload: dict, today: Optional[date] = None) -> dict:
     claim = adapter.json_to_claim(payload)
     book, rs = build_refbook(db), build_ruleset(db)
     accidents = [adapter.accident_to_engine(r) for r in db.scalars(select(models.AccidentRecord))]
@@ -41,9 +45,8 @@ def compute_offer(db, payload: dict, today: Optional[date] = None) -> dict:
             float(gd["proposed"]))
         heads["general_damages"] = {"amount": amount, "reasons": gd_reasons}
 
-    # No head pays and no offer issues without an accepted merits determination (§4c).
     gated_by: list[str] = []
-    if claim.merits_accepted is not True:
+    if claim.merits_accepted is not True:                                     # §4c — no offer without merits
         gated_by.append("held_for_merits")
         offer_total = 0.0
     else:
@@ -53,3 +56,56 @@ def compute_offer(db, payload: dict, today: Optional[date] = None) -> dict:
 
     return {"claim_id": claim.claim_id, "determination": record, "heads": heads,
             "offer_total": round(offer_total, 2), "gated_by": gated_by}
+
+
+def persist_offer(db: Session, claim_id: str, heads_input: dict, user: dict,
+                  today: Optional[date] = None) -> dict:
+    claim_rec = db.get(models.ClaimRecord, claim_id)
+    if claim_rec is None:
+        raise ValueError(f"claim {claim_id} not found")
+
+    payload = dict(claim_rec.raw)                       # replay the stored claim
+    merits = db.get(models.MeritsDetermination, claim_id)
+    if merits is not None and merits.status == "ACCEPTED":
+        payload["merits_accepted"] = True
+        payload["fault_pct"] = merits.fault_pct if merits.fault_pct is not None else 0.0
+    elif merits is not None and merits.status == "REJECTED":
+        payload["merits_accepted"] = False
+    # serious-injury process gates general damages (§5d): only an accepted/upheld RAF 4 opens GD
+    si = db.scalar(select(models.SeriousInjury).where(models.SeriousInjury.claim_id == claim_id)
+                   .order_by(desc(models.SeriousInjury.id)))
+    if si is not None:
+        payload["si_accepted"] = si.status in ("RAF_ACCEPTED", "UPHELD")
+    payload["heads_input"] = heads_input or {}
+
+    result = compute_offer(db, payload, today=today)
+    status = "HELD" if result["gated_by"] else "ASSEMBLED"
+    offer = models.Offer(claim_id=claim_id, status=status, total=result["offer_total"],
+                         gated_by=result["gated_by"])
+    db.add(offer)
+    db.flush()
+
+    heads = result["heads"]
+    db.add(models.OfferHead(offer_id=offer.id, head="PAST_MEDICAL",
+                            amount=heads.get("past_medical", 0.0), detail={}))
+    if "loss_of_earnings" in heads:
+        db.add(models.OfferHead(offer_id=offer.id, head="LOSS_OF_EARNINGS",
+                                amount=heads["loss_of_earnings"]["total"],
+                                detail={"worksheet": heads["loss_of_earnings"]["worksheet"]}))
+    if "general_damages" in heads:
+        db.add(models.OfferHead(offer_id=offer.id, head="GENERAL_DAMAGES",
+                                amount=heads["general_damages"]["amount"],
+                                detail={"reasons": heads["general_damages"]["reasons"]}))
+    db.commit()
+    return {"offer_id": offer.id, "status": status, **result}
+
+
+def latest_offer(db: Session, claim_id: str) -> Optional[dict]:
+    o = db.scalar(select(models.Offer).where(models.Offer.claim_id == claim_id)
+                  .order_by(desc(models.Offer.id)))
+    if o is None:
+        return None
+    heads = db.scalars(select(models.OfferHead).where(models.OfferHead.offer_id == o.id))
+    return {"offer_id": o.id, "claim_id": o.claim_id, "status": o.status, "total": o.total,
+            "gated_by": o.gated_by,
+            "heads": [{"head": h.head, "amount": h.amount, "detail": h.detail} for h in heads]}

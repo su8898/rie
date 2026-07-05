@@ -135,3 +135,90 @@ class Determination(Base):
     ruleset_effective: Mapped[str] = mapped_column(String)
     reference_edition: Mapped[str] = mapped_column(String)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+# ── state machines (operational, actor-stamped) ──────────────────────────────
+class TransitionLog(Base):
+    """One append-only row per state transition across every machine (the v_determinations idea)."""
+    __tablename__ = "transition_log"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    entity_type: Mapped[str] = mapped_column(String, index=True)
+    entity_id: Mapped[str] = mapped_column(String, index=True)
+    from_state: Mapped[str] = mapped_column(String)
+    to_state: Mapped[str] = mapped_column(String)
+    action: Mapped[str] = mapped_column(String)
+    actor: Mapped[str] = mapped_column(String)
+    role: Mapped[str] = mapped_column(String)
+    at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    detail: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class ClaimLifecycle(Base):
+    __tablename__ = "claim_lifecycle"
+    claim_id: Mapped[str] = mapped_column(ForeignKey("claims.claim_id"), primary_key=True)
+    stage: Mapped[str] = mapped_column(String, default="LODGED", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class MeritsDetermination(Base):
+    __tablename__ = "merits_determination"
+    claim_id: Mapped[str] = mapped_column(ForeignKey("claims.claim_id"), primary_key=True)
+    status: Mapped[str] = mapped_column(String, default="PENDING", index=True)
+    fault_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    ground: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+
+
+class SeriousInjury(Base):
+    __tablename__ = "serious_injury"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    claim_id: Mapped[str] = mapped_column(ForeignKey("claims.claim_id"), index=True)
+    status: Mapped[str] = mapped_column(String, default="SUBMITTED", index=True)
+    list_match: Mapped[bool] = mapped_column(default=False)
+    wpi: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    narrative: Mapped[bool] = mapped_column(default=False)
+
+
+class Undertaking(Base):
+    __tablename__ = "undertakings"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    claim_id: Mapped[str] = mapped_column(ForeignKey("claims.claim_id"), index=True)
+    origin: Mapped[str] = mapped_column(String)                 # SETTLEMENT | EMERGENCY
+    status: Mapped[str] = mapped_column(String, default="ISSUED", index=True)
+    scope_dx: Mapped[list] = mapped_column(JSON, default=list)
+
+
+class UndertakingInvoice(Base):
+    __tablename__ = "undertaking_invoices"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    undertaking_id: Mapped[int] = mapped_column(ForeignKey("undertakings.id"), index=True)
+    status: Mapped[str] = mapped_column(String, default="RECEIVED", index=True)
+    billed: Mapped[float] = mapped_column(Float, default=0.0)
+    payable: Mapped[float] = mapped_column(Float, default=0.0)
+    reasons: Mapped[list] = mapped_column(JSON, default=list)
+
+
+class Litigation(Base):
+    __tablename__ = "litigation"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    claim_id: Mapped[str] = mapped_column(ForeignKey("claims.claim_id"), index=True)
+    status: Mapped[str] = mapped_column(String, default="SUMMONS_SERVED", index=True)
+    default_judgment: Mapped[bool] = mapped_column(default=False)
+
+
+class Offer(Base):
+    __tablename__ = "offers"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    claim_id: Mapped[str] = mapped_column(ForeignKey("claims.claim_id"), index=True)
+    status: Mapped[str] = mapped_column(String, default="ASSEMBLED", index=True)  # ASSEMBLED | HELD
+    total: Mapped[float] = mapped_column(Float, default=0.0)
+    gated_by: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class OfferHead(Base):
+    __tablename__ = "offer_heads"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    offer_id: Mapped[int] = mapped_column(ForeignKey("offers.id"), index=True)
+    head: Mapped[str] = mapped_column(String)
+    amount: Mapped[float] = mapped_column(Float, default=0.0)
+    detail: Mapped[dict] = mapped_column(JSON, default=dict)

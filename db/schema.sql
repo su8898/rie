@@ -83,6 +83,20 @@ CREATE TABLE ref_rpl (
 	PRIMARY KEY (code)
 );
 
+CREATE TABLE transition_log (
+	id SERIAL NOT NULL, 
+	entity_type VARCHAR NOT NULL, 
+	entity_id VARCHAR NOT NULL, 
+	from_state VARCHAR NOT NULL, 
+	to_state VARCHAR NOT NULL, 
+	action VARCHAR NOT NULL, 
+	actor VARCHAR NOT NULL, 
+	role VARCHAR NOT NULL, 
+	at TIMESTAMP WITHOUT TIME ZONE DEFAULT now() NOT NULL, 
+	detail JSON NOT NULL, 
+	PRIMARY KEY (id)
+);
+
 CREATE TABLE billing_lines (
 	id SERIAL NOT NULL, 
 	claim_id VARCHAR NOT NULL, 
@@ -96,6 +110,14 @@ CREATE TABLE billing_lines (
 	needs_review BOOLEAN NOT NULL, 
 	reasons JSON NOT NULL, 
 	PRIMARY KEY (id), 
+	FOREIGN KEY(claim_id) REFERENCES claims (claim_id)
+);
+
+CREATE TABLE claim_lifecycle (
+	claim_id VARCHAR NOT NULL, 
+	stage VARCHAR NOT NULL, 
+	created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now() NOT NULL, 
+	PRIMARY KEY (claim_id), 
 	FOREIGN KEY(claim_id) REFERENCES claims (claim_id)
 );
 
@@ -121,4 +143,75 @@ CREATE TABLE determinations (
 	created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now() NOT NULL, 
 	PRIMARY KEY (id), 
 	FOREIGN KEY(claim_id) REFERENCES claims (claim_id)
+);
+
+CREATE TABLE litigation (
+	id SERIAL NOT NULL, 
+	claim_id VARCHAR NOT NULL, 
+	status VARCHAR NOT NULL, 
+	default_judgment BOOLEAN NOT NULL, 
+	PRIMARY KEY (id), 
+	FOREIGN KEY(claim_id) REFERENCES claims (claim_id)
+);
+
+CREATE TABLE merits_determination (
+	claim_id VARCHAR NOT NULL, 
+	status VARCHAR NOT NULL, 
+	fault_pct FLOAT, 
+	ground VARCHAR, 
+	PRIMARY KEY (claim_id), 
+	FOREIGN KEY(claim_id) REFERENCES claims (claim_id)
+);
+
+CREATE TABLE offers (
+	id SERIAL NOT NULL, 
+	claim_id VARCHAR NOT NULL, 
+	status VARCHAR NOT NULL, 
+	total FLOAT NOT NULL, 
+	gated_by JSON NOT NULL, 
+	created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now() NOT NULL, 
+	PRIMARY KEY (id), 
+	FOREIGN KEY(claim_id) REFERENCES claims (claim_id)
+);
+
+CREATE TABLE serious_injury (
+	id SERIAL NOT NULL, 
+	claim_id VARCHAR NOT NULL, 
+	status VARCHAR NOT NULL, 
+	list_match BOOLEAN NOT NULL, 
+	wpi FLOAT, 
+	narrative BOOLEAN NOT NULL, 
+	PRIMARY KEY (id), 
+	FOREIGN KEY(claim_id) REFERENCES claims (claim_id)
+);
+
+CREATE TABLE undertakings (
+	id SERIAL NOT NULL, 
+	claim_id VARCHAR NOT NULL, 
+	origin VARCHAR NOT NULL, 
+	status VARCHAR NOT NULL, 
+	scope_dx JSON NOT NULL, 
+	PRIMARY KEY (id), 
+	FOREIGN KEY(claim_id) REFERENCES claims (claim_id)
+);
+
+CREATE TABLE offer_heads (
+	id SERIAL NOT NULL, 
+	offer_id INTEGER NOT NULL, 
+	head VARCHAR NOT NULL, 
+	amount FLOAT NOT NULL, 
+	detail JSON NOT NULL, 
+	PRIMARY KEY (id), 
+	FOREIGN KEY(offer_id) REFERENCES offers (id)
+);
+
+CREATE TABLE undertaking_invoices (
+	id SERIAL NOT NULL, 
+	undertaking_id INTEGER NOT NULL, 
+	status VARCHAR NOT NULL, 
+	billed FLOAT NOT NULL, 
+	payable FLOAT NOT NULL, 
+	reasons JSON NOT NULL, 
+	PRIMARY KEY (id), 
+	FOREIGN KEY(undertaking_id) REFERENCES undertakings (id)
 );
