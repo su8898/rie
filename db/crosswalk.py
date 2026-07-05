@@ -198,9 +198,9 @@ def activation(claims_db: str) -> None:
     print(f"\n  headline: {moved:,} lines / {_R(exp)} move from the R&N review queue into automated")
     print(f"  benchmarking; {_R(act['saving'] - base['saving'])} additional leakage caught; RAF pays "
           f"{_R(base['payable'] - act['payable'])} less.")
-    print(f"\n  NOTE: simulation only — nothing is CONFIRMED, so build_refbook applies none of this.")
-    print(f"        The largest savings (0186, 4805) come from the largest rate gaps — confirm those")
-    print(f"        first and most carefully, as a big gap can mean the codes are NOT equivalent.\n")
+    print(f"\n  NOTE: simulation only — these are PROPOSED (not CONFIRMED), so build_refbook prices")
+    print(f"        none of them yet. The largest savings come from the largest rate gaps — confirm")
+    print(f"        those first and most carefully, as a big gap can mean the codes are NOT equivalent.\n")
 
 
 def main() -> None:

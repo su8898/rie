@@ -47,39 +47,49 @@ CROSSWALK: list[XW] = [
        "CONFIRMED 2026-07-05: RAF 10190 GP consultation R587.24 ≈ billed avg R579 — accepted"),
     XW("0146", "consultation", "Unscheduled emergency consultation", "147", CONFIRMED,
        "CONFIRMED 2026-07-05: RAF 147 'after-hours/unscheduled emergency consultation' R489.16 — accepted"),
-    XW("0184", "consultation", "Follow-up visit", None, NEEDS_SME,
-       "RAF consult family 145/147/464/10190 — SME to pick the follow-up tier"),
-    XW("0181", "consultation", "Visit, new problem/patient, 20 min", None, NEEDS_SME,
-       "RAF consult family — map by duration tier (20/30/45 min)"),
-    XW("0182", "consultation", "Visit, new problem, ≤30 min", None, NEEDS_SME,
-       "RAF consult family — duration tier"),
-    XW("0183", "consultation", "Visit, new problem, 45 min", None, NEEDS_SME,
-       "RAF consult family — duration tier"),
-    XW("0191", "consultation", "Consultation (higher complexity)", None, NEEDS_SME,
-       "RAF 10190/464 — billed avg R1,103 exceeds base GP consult; confirm complexity tier"),
-    XW("0192", "consultation", "Consultation (higher complexity)", None, NEEDS_SME,
-       "RAF 10190/464 — confirm complexity tier"),
-    XW("0109", "consultation", "Hospital follow-up visit", None, NEEDS_SME,
-       "RAF inpatient/ward-visit code — SME to identify"),
-    XW("66201", "consultation", "Observation and screening", None, NEEDS_SME,
-       "66xxx is a separate scheme numbering; needs a discipline-specific RAF map"),
-    XW("66101", "consultation", "First consultation", None, NEEDS_SME,
-       "66xxx scheme — map to RAF first-consult code"),
-    XW("66313", "consultation", "Consultation level 3, 45 min", None, NEEDS_SME,
-       "66xxx scheme — duration/level tier"),
-    XW("66315", "consultation", "Consultation level 4, 60 min", None, NEEDS_SME,
-       "66xxx scheme — duration/level tier"),
+    XW("0184", "consultation", "Follow-up visit", "10190", PROPOSED,
+       "RAF 10190 GP consultation R587.24 — RAF prices a single GP consult tariff (no duration / "
+       "follow-up sub-tiers), so all COIDA visit variants benchmark against it"),
+    XW("0181", "consultation", "Visit, new problem/patient, 20 min", "10190", PROPOSED,
+       "RAF 10190 GP consultation R587.24 (RAF does not tier the GP consult by duration)"),
+    XW("0182", "consultation", "Visit, new problem, ≤30 min", "10190", PROPOSED,
+       "RAF 10190 GP consultation R587.24 (no duration tier in the RAF GP schedule)"),
+    XW("0183", "consultation", "Visit, new problem, 45 min", "10190", PROPOSED,
+       "RAF 10190 GP consultation R587.24 (no duration tier in the RAF GP schedule)"),
+    XW("0191", "consultation", "Consultation (higher complexity)", "10190", PROPOSED,
+       "RAF 10190 GP consultation R587.24; billed avg R1,103 would reprice down — confirm whether a "
+       "specialist/complex consult (e.g. RAF 464 R960.85) applies instead"),
+    XW("0192", "consultation", "Consultation (higher complexity)", "10190", PROPOSED,
+       "RAF 10190 GP consultation R587.24; billed avg R1,175 would reprice down — see 0191 note"),
+    XW("0109", "consultation", "Hospital follow-up visit", "10190", PROPOSED,
+       "RAF 10190 GP consultation R587.24 ≈ billed avg R544; if billed as inpatient management, RAF "
+       "1221 'professional fee for managing a patient' R1,048.20 may apply — SME to confirm setting"),
+    XW("66201", "occupational-therapy", "Observation and screening", "66207", PROPOSED,
+       "66xxx = Occupational Therapist schedule; RAF 66207 'specific evaluation for dysfunction' "
+       "R670.08. LOW CONFIDENCE: billed avg R156 is far lower, suggesting a screening/measurement "
+       "item (e.g. RAF 66213 R148.91) — OT SME to pick"),
+    XW("66101", "occupational-therapy", "First consultation", "66207", PROPOSED,
+       "RAF 66207 'specific evaluation for dysfunction' R670.08 (OT initial evaluation); RAF 66136 "
+       "in-depth eval R3,248 if extensive — OT SME to pick"),
+    XW("66313", "occupational-therapy", "Treatment level 3, 45 min", "66407", PROPOSED,
+       "RAF 66407 'on level three' R536.06 ≈ billed avg R553 (OT graded-treatment series 66309 L1 / "
+       "66311 L2 / 66317 L5; the corpus bills the L3/L4 rungs the gazette omits)"),
+    XW("66315", "occupational-therapy", "Treatment level 4, 60 min", "66317", PROPOSED,
+       "RAF 66317 'on level five (90 min)' R1,191.25 is the nearest gazetted rung above the ungazetted "
+       "level four; billed avg R735 → would pay as billed — OT SME to confirm the level"),
 
     # ── hyperbaric-oxygen therapy (high unit cost, ~R9.4M exposure) ──
     XW("4805", "hyperbaric", "Monitoring at the hyperbaric unit", "4804", CONFIRMED,
        "CONFIRMED 2026-07-05: RAF 4804 'Monitoring of a patient at the hyperbaric' R1,048.20 accepted "
        "as the base-tier equivalent (billed avg R2,115 → repriced); revisit if a longer-duration "
        "tier 4806/4809 should apply"),
-    XW("4821", "hyperbaric", "Routine HBO table (2–2.5 ATA)", None, NEEDS_SME,
-       "RAF 41 'hyperbaric pressurisation' R489.81 exists but a 'table' is a bundled multi-session "
-       "course; SME must define the session/basis (billed avg R4,625)"),
-    XW("4822", "hyperbaric", "Emergency HBO table (2.5–3 ATA)", None, NEEDS_SME,
-       "As 4821 — emergency course; SME to define basis vs RAF 41/4806/4809"),
+    XW("4821", "hyperbaric", "Routine HBO table (2–2.5 ATA)", "4809", PROPOSED,
+       "RAF hyperbaric monitoring tiers 4804/4806/4809/4810 by duration; 4809 R3,144.60 for a routine "
+       "extended session. LOW CONFIDENCE: a 'table' (treatment profile) may bill separately from "
+       "monitoring — HBO SME to confirm the tier / whether a technical-table code (e.g. 4826) applies"),
+    XW("4822", "hyperbaric", "Emergency HBO table (2.5–3 ATA)", "4810", PROPOSED,
+       "RAF 4810 'monitoring of a patient at the hyperbaric' R6,638.60 — highest/longest tier for an "
+       "emergency deep table; billed avg R4,667 → pays as billed — HBO SME to confirm tier"),
 
     # ── medico-legal report ──
     XW("0186", "report", "Final medical report", "2712", CONFIRMED,
@@ -89,22 +99,28 @@ CROSSWALK: list[XW] = [
     # ── orthopaedic surgery ──
     XW("0614", "orthopaedic", "Arthroplasty / debridement, large joint", "909", CONFIRMED,
        "CONFIRMED 2026-07-05: RAF 909 'Excision arthroplasty' R5,073.29 accepted (billed avg R1,898 → pays as billed)"),
-    XW("0465", "orthopaedic", "Fractures involving large joints", None, NEEDS_SME,
-       "RAF fracture family 48/49/53 — SME to select reduction type for large joints"),
+    XW("0465", "orthopaedic", "Fractures involving large joints", "387", PROPOSED,
+       "RAF 387 'Fracture (reduction under general anaesthetic)' R3,277.37 (generic reduction); the "
+       "specific large-joint code (387/439/447/448 by bone) — SME to refine"),
     XW("0593", "orthopaedic", "Tendon synovectomy", None, NEEDS_SME,
-       "RAF 887 'release of digital joint contracture' is the nearest synovectomy — weak; verify"),
+       "No genuine synovectomy code in the RAF gazette (nearest, 887 'release of digital joint "
+       "contracture', is not equivalent) — SME to source or negotiate a rate"),
     XW("0592", "orthopaedic", "Synovectomy, large joint", None, NEEDS_SME,
-       "No clean RAF synovectomy match; SME review"),
-    XW("0304", "orthopaedic", "Major wound debridement", None, NEEDS_SME,
-       "RAF 746 (muscle/tendon removal) / fasciotomy 5551 — SME to confirm debridement code"),
+       "No genuine synovectomy code in the RAF gazette — SME to source or negotiate a rate"),
+    XW("0304", "orthopaedic", "Major wound debridement", "10304", PROPOSED,
+       "STRONG: RAF 10304 'Major debridement of wound, sloughectomy' R1,747.00 — exact description "
+       "match, adjacent code (billed avg R777 → pays as billed)"),
 
     # ── other high-exposure procedures ──
-    XW("5103", "imaging", "Ultrasound, soft tissue, any region", None, NEEDS_SME,
-       "RAF ultrasound is site-specific (240/3627/5101); soft-tissue any-region needs SME pick"),
-    XW("2802", "pain", "Procedures for pain relief (peripheral)", None, NEEDS_SME,
-       "RAF nerve-block/pain family — SME to identify"),
-    XW("1204", "critical-care", "Intensive care, category 1", None, NEEDS_SME,
-       "RAF ICU per-diem family — SME to map category ↔ RAF level"),
+    XW("5103", "imaging", "Ultrasound, soft tissue, any region", "60200", PROPOSED,
+       "RAF 60200 'Ultrasound upper limb — soft tissue, any region' R1,758.80 — strong description "
+       "match; if lower limb, RAF 70200 applies instead — SME to confirm site"),
+    XW("2802", "pain", "Procedures for pain relief (peripheral)", "2801", PROPOSED,
+       "RAF 2801 R1,572.30 — its gazette text explicitly reads 'or 2802 alcohol injection in "
+       "peripheral nerves for pain'; adjacent code, strong match (billed avg R806 → pays as billed)"),
+    XW("1204", "critical-care", "Intensive care, category 1", "1221", PROPOSED,
+       "RAF 1221 'Professional fee for managing a patient' R1,048.20 ≈ billed avg R1,049 (near-exact) "
+       "— plausible ICU daily management fee; SME to confirm RAF's ICU per-diem treatment"),
 ]
 
 
