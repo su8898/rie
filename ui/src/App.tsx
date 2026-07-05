@@ -9,6 +9,7 @@ import ClaimDetailPage from "./pages/ClaimDetail";
 import ClaimsPage from "./pages/Claims";
 import DashboardPage from "./pages/Dashboard";
 import LoginPage from "./pages/Login";
+import PaymentsPage from "./pages/Payments";
 import ReasonsPage from "./pages/Reasons";
 import SubmitPage from "./pages/Submit";
 
@@ -28,6 +29,7 @@ export default function App() {
         <Route path="/claims" element={<ClaimsPage />} />
         <Route path="/claims/:id" element={<ClaimDetailPage />} />
         <Route path="/submit" element={<SubmitPage />} />
+        <Route path="/payments" element={<PaymentsPage />} />
         <Route path="/accidents" element={<AccidentsPage />} />
         <Route path="/reasons" element={<ReasonsPage />} />
       </Route>

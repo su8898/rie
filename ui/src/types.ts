@@ -217,3 +217,51 @@ export interface OfferHeadsInput {
     band_p75: number;
   };
 }
+
+// ── Payments (payment-batch layer, /api/payments) ────────────────────────────
+export type PaymentSource =
+  | "SETTLEMENT"
+  | "COURT_ORDER"
+  | "UNDERTAKING_INVOICE"
+  | "SUPPLIER"
+  | "INTERIM";
+
+export type BatchStatus = "OPEN" | "APPROVED" | "PAID" | "CANCELLED";
+
+// A claim eligible to pay and not yet in a paid instruction (GET /payments/queue).
+export interface QueueRow {
+  claim_id: string;
+  net_payable: number;
+  disposition: Disposition;
+  band: Band;
+}
+
+export interface PaymentInstruction {
+  id: number;
+  claim_id: string;
+  source: PaymentSource;
+  amount: number;
+  paid: boolean;
+}
+
+export interface PaymentEvent {
+  event: string;
+  actor: string;
+  role: string;
+  amount: number | null;
+  at: string | null;
+  detail: Record<string, unknown>;
+}
+
+export interface BatchDict {
+  id: number;
+  status: BatchStatus;
+  created_by: string;
+  approved_by: string | null;
+  paid_by: string | null;
+  note: string | null;
+  total: number;
+  actions: string[];
+  instructions: PaymentInstruction[];
+  events: PaymentEvent[];
+}

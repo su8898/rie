@@ -5,12 +5,15 @@
 import type {
   Accident,
   AuthUser,
+  BatchDict,
   ClaimDetail,
   Dashboard,
   Determination,
   Health,
   Offer,
   OfferHeadsInput,
+  PaymentSource,
+  QueueRow,
   Reason,
   Workflow,
 } from "./types";
@@ -180,6 +183,40 @@ export const api = {
     post("/api/litigation", { claim_id: claimId }),
   litigationAction: (litId: number, action: string) =>
     post(`/api/litigation/${litId}/${action}`),
+
+  // — payments (payment-batch layer) —
+  paymentsQueue: () => request<QueueRow[]>("/api/payments/queue"),
+  listBatches: () => request<BatchDict[]>("/api/payments/batches"),
+  createBatch: (note?: string) =>
+    request<BatchDict>("/api/payments/batches", {
+      method: "POST",
+      body: JSON.stringify(note ? { note } : {}),
+    }),
+  getBatch: (id: number) =>
+    request<BatchDict>(`/api/payments/batches/${id}`),
+  addInstruction: (
+    id: number,
+    body: { claim_id: string; source: PaymentSource; amount?: number },
+  ) =>
+    request<BatchDict>(`/api/payments/batches/${id}/instructions`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  approveBatch: (id: number) =>
+    request<BatchDict>(`/api/payments/batches/${id}/approve`, {
+      method: "POST",
+      body: "{}",
+    }),
+  payBatch: (id: number) =>
+    request<BatchDict>(`/api/payments/batches/${id}/pay`, {
+      method: "POST",
+      body: "{}",
+    }),
+  cancelBatch: (id: number) =>
+    request<BatchDict>(`/api/payments/batches/${id}/cancel`, {
+      method: "POST",
+      body: "{}",
+    }),
 };
 
 // Thin POST helper for transition/create endpoints whose exact response body
