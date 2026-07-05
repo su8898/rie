@@ -1,6 +1,18 @@
-// Coding intelligence: tariff/NAPPI code aggregation, negotiation targets, and
-// per-condition medical cost bands with an on-demand estimate tool. Read-only
-// (three GET aggregations + one GET estimate); no mutations.
+// Coding intelligence — billing behaviour read against the reference (domain-logic §11).
+//
+// The pricing rule is payable = min(billed, reference); this page aggregates that
+// per code and per condition, then reads the gap:
+//   • Codes       — the leakage map per tariff/NAPPI code: billed vs payable, the
+//     repricing saving captured over an ENFORCEABLE/ACCEPTED reference, the
+//     over-reference SIGNAL where billing sits above an INTERDICTED/ENDOGENOUS
+//     source, and uncovered spend with no reference to price against (§11 decomposition).
+//   • Negotiation targets — the codes where a negotiated ENFORCEABLE rate would
+//     control currently-uncaptured spend; potential saving is the lever (§5).
+//   • Conditions  — per-claimant medical totals by ICD-10 3-char injury class, the
+//     p25–p90 band under the MIN_ROBUST small-n guard, plus an estimate tool that
+//     classifies an amount against the band (§6).
+//
+// Read-only (three GET aggregations + one GET estimate); no mutations.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, ApiError } from "../api";
@@ -102,14 +114,22 @@ export default function CodingPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <header>
         <h1 className="text-xl font-semibold text-slate-900">Coding intelligence</h1>
-        <span className="text-xs text-slate-400">
-          tariff/NAPPI overage · condition cost bands · negotiation targets
-        </span>
-      </div>
+        <p className="mt-0.5 max-w-3xl text-sm text-slate-500">
+          Where billing behaviour is read against the reference. Payable ={" "}
+          min(billed, reference), so the gap between billed and reference is
+          captured leakage and a negotiation lever: repricing saving over an
+          enforceable rate, an over-reference{" "}
+          <span className="font-medium text-slate-600">signal</span> where an
+          interdicted source is billed above, and{" "}
+          <span className="font-medium text-slate-600">uncovered</span> spend
+          with no reference to price against. Condition cost bands benchmark
+          per-injury spend (§11, §6).
+        </p>
+      </header>
 
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-1 border-b border-slate-200">
         {(
           [
             ["codes", "Codes"],
@@ -120,11 +140,11 @@ export default function CodingPage() {
           <button
             key={value}
             onClick={() => setTab(value)}
-            className={
+            className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium transition ${
               tab === value
-                ? "rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white"
-                : "rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
-            }
+                ? "border-slate-900 text-slate-900"
+                : "border-transparent text-slate-500 hover:text-slate-800"
+            }`}
           >
             {label}
           </button>
@@ -175,31 +195,50 @@ function CodesTab({
   );
   const { page, setPage, pageCount, total, slice } = usePaged(filtered, 25);
   return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <label className="text-xs font-medium text-slate-500">Kind</label>
-        <select
-          value={kind}
-          onChange={(e) => onKind(e.target.value as CodeKind)}
-          className={INPUT}
-        >
-          <option value="">All</option>
-          <option value="TARIFF">TARIFF</option>
-          <option value="NAPPI">NAPPI</option>
-        </select>
-        <SearchInput value={q} onChange={setQ} placeholder="Search code…" />
-      </div>
-
+    <Card
+      title="Codes — the leakage map"
+      sub="One row per tariff/NAPPI code: how much it moves (lines / claims / providers), billed vs payable = min(billed, reference), and where the gap goes — repriced saving already captured over an enforceable reference, the over-reference signal (billed above an interdicted/endogenous source, amber when live), and uncovered spend with no reference to price against (§11 decomposition). Src is the reference source most lines priced against."
+      right={
+        <div className="flex items-end gap-2">
+          <div>
+            <label className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-slate-400">
+              Kind
+            </label>
+            <select
+              value={kind}
+              onChange={(e) => onKind(e.target.value as CodeKind)}
+              className={INPUT}
+              aria-label="Filter by code kind"
+            >
+              <option value="">All kinds</option>
+              <option value="TARIFF">TARIFF</option>
+              <option value="NAPPI">NAPPI</option>
+            </select>
+          </div>
+          <div>
+            <label className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-slate-400">
+              Search
+            </label>
+            <SearchInput
+              value={q}
+              onChange={setQ}
+              placeholder="Search code…"
+              className="w-44"
+            />
+          </div>
+        </div>
+      }
+    >
       {filtered.length === 0 ? (
-        <Empty label={q ? "No codes match your search." : "No codes."} />
+        <Empty label={q || kind ? "No codes match the current filter." : "No codes."} />
       ) : (
-        <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div className="overflow-hidden rounded-md border border-slate-100">
           <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-slate-200 text-sm">
+            <table className="min-w-full divide-y divide-slate-100 text-sm">
               <thead className="bg-slate-50">
                 <tr>
-                  <th className={th}>Kind</th>
-                  <th className={th}>Code</th>
+                  <th className={`${th} text-left`}>Kind</th>
+                  <th className={`${th} text-left`}>Code</th>
                   <th className={`${th} text-right`}>Lines</th>
                   <th className={`${th} text-right`}>Claims</th>
                   <th className={`${th} text-right`}>Providers</th>
@@ -208,7 +247,7 @@ function CodesTab({
                   <th className={`${th} text-right`}>Repriced saving</th>
                   <th className={`${th} text-right`}>Over-ref signal</th>
                   <th className={`${th} text-right`}>Uncovered</th>
-                  <th className={th}>Src</th>
+                  <th className={`${th} text-left`}>Src</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -261,7 +300,7 @@ function CodesTab({
           />
         </div>
       )}
-    </div>
+    </Card>
   );
 }
 
@@ -274,12 +313,18 @@ function TargetsTab({ targets }: { targets: CodeAgg[] }) {
   );
   const { page, setPage, pageCount, total, slice } = usePaged(filtered, 25);
   return (
-    <div className="space-y-3">
-      <p className="text-sm text-slate-500">
-        Codes where a negotiated ENFORCEABLE rate would control currently-uncaptured
-        spend (over-reference signal + uncovered).
-      </p>
-      <SearchInput value={q} onChange={setQ} placeholder="Search code…" />
+    <Card
+      title="Negotiation targets — where a rate would bite"
+      sub="Codes where today there is no enforceable reference to price against, so the spend can't be repriced at adjudication — the over-reference signal (billed above an interdicted/endogenous source) plus uncovered lines. A negotiated ENFORCEABLE rate would let the pay-min rule capture it; potential saving is that lever, ranked highest-first (§5)."
+      right={
+        <SearchInput
+          value={q}
+          onChange={setQ}
+          placeholder="Search code…"
+          className="w-44"
+        />
+      }
+    >
       {filtered.length === 0 ? (
         <Empty
           label={
@@ -289,55 +334,55 @@ function TargetsTab({ targets }: { targets: CodeAgg[] }) {
           }
         />
       ) : (
-      <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-        <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-slate-200 text-sm">
-            <thead className="bg-slate-50">
-              <tr>
-                <th className={th}>Code</th>
-                <th className={`${th} text-right`}>Lines</th>
-                <th className={`${th} text-right`}>Providers</th>
-                <th className={`${th} text-right`}>Over-ref signal</th>
-                <th className={`${th} text-right`}>Uncovered</th>
-                <th className={`${th} text-right`}>Potential saving</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {slice.map((r) => (
-                <tr key={`${r.kind}:${r.code}`} className="hover:bg-slate-50">
-                  <td className="px-3 py-2">
-                    <CodePill>{r.code}</CodePill>
-                  </td>
-                  <td className="tnum px-3 py-2 text-right text-slate-700">
-                    {num(r.n_lines)}
-                  </td>
-                  <td className="tnum px-3 py-2 text-right text-slate-700">
-                    {num(r.n_providers)}
-                  </td>
-                  <td className="tnum px-3 py-2 text-right text-slate-700">
-                    {rand(r.over_reference_signal)}
-                  </td>
-                  <td className="tnum px-3 py-2 text-right text-slate-700">
-                    {rand(r.uncovered_billed)}
-                  </td>
-                  <td className="tnum px-3 py-2 text-right font-semibold text-slate-900">
-                    {rand(r.potential_saving ?? 0)}
-                  </td>
+        <div className="overflow-hidden rounded-md border border-slate-100">
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-slate-100 text-sm">
+              <thead className="bg-slate-50">
+                <tr>
+                  <th className={`${th} text-left`}>Code</th>
+                  <th className={`${th} text-right`}>Lines</th>
+                  <th className={`${th} text-right`}>Providers</th>
+                  <th className={`${th} text-right`}>Over-ref signal</th>
+                  <th className={`${th} text-right`}>Uncovered</th>
+                  <th className={`${th} text-right`}>Potential saving</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {slice.map((r) => (
+                  <tr key={`${r.kind}:${r.code}`} className="hover:bg-slate-50">
+                    <td className="px-3 py-2">
+                      <CodePill>{r.code}</CodePill>
+                    </td>
+                    <td className="tnum px-3 py-2 text-right text-slate-700">
+                      {num(r.n_lines)}
+                    </td>
+                    <td className="tnum px-3 py-2 text-right text-slate-700">
+                      {num(r.n_providers)}
+                    </td>
+                    <td className="tnum px-3 py-2 text-right text-slate-700">
+                      {rand(r.over_reference_signal)}
+                    </td>
+                    <td className="tnum px-3 py-2 text-right text-slate-700">
+                      {rand(r.uncovered_billed)}
+                    </td>
+                    <td className="tnum px-3 py-2 text-right font-semibold text-slate-900">
+                      {rand(r.potential_saving ?? 0)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <Pagination
+            page={page}
+            pageCount={pageCount}
+            total={total}
+            onPage={setPage}
+            unit="targets"
+          />
         </div>
-        <Pagination
-          page={page}
-          pageCount={pageCount}
-          total={total}
-          onPage={setPage}
-          unit="targets"
-        />
-      </div>
       )}
-    </div>
+    </Card>
   );
 }
 
@@ -370,8 +415,11 @@ function ConditionsTab({
   );
   const { page, setPage, pageCount, total, slice } = usePaged(filtered, 25);
   return (
-    <div className="space-y-3">
-      <Card title="Estimate">
+    <div className="space-y-4">
+      <Card
+        title="Estimate against a band"
+        sub="Enter an ICD-10 3-char injury class and a rand amount to classify it against that class's per-claimant medical band: BELOW_TYPICAL / TYPICAL / HIGH / OUTLIER, or UNKNOWN when the class is below MIN_ROBUST and has no published band. A quick check on whether a claimant's medical total sits inside the benchmark (§6)."
+      >
         <div className="flex flex-wrap items-end gap-3">
           <div className="flex flex-col gap-1">
             <label className="text-xs font-medium text-slate-500">Injury class</label>
@@ -418,70 +466,77 @@ function ConditionsTab({
         {note && <div className="mt-2 text-xs text-slate-400">{note}</div>}
       </Card>
 
-      <SearchInput value={q} onChange={setQ} placeholder="Search injury class…" />
-      {filtered.length === 0 ? (
-        <Empty label={q ? "No conditions match your search." : "No conditions."} />
-      ) : (
-        <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-slate-200 text-sm">
-              <thead className="bg-slate-50">
-                <tr>
-                  <th className={th}>Injury class</th>
-                  <th className={`${th} text-right`}>n</th>
-                  <th className={`${th} text-right`}>p25</th>
-                  <th className={`${th} text-right`}>p50</th>
-                  <th className={`${th} text-right`}>p75</th>
-                  <th className={`${th} text-right`}>p90</th>
-                  <th className={`${th} text-right`}>Range</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {slice.map((r) => (
-                  <tr key={r.injury_class} className="hover:bg-slate-50">
-                    <td className="px-3 py-2 font-medium text-slate-800">
-                      {r.injury_class}
-                    </td>
-                    <td className="tnum px-3 py-2 text-right text-slate-700">
-                      <span className="inline-flex items-center gap-1.5">
-                        {num(r.n)}
-                        {!r.robust && <LowNTag />}
-                      </span>
-                    </td>
-                    <td className="tnum px-3 py-2 text-right text-slate-700">
-                      {r.bands ? rand(r.bands.p25) : "—"}
-                    </td>
-                    <td className="tnum px-3 py-2 text-right text-slate-700">
-                      {r.bands ? rand(r.bands.p50) : "—"}
-                    </td>
-                    <td className="tnum px-3 py-2 text-right text-slate-700">
-                      {r.bands ? rand(r.bands.p75) : "—"}
-                    </td>
-                    <td className="tnum px-3 py-2 text-right text-slate-700">
-                      {r.bands ? rand(r.bands.p90) : "—"}
-                    </td>
-                    <td className="tnum px-3 py-2 text-right text-slate-500">
-                      {r.bands ? `${rand(r.bands.min)}–${rand(r.bands.max)}` : "—"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <Pagination
-            page={page}
-            pageCount={pageCount}
-            total={total}
-            onPage={setPage}
-            unit="conditions"
+      <Card
+        title="Condition cost bands"
+        sub="Per-claimant medical totals summed by ICD-10 3-char injury class, then reduced to percentiles: p25–p90 is the typical spread, with the full range beside it. A class needs ≥MIN_ROBUST (20) claimants before a band is published — below that it shows low-n and no percentiles, guarding against reading a benchmark off too few claims (§6)."
+        right={
+          <SearchInput
+            value={q}
+            onChange={setQ}
+            placeholder="Search injury class…"
+            className="w-52"
           />
-        </div>
-      )}
-
-      <p className="text-xs text-slate-400">
-        Per-claimant medical totals by ICD-10 3-char class; a band needs ≥20
-        authorities (MIN_ROBUST).
-      </p>
+        }
+      >
+        {filtered.length === 0 ? (
+          <Empty label={q ? "No conditions match your search." : "No conditions."} />
+        ) : (
+          <div className="overflow-hidden rounded-md border border-slate-100">
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-slate-100 text-sm">
+                <thead className="bg-slate-50">
+                  <tr>
+                    <th className={`${th} text-left`}>Injury class</th>
+                    <th className={`${th} text-right`}>n</th>
+                    <th className={`${th} text-right`}>p25</th>
+                    <th className={`${th} text-right`}>p50</th>
+                    <th className={`${th} text-right`}>p75</th>
+                    <th className={`${th} text-right`}>p90</th>
+                    <th className={`${th} text-right`}>Range</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {slice.map((r) => (
+                    <tr key={r.injury_class} className="hover:bg-slate-50">
+                      <td className="px-3 py-2 font-medium text-slate-800">
+                        {r.injury_class}
+                      </td>
+                      <td className="tnum px-3 py-2 text-right text-slate-700">
+                        <span className="inline-flex items-center gap-1.5">
+                          {num(r.n)}
+                          {!r.robust && <LowNTag />}
+                        </span>
+                      </td>
+                      <td className="tnum px-3 py-2 text-right text-slate-700">
+                        {r.bands ? rand(r.bands.p25) : "—"}
+                      </td>
+                      <td className="tnum px-3 py-2 text-right text-slate-700">
+                        {r.bands ? rand(r.bands.p50) : "—"}
+                      </td>
+                      <td className="tnum px-3 py-2 text-right text-slate-700">
+                        {r.bands ? rand(r.bands.p75) : "—"}
+                      </td>
+                      <td className="tnum px-3 py-2 text-right text-slate-700">
+                        {r.bands ? rand(r.bands.p90) : "—"}
+                      </td>
+                      <td className="tnum px-3 py-2 text-right text-slate-500">
+                        {r.bands ? `${rand(r.bands.min)}–${rand(r.bands.max)}` : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <Pagination
+              page={page}
+              pageCount={pageCount}
+              total={total}
+              onPage={setPage}
+              unit="conditions"
+            />
+          </div>
+        )}
+      </Card>
     </div>
   );
 }

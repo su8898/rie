@@ -1,9 +1,28 @@
+// Notifications — the POPIA-minimal outbound outbox + opt-in channel preference
+// (the direct-claimant notification service, domain-logic §8 / §12.8).
+//
+// Lifecycle and checklist transitions emit outbound messages, but the body is
+// data-minimised by construction: it carries only the claim reference and the
+// required action — never medical or quantum detail. Delivery is opt-in, so the
+// opt-in flag on the party record IS the POPIA lawful-basis gate: a party with
+// no opt-in is SUPPRESSED — logged, not delivered. That is the privacy-correct
+// outcome, not a failure. Parties are identified by an HMAC pseudonym (P_*),
+// never a name (SPECIFICATION — Party token; no raw PII stored).
+//
+// Two workflows on one page:
+//   • Channel preference — look up a party token's channel (SMS / EMAIL / NONE)
+//     and opt-in, and save a change. No opt-in ⇒ every message to that party
+//     SUPPRESSES.
+//   • Outbox — the notification log, one row per message, with the lifecycle
+//     status (PENDING / SENT / SUPPRESSED / FAILED). Delivery itself is external
+//     (an SMS / e-mail gateway); mark-sent / mark-failed are the manual delivery
+//     reconciliation for a PENDING row until that gateway reports back.
+
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, ApiError } from "../api";
 import {
   Card,
-  Stat,
   Loading,
   ErrorBox,
   Empty,
@@ -29,6 +48,14 @@ const claimLink =
 
 const STATUS_OPTIONS = ["", "PENDING", "SENT", "SUPPRESSED", "FAILED"] as const;
 const CHANNEL_OPTIONS: NotifChannel[] = ["SMS", "EMAIL", "NONE"];
+
+// One-line meaning per lifecycle status — what a row in this state actually is.
+const STATUS_MEANING: Record<string, string> = {
+  PENDING: "queued for the gateway; awaiting a delivery result",
+  SENT: "handed to the SMS / e-mail gateway",
+  SUPPRESSED: "not delivered — the party has no opt-in (privacy-correct)",
+  FAILED: "the gateway could not deliver it",
+};
 
 export default function NotificationsPage() {
 
@@ -121,45 +148,25 @@ export default function NotificationsPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <header>
         <h1 className="text-xl font-semibold text-slate-900">Notifications</h1>
-        <span className="text-xs text-slate-400">
-          POPIA-minimal outbox · opt-in channel
-        </span>
-      </div>
+        <p className="mt-0.5 max-w-3xl text-sm text-slate-500">
+          The POPIA-minimal outbound outbox (§8 / §12.8). Every message carries
+          only a{" "}
+          <span className="font-medium text-slate-600">claim reference</span> and
+          the{" "}
+          <span className="font-medium text-slate-600">required action</span> —
+          never medical or quantum detail. Delivery is opt-in, so a party with no
+          opt-in is <span className="font-medium text-slate-600">SUPPRESSED</span>{" "}
+          (logged, not delivered) — data-minimisation by construction, not a
+          failure to reach them.
+        </p>
+      </header>
 
-      <div className="flex flex-wrap items-end gap-3">
-        <label className="flex flex-col gap-1">
-          <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-            Status
-          </span>
-          <select
-            className={inputClass}
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-          >
-            {STATUS_OPTIONS.map((s) => (
-              <option key={s || "all"} value={s}>
-                {s || "All"}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="flex flex-1 flex-col gap-1">
-          <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-            Search
-          </span>
-          <SearchInput
-            value={q}
-            onChange={setQ}
-            placeholder="Claim, event, channel, message…"
-            className="w-full"
-          />
-        </label>
-        {notifs && <Stat label="In view" value={num(filtered.length)} />}
-      </div>
-
-      <Card title="Channel preference">
+      <Card
+        title="Channel preference"
+        sub="Opt-in IS the POPIA lawful-basis gate for reaching a party. Look up a party token to see its channel — SMS / EMAIL / NONE — and opt-in state, then save a change; with no opt-in, every message to that party SUPPRESSES rather than sends. The token is an HMAC pseudonym (P_*), never a name."
+      >
         <div className="space-y-3">
           <div className="flex flex-wrap items-end gap-3">
             <label className="flex flex-col gap-1">
@@ -169,7 +176,7 @@ export default function NotificationsPage() {
               <input
                 className={inputClass}
                 value={tokenInput}
-                placeholder="party token"
+                placeholder="P_… party pseudonym"
                 onChange={(e) => setTokenInput(e.target.value)}
               />
             </label>
@@ -187,7 +194,13 @@ export default function NotificationsPage() {
             <div className="text-xs text-slate-600">
               Current: <CodePill>{pref.party_token}</CodePill> · channel{" "}
               <CodePill>{pref.channel}</CodePill> ·{" "}
-              {pref.opted_in ? "opted in" : "not opted in"}
+              {pref.opted_in ? (
+                <span className="font-medium text-emerald-700">opted in</span>
+              ) : (
+                <span className="font-medium text-amber-700">
+                  not opted in — messages SUPPRESS
+                </span>
+              )}
             </div>
           )}
 
@@ -226,41 +239,91 @@ export default function NotificationsPage() {
             </button>
           </div>
 
-          <p className="text-xs text-slate-500">
-            Opt-in is POPIA: a party with no opt-in gets SUPPRESSED (logged, not
-            delivered).
+          <p className="text-xs text-slate-400">
+            NONE and an unchecked opt-in mean the same outcome on the outbox: the
+            message is logged as SUPPRESSED, never delivered. Opting in is the
+            party's own act — this form records it, it does not grant consent.
           </p>
         </div>
       </Card>
 
-      {loadError ? (
-        <ErrorBox message={loadError} />
-      ) : notifs === null ? (
-        <Loading />
-      ) : filtered.length === 0 ? (
-        <Empty label={q ? "No notifications match your search." : "No notifications."} />
-      ) : (
-        <div className="space-y-1">
-          <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+      {loadError && <ErrorBox message={loadError} />}
+
+      <Card
+        title="Outbox"
+        sub="One row per outbound message: the claim it concerns, the lifecycle event that emitted it, the party's channel, and the delivery status. PENDING is queued, SENT reached the gateway, FAILED could not be delivered, and SUPPRESSED means the party had no opt-in — the privacy-correct outcome, not an error. Delivery itself is external (SMS / e-mail gateway); mark-sent / mark-failed are the manual delivery reconciliation for a PENDING row."
+        right={
+          <div className="flex flex-wrap items-end gap-2">
+            <div>
+              <label className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-slate-400">
+                Status
+              </label>
+              <select
+                className={inputClass}
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                aria-label="Filter by status"
+              >
+                {STATUS_OPTIONS.map((s) => (
+                  <option key={s || "all"} value={s}>
+                    {s || "All statuses"}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-slate-400">
+                Search
+              </label>
+              <SearchInput
+                value={q}
+                onChange={setQ}
+                placeholder="Claim, event, channel, message…"
+                className="w-56"
+              />
+            </div>
+            {notifs && (
+              <div className="pb-1 text-xs text-slate-400">
+                <span className="tnum font-semibold text-slate-700">
+                  {num(filtered.length)}
+                </span>{" "}
+                in view
+              </div>
+            )}
+          </div>
+        }
+      >
+        {notifs === null ? (
+          <Loading label="Loading outbox…" />
+        ) : filtered.length === 0 ? (
+          <Empty
+            label={
+              q || statusFilter
+                ? "No notifications match the current status / search."
+                : "No notifications sent yet."
+            }
+          />
+        ) : (
+          <div className="overflow-hidden rounded-md border border-slate-100">
             <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-slate-200 text-sm">
-                <thead>
+              <table className="min-w-full divide-y divide-slate-100 text-sm">
+                <thead className="bg-slate-50">
                   <tr>
-                    <th className={th}>#</th>
-                    <th className={th}>Claim</th>
-                    <th className={th}>Event</th>
-                    <th className={th}>Channel</th>
-                    <th className={th}>Status</th>
-                    <th className={th}>Message</th>
-                    <th className={th}>Created</th>
-                    <th className={th}>Actions</th>
+                    <th className={`${th} text-left`}>#</th>
+                    <th className={`${th} text-left`}>Claim</th>
+                    <th className={`${th} text-left`}>Event</th>
+                    <th className={`${th} text-left`}>Channel</th>
+                    <th className={`${th} text-left`}>Status</th>
+                    <th className={`${th} text-left`}>Message</th>
+                    <th className={`${th} text-left`}>Created</th>
+                    <th className={`${th} text-left`}>Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {slice.map((n) => (
-                    <tr key={n.id}>
-                      <td className="px-3 py-2 font-mono text-[13px] text-slate-700">
-                        {n.id}
+                    <tr key={n.id} className="align-top hover:bg-slate-50">
+                      <td className="px-3 py-2 font-mono text-[13px] text-slate-400">
+                        #{n.id}
                       </td>
                       <td className="px-3 py-2">
                         <Link
@@ -276,8 +339,13 @@ export default function NotificationsPage() {
                       <td className="px-3 py-2 text-slate-700">{n.channel}</td>
                       <td className="px-3 py-2">
                         <StateChip state={n.status} />
+                        {STATUS_MEANING[n.status] && (
+                          <div className="mt-0.5 max-w-[13rem] text-[10px] leading-snug text-slate-400">
+                            {STATUS_MEANING[n.status]}
+                          </div>
+                        )}
                       </td>
-                      <td className="px-3 py-2 text-xs text-slate-600 max-w-md">
+                      <td className="max-w-md px-3 py-2 text-xs text-slate-600">
                         {n.body}
                       </td>
                       <td className="px-3 py-2 text-slate-500">
@@ -298,7 +366,7 @@ export default function NotificationsPage() {
                                 )
                               }
                             >
-                              mark sent
+                              {busyKey === `sent:${n.id}` ? "…" : "mark sent"}
                             </button>
                             <button
                               type="button"
@@ -312,11 +380,11 @@ export default function NotificationsPage() {
                                 )
                               }
                             >
-                              mark failed
+                              {busyKey === `failed:${n.id}` ? "…" : "mark failed"}
                             </button>
                           </div>
                         ) : (
-                          <span className="text-slate-400">—</span>
+                          <span className="text-slate-300">—</span>
                         )}
                       </td>
                     </tr>
@@ -332,12 +400,13 @@ export default function NotificationsPage() {
               unit="notifications"
             />
           </div>
-          <p className="text-xs text-slate-500">
-            Delivery (SMS/e-mail) is external; bodies carry only the claim
-            reference and required action — never medical or quantum detail.
-          </p>
-        </div>
-      )}
+        )}
+        <p className="mt-3 text-xs text-slate-400">
+          Only PENDING rows can be reconciled — SENT / FAILED / SUPPRESSED are
+          terminal. Marking a row records the delivery outcome the external
+          gateway reported; it never changes what the body may contain.
+        </p>
+      </Card>
 
       {toast && <Toast message={toast} onClose={() => setToast(null)} />}
     </div>
