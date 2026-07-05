@@ -60,8 +60,18 @@ export interface ClaimLine {
   service_date: string;
   provider_id: string;
   dx?: string;
+  // Provider discipline for a TARIFF line — the backend prices per discipline
+  // (e.g. code 4301: Chiropractor R399.06 vs GP R10.60). "" = claim default.
+  discipline?: string;
   emergency?: boolean;
   scheme_paid?: boolean;
+}
+
+// A per-discipline tariff rate row (GET /api/reference/tariffs?code=...).
+export interface TariffRate {
+  code: string;
+  discipline: string;
+  rate: number;
 }
 
 export interface ClaimRaw {

@@ -3,12 +3,16 @@
 // happy paths easy to demo. Requires role HANDLER / MEDICAL_OFFICER / ADMIN;
 // other roles get a 403 which we surface inline.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ApiError, api } from "../api";
 import { useAuth } from "../auth";
 import { Card, ErrorBox } from "../components/ui";
-import type { ClaimLine } from "../types";
+import { rand } from "../format";
+import type { ClaimLine, TariffRate } from "../types";
+
+const DEFAULT_DISCIPLINE = "GP";
+const FALLBACK_DISCIPLINES = ["GP", "SPECIALIST"];
 
 type Line = ClaimLine;
 
@@ -40,6 +44,7 @@ function blankLine(): Line {
     service_date: "2026-02-10",
     provider_id: "PRV-001",
     dx: "",
+    discipline: DEFAULT_DISCIPLINE,
   };
 }
 
@@ -70,6 +75,7 @@ function exampleClean(): Draft {
         service_date: "2026-01-20",
         provider_id: "PRV-001",
         dx: "S72.0",
+        discipline: "GP",
       },
     ],
   };
@@ -98,6 +104,7 @@ function exampleBilledOver(): Draft {
         service_date: "2026-01-20",
         provider_id: "PRV-002",
         dx: "S72.0",
+        discipline: "GP",
       },
       {
         kind: "TARIFF",
@@ -107,6 +114,7 @@ function exampleBilledOver(): Draft {
         service_date: "2026-01-20",
         provider_id: "PRV-002",
         dx: "S72.0",
+        discipline: "GP",
       },
     ],
   };
@@ -135,6 +143,7 @@ function examplePersonalMerits(): Draft {
         service_date: "2026-01-20",
         provider_id: "PRV-003",
         dx: "S82.1",
+        discipline: "GP",
       },
     ],
   };
@@ -146,6 +155,70 @@ export default function SubmitPage() {
   const [draft, setDraft] = useState<Draft>(exampleClean);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // Provider disciplines for the per-line select — fetched once on mount, with
+  // a fallback when no reference data is loaded.
+  const [disciplines, setDisciplines] = useState<string[]>(FALLBACK_DISCIPLINES);
+  useEffect(() => {
+    let alive = true;
+    api
+      .disciplines()
+      .then((d) => {
+        if (alive && d.length > 0) setDisciplines(d);
+      })
+      .catch(() => {
+        /* no reference loaded — keep the fallback */
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // Lightweight tariff-rate lookup: cache per tariff code -> { discipline: rate }.
+  // Populated lazily (debounced) as codes are entered so we can show the ref rate
+  // for each line's selected discipline. Errors are ignored quietly.
+  const [tariffRates, setTariffRates] = useState<
+    Record<string, Record<string, number>>
+  >({});
+  const inFlight = useRef<Set<string>>(new Set());
+
+  const fetchTariff = useMemo(() => {
+    return (code: string) => {
+      const key = code.trim();
+      if (!key || key in tariffRates || inFlight.current.has(key)) return;
+      inFlight.current.add(key);
+      api
+        .tariffRates(key)
+        .then((rows: TariffRate[]) => {
+          const byDisc: Record<string, number> = {};
+          for (const r of rows) byDisc[r.discipline] = r.rate;
+          setTariffRates((m) => ({ ...m, [key]: byDisc }));
+        })
+        .catch(() => {
+          // Mark as looked-up-but-empty so we don't refetch on every keystroke.
+          setTariffRates((m) => ({ ...m, [key]: {} }));
+        })
+        .finally(() => inFlight.current.delete(key));
+    };
+  }, [tariffRates]);
+
+  // Debounce tariff lookups for the TARIFF lines' codes.
+  useEffect(() => {
+    const codes = draft.lines
+      .filter((l) => l.kind === "TARIFF" && l.code.trim())
+      .map((l) => l.code.trim());
+    const t = setTimeout(() => codes.forEach(fetchTariff), 300);
+    return () => clearTimeout(t);
+  }, [draft.lines, fetchTariff]);
+
+  // The reference rate for a line's code + selected discipline, if known.
+  function refRate(line: Line): number | null {
+    if (line.kind !== "TARIFF") return null;
+    const byDisc = tariffRates[line.code.trim()];
+    if (!byDisc) return null;
+    const disc = line.discipline || DEFAULT_DISCIPLINE;
+    return disc in byDisc ? byDisc[disc] : null;
+  }
 
   const canSubmit =
     user?.role === "ADMIN" ||
@@ -357,82 +430,14 @@ export default function SubmitPage() {
           <Card title="Lines">
             <div className="space-y-3">
               {draft.lines.map((l, i) => (
-                <div
+                <LineRow
                   key={i}
-                  className="grid grid-cols-2 gap-2 rounded-md border border-slate-200 bg-slate-50/60 p-3 md:grid-cols-7"
-                >
-                  <select
-                    value={l.kind}
-                    onChange={(e) =>
-                      setLine(i, { kind: e.target.value as Line["kind"] })
-                    }
-                    className={inputCls}
-                    aria-label="kind"
-                  >
-                    <option value="TARIFF">TARIFF</option>
-                    <option value="NAPPI">NAPPI</option>
-                  </select>
-                  <input
-                    value={l.code}
-                    onChange={(e) => setLine(i, { code: e.target.value })}
-                    className={`${inputCls} font-mono`}
-                    placeholder="code"
-                    aria-label="code"
-                  />
-                  <input
-                    type="number"
-                    value={l.qty}
-                    onChange={(e) => setLine(i, { qty: Number(e.target.value) })}
-                    className={`${inputCls} tnum`}
-                    placeholder="qty"
-                    aria-label="qty"
-                  />
-                  <input
-                    type="number"
-                    value={l.amount}
-                    onChange={(e) =>
-                      setLine(i, { amount: Number(e.target.value) })
-                    }
-                    className={`${inputCls} tnum`}
-                    placeholder="amount"
-                    aria-label="amount"
-                  />
-                  <input
-                    type="date"
-                    value={l.service_date}
-                    onChange={(e) =>
-                      setLine(i, { service_date: e.target.value })
-                    }
-                    className={inputCls}
-                    aria-label="service date"
-                  />
-                  <input
-                    value={l.provider_id}
-                    onChange={(e) =>
-                      setLine(i, { provider_id: e.target.value })
-                    }
-                    className={`${inputCls} font-mono`}
-                    placeholder="provider"
-                    aria-label="provider"
-                  />
-                  <div className="flex gap-1">
-                    <input
-                      value={l.dx ?? ""}
-                      onChange={(e) => setLine(i, { dx: e.target.value })}
-                      className={inputCls}
-                      placeholder="dx"
-                      aria-label="dx"
-                    />
-                    <button
-                      onClick={() => removeLine(i)}
-                      className="rounded-md border border-slate-300 px-2 text-slate-400 transition hover:bg-rose-50 hover:text-rose-600"
-                      title="Remove line"
-                      aria-label="remove line"
-                    >
-                      ×
-                    </button>
-                  </div>
-                </div>
+                  line={l}
+                  disciplines={disciplines}
+                  refRate={refRate(l)}
+                  onChange={(patch) => setLine(i, patch)}
+                  onRemove={() => removeLine(i)}
+                />
               ))}
               <button
                 onClick={addLine}
@@ -496,6 +501,8 @@ function buildPayload(d: Draft) {
       service_date: l.service_date,
       provider_id: l.provider_id,
       dx: l.dx || "",
+      // Backend prices tariff lines per discipline; "" = claim default.
+      discipline: l.discipline ?? "",
     })),
   };
 }
@@ -514,5 +521,152 @@ function ExampleBtn({
     >
       {label}
     </button>
+  );
+}
+
+// One editable billing line. Includes the provider Discipline select (the
+// backend prices TARIFF lines per discipline) and, for TARIFF lines whose code
+// is in the reference, an inline "ref: R…" showing the rate for the selected
+// discipline so the per-discipline effect is visible as the discipline changes.
+function LineRow({
+  line,
+  disciplines,
+  refRate,
+  onChange,
+  onRemove,
+}: {
+  line: Line;
+  disciplines: string[];
+  refRate: number | null;
+  onChange: (patch: Partial<Line>) => void;
+  onRemove: () => void;
+}) {
+  const field =
+    "w-full rounded-md border border-slate-300 px-2.5 py-1.5 text-sm outline-none focus:border-slate-500 focus:ring-1 focus:ring-slate-500";
+  const micro =
+    "mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-slate-400";
+  const isTariff = line.kind === "TARIFF";
+  // Ensure the line's current discipline is selectable even if not in the list.
+  const disc = line.discipline || DEFAULT_DISCIPLINE;
+  const options = disciplines.includes(disc)
+    ? disciplines
+    : [disc, ...disciplines];
+
+  return (
+    <div className="grid grid-cols-2 gap-2 rounded-md border border-slate-200 bg-slate-50/60 p-3 md:grid-cols-4 lg:grid-cols-8">
+      <div>
+        <label className={micro}>kind</label>
+        <select
+          value={line.kind}
+          onChange={(e) => onChange({ kind: e.target.value as Line["kind"] })}
+          className={field}
+          aria-label="kind"
+        >
+          <option value="TARIFF">TARIFF</option>
+          <option value="NAPPI">NAPPI</option>
+        </select>
+      </div>
+      <div>
+        <label className={micro}>code</label>
+        <input
+          value={line.code}
+          onChange={(e) => onChange({ code: e.target.value })}
+          className={`${field} font-mono`}
+          placeholder="code"
+          aria-label="code"
+        />
+      </div>
+      <div>
+        <label className={micro}>qty</label>
+        <input
+          type="number"
+          value={line.qty}
+          onChange={(e) => onChange({ qty: Number(e.target.value) })}
+          className={`${field} tnum`}
+          placeholder="qty"
+          aria-label="qty"
+        />
+      </div>
+      <div>
+        <label className={micro}>amount</label>
+        <input
+          type="number"
+          value={line.amount}
+          onChange={(e) => onChange({ amount: Number(e.target.value) })}
+          className={`${field} tnum`}
+          placeholder="amount"
+          aria-label="amount"
+        />
+        {/* Per-discipline reference rate hint (TARIFF only). */}
+        {isTariff && (
+          <div className="mt-0.5 h-3 text-[10px] leading-3">
+            {refRate != null ? (
+              <span className="tnum text-emerald-600" title="reference rate for the selected discipline">
+                ref: {rand(refRate)}
+              </span>
+            ) : line.code.trim() ? (
+              <span className="text-slate-300">no reference</span>
+            ) : null}
+          </div>
+        )}
+      </div>
+      <div>
+        <label className={micro}>discipline</label>
+        <select
+          value={disc}
+          onChange={(e) => onChange({ discipline: e.target.value })}
+          className={field}
+          aria-label="discipline"
+          disabled={!isTariff}
+          title={isTariff ? undefined : "discipline pricing applies to TARIFF lines"}
+        >
+          {options.map((d) => (
+            <option key={d} value={d}>
+              {d}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div>
+        <label className={micro}>service date</label>
+        <input
+          type="date"
+          value={line.service_date}
+          onChange={(e) => onChange({ service_date: e.target.value })}
+          className={field}
+          aria-label="service date"
+        />
+      </div>
+      <div>
+        <label className={micro}>provider</label>
+        <input
+          value={line.provider_id}
+          onChange={(e) => onChange({ provider_id: e.target.value })}
+          className={`${field} font-mono`}
+          placeholder="provider"
+          aria-label="provider"
+        />
+      </div>
+      <div>
+        <label className={micro}>dx</label>
+        <div className="flex gap-1">
+          <input
+            value={line.dx ?? ""}
+            onChange={(e) => onChange({ dx: e.target.value })}
+            className={field}
+            placeholder="dx"
+            aria-label="dx"
+          />
+          <button
+            onClick={onRemove}
+            className="shrink-0 rounded-md border border-slate-300 px-2 text-slate-400 transition hover:bg-rose-50 hover:text-rose-600"
+            title="Remove line"
+            aria-label="remove line"
+          >
+            ×
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

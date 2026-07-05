@@ -258,6 +258,7 @@ export default function ClaimDetailPage() {
                       <th className="px-3 py-2">Code</th>
                       <th className="px-3 py-2 text-right">Qty</th>
                       <th className="px-3 py-2 text-right">Amount</th>
+                      <th className="px-3 py-2">Discipline</th>
                       <th className="px-3 py-2">Service date</th>
                       <th className="px-3 py-2">Provider</th>
                       <th className="px-3 py-2">Dx</th>
@@ -275,6 +276,9 @@ export default function ClaimDetailPage() {
                         </td>
                         <td className="tnum px-3 py-2 text-right text-slate-800">
                           {rand(l.amount)}
+                        </td>
+                        <td className="px-3 py-2 text-slate-600">
+                          {l.discipline || "—"}
                         </td>
                         <td className="px-3 py-2 text-slate-600">
                           {l.service_date}

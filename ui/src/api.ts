@@ -23,6 +23,7 @@ import type {
   Reason,
   RiskSweep,
   SweepResult,
+  TariffRate,
   Workflow,
 } from "./types";
 
@@ -124,6 +125,13 @@ export const api = {
 
   // — reference —
   reasons: () => request<Reason[]>("/api/reasons"),
+  // Distinct provider disciplines in the loaded tariff schedules (submit UI).
+  disciplines: () => request<string[]>("/api/reference/disciplines"),
+  // Per-discipline rate rows for a tariff code.
+  tariffRates: (code: string) =>
+    request<TariffRate[]>(
+      `/api/reference/tariffs?code=${encodeURIComponent(code)}`,
+    ),
 
   // — dashboard —
   dashboard: () => request<Dashboard>("/api/dashboard"),
