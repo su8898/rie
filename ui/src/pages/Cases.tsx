@@ -1,11 +1,20 @@
-// Cases — the investigation / review case machine.
+// Cases — the investigation / review case machine (domain-logic §8e).
 //
-// Top: analytics cards (open / at-stake / recovered / prevented) plus by-lane
-// and by-status breakdowns. A filter row (lane + status) re-queries the list.
-// An "Open case" inline form creates a REVIEW / BLOCK / CLAWBACK case. The
-// table drives each case through its state machine via `item.actions`
-// (assign / escalate / close): assign and escalate are one-click, close opens
-// an inline verdict form.
+// Where a flagged claim becomes a unit of human work with an owner and a clock.
+// A lane routes the work (REVIEW → HANDLER; BLOCK / CLAWBACK → INVESTIGATOR),
+// priority starts the SLA clock (P1=1d … P5=14d), and rand-at-stake sizes the
+// exposure. The case runs a state machine — OPEN → IN_REVIEW → ESCALATED →
+// CLOSED — and closing records a verdict + root cause + recovered/prevented.
+// That verdict is the point: it becomes a ground-truth label the engine's
+// precision and recall are measured against (§11) — this page is the far end
+// of the close-the-loop that Governance reads from.
+//
+// Top: analytics (open / at-stake / recovered / prevented / overdue) plus
+// by-lane and by-status breakdowns. A filter row (lane + status) re-queries the
+// list; a search box filters the loaded page. An "Open case" inline form
+// creates a REVIEW / BLOCK / CLAWBACK case. The table drives each case through
+// its transitions via `item.actions` (assign / escalate / close): assign and
+// escalate are one-click, close opens an inline verdict form.
 //
 // The backend is authoritative: it owns role gating (REVIEW → HANDLER,
 // BLOCK/CLAWBACK → INVESTIGATOR) and legal transitions, so we don't pre-block
@@ -29,7 +38,7 @@ import {
   matchQ,
   usePaged,
 } from "../components/ui";
-import { rand } from "../format";
+import { num, rand } from "../format";
 import type {
   CaseAnalytics,
   CaseItem,
@@ -160,93 +169,82 @@ export default function CasesPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <header>
         <h1 className="text-xl font-semibold text-slate-900">Cases</h1>
-        <span className="text-xs text-slate-400">
-          investigation / review case machine
-        </span>
-      </div>
+        <p className="mt-0.5 max-w-3xl text-sm text-slate-500">
+          The investigation / review case machine (§8e). A lane routes the work
+          — REVIEW → HANDLER, BLOCK / CLAWBACK → INVESTIGATOR — priority sets the
+          SLA clock (P1=1d … P5=14d), and rand-at-stake sizes the exposure. On
+          close, the verdict becomes a ground-truth label the engine's precision
+          and recall are measured against (§11) — the far end of the loop
+          Governance reads back.
+        </p>
+      </header>
 
       {loadError && <ErrorBox message={loadError} />}
 
       {/* Analytics */}
       {analytics && (
-        <>
-          <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-            <Stat label="Open" value={analytics.open} />
-            <Stat label="At stake" value={rand(analytics.rand_at_stake_open)} />
+        <Card
+          title="Case analytics"
+          sub="At stake = rand exposure on cases still open, the book of work not yet resolved. Recovered = money clawed back on closed cases (realised). Prevented = spend stopped before it left — a repricing or block that never became a payment. Overdue counts cases past their SLA due date; worklists work breach-first."
+        >
+          <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
+            <Stat
+              label="Open"
+              value={num(analytics.open)}
+              sub={`${num(analytics.n)} total`}
+            />
+            <Stat
+              label="At stake"
+              value={rand(analytics.rand_at_stake_open)}
+              sub="open exposure"
+            />
             <Stat
               label="Recovered"
               value={rand(analytics.rand_recovered)}
               accent="text-emerald-600"
+              sub="clawed back"
             />
-            <Stat label="Prevented" value={rand(analytics.rand_prevented)} />
+            <Stat
+              label="Prevented"
+              value={rand(analytics.rand_prevented)}
+              accent="text-emerald-600"
+              sub="spend stopped"
+            />
+            <Stat
+              label="Overdue"
+              value={num(analytics.overdue)}
+              accent={analytics.overdue > 0 ? "text-rose-600" : "text-slate-900"}
+              sub="past SLA"
+            />
           </div>
 
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Card title="By lane">
-              <Chips map={analytics.by_lane} empty="No cases." />
-            </Card>
-            <Card title="By status">
-              <Chips map={analytics.by_status} empty="No cases." />
-            </Card>
+          <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <Breakdown
+              title="By lane"
+              hint="who owns it"
+              map={analytics.by_lane}
+            />
+            <Breakdown
+              title="By status"
+              hint="where in the machine"
+              map={analytics.by_status}
+            />
+            <Breakdown
+              title="By verdict"
+              hint="closed-case labels"
+              map={analytics.by_verdict}
+            />
           </div>
-        </>
+        </Card>
       )}
 
-      {/* Filters */}
-      <div className="flex flex-wrap items-end gap-3">
-        <div>
-          <label className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-slate-400">
-            Lane
-          </label>
-          <select
-            value={laneFilter}
-            onChange={(e) => setLaneFilter(e.target.value)}
-            className={inputCls}
-            aria-label="Filter by lane"
-          >
-            <option value="">All</option>
-            {LANES.map((l) => (
-              <option key={l} value={l}>
-                {l}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-slate-400">
-            Status
-          </label>
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className={inputCls}
-            aria-label="Filter by status"
-          >
-            <option value="">All</option>
-            {STATUSES.map((s) => (
-              <option key={s} value={s}>
-                {s.replace(/_/g, " ")}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="min-w-[16rem] flex-1">
-          <label className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-slate-400">
-            Search
-          </label>
-          <SearchInput
-            value={q}
-            onChange={setQ}
-            placeholder="Claim, assignee, verdict, #id…"
-            className="w-full"
-          />
-        </div>
-      </div>
-
       {/* Open case */}
-      <Card title="Open case">
+      <Card
+        title="Open case"
+        sub="Create a unit of work and hand it to a lane. Lane sets ownership — REVIEW → HANDLER, BLOCK / CLAWBACK → INVESTIGATOR (§8e); priority sets the SLA (P1=1d, P2=3d, P3=7d, P4=10d, P5=14d) and rand-at-stake records the exposure at risk. Attach a claim ID to tie the case to it, or leave blank for a standalone case."
+      >
         <div className="flex flex-wrap items-end gap-3">
           <div>
             <label className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-slate-400">
@@ -331,111 +329,173 @@ export default function CasesPage() {
       </Card>
 
       {/* Table */}
-      {cases === null ? (
-        <Loading label="Loading cases…" />
-      ) : filtered.length === 0 ? (
-        <Empty label={q ? "No cases match your search." : "No cases match — open one above."} />
-      ) : (
-        <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-slate-200 text-sm">
-              <thead className="bg-slate-50">
-                <tr>
-                  <th className={`${th} text-left`}>#</th>
-                  <th className={`${th} text-left`}>Claim</th>
-                  <th className={`${th} text-left`}>Lane</th>
-                  <th className={`${th} text-left`}>Status</th>
-                  <th className={`${th} text-left`}>Priority / SLA</th>
-                  <th className={`${th} text-right`}>At stake</th>
-                  <th className={`${th} text-left`}>Assigned</th>
-                  <th className={`${th} text-left`}>Verdict</th>
-                  <th className={`${th} text-left`}>Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {slice.map((c) => (
-                  <tr key={c.id} className="align-top hover:bg-slate-50">
-                    <td className="px-3 py-2 text-xs text-slate-400">
-                      #{c.id}
-                    </td>
-                    <td className="px-3 py-2">
-                      {c.claim_id ? (
-                        <Link
-                          to={`/claims/${encodeURIComponent(c.claim_id)}`}
-                          className="font-mono text-[13px] text-slate-900 hover:text-blue-600 hover:underline"
-                        >
-                          {c.claim_id}
-                        </Link>
-                      ) : (
-                        <span className="text-slate-300">—</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2">
-                      <StateChip state={c.lane} />
-                    </td>
-                    <td className="px-3 py-2">
-                      <StateChip state={c.status} />
-                    </td>
-                    <td className="px-3 py-2 text-xs">
-                      <div className="flex items-center gap-1.5">
-                        <span className="font-semibold text-slate-700">
-                          P{c.priority}
-                        </span>
-                        {c.sla_days != null && (
-                          <span className="text-slate-400">
-                            {c.sla_days}d SLA
+      <Card
+        title="Case queue"
+        sub="One row per case. assign and escalate are one-click transitions; close records a verdict + root cause + recovered/prevented — and the verdict is what labels the claim for §11 precision/recall. Only the transitions the backend currently allows appear as buttons; it stays authoritative on role gating and legal moves, so a 403/409 it returns is shown verbatim."
+        right={
+          <div className="flex flex-wrap items-end gap-2">
+            <div>
+              <label className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-slate-400">
+                Lane
+              </label>
+              <select
+                value={laneFilter}
+                onChange={(e) => setLaneFilter(e.target.value)}
+                className={inputCls}
+                aria-label="Filter by lane"
+              >
+                <option value="">All lanes</option>
+                {LANES.map((l) => (
+                  <option key={l} value={l}>
+                    {l}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-slate-400">
+                Status
+              </label>
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                className={inputCls}
+                aria-label="Filter by status"
+              >
+                <option value="">All statuses</option>
+                {STATUSES.map((s) => (
+                  <option key={s} value={s}>
+                    {s.replace(/_/g, " ")}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-slate-400">
+                Search
+              </label>
+              <SearchInput
+                value={q}
+                onChange={setQ}
+                placeholder="Claim, assignee, verdict, #id…"
+                className="w-56"
+              />
+            </div>
+          </div>
+        }
+      >
+        {cases === null ? (
+          <Loading label="Loading cases…" />
+        ) : filtered.length === 0 ? (
+          <Empty
+            label={
+              q || laneFilter || statusFilter
+                ? "No cases match the current lane / status / search."
+                : "No cases yet — open one above."
+            }
+          />
+        ) : (
+          <div className="overflow-hidden rounded-md border border-slate-100">
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-slate-100 text-sm">
+                <thead className="bg-slate-50">
+                  <tr>
+                    <th className={`${th} text-left`}>#</th>
+                    <th className={`${th} text-left`}>Claim / reason</th>
+                    <th className={`${th} text-left`}>Lane</th>
+                    <th className={`${th} text-left`}>Status</th>
+                    <th className={`${th} text-left`}>Priority / SLA</th>
+                    <th className={`${th} text-right`}>At stake</th>
+                    <th className={`${th} text-left`}>Assigned</th>
+                    <th className={`${th} text-left`}>Verdict / outcome</th>
+                    <th className={`${th} text-left`}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {slice.map((c) => (
+                    <tr key={c.id} className="align-top hover:bg-slate-50">
+                      <td className="px-3 py-2 text-xs text-slate-400">
+                        #{c.id}
+                      </td>
+                      <td className="px-3 py-2">
+                        {c.claim_id ? (
+                          <Link
+                            to={`/claims/${encodeURIComponent(c.claim_id)}`}
+                            className="font-mono text-[13px] text-slate-900 hover:text-blue-600 hover:underline"
+                          >
+                            {c.claim_id}
+                          </Link>
+                        ) : (
+                          <span className="text-[13px] text-slate-400">
+                            no claim
                           </span>
                         )}
-                      </div>
-                      {c.overdue ? (
-                        <span className="mt-0.5 inline-flex items-center rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700 ring-1 ring-inset ring-rose-600/20">
-                          overdue
-                        </span>
-                      ) : c.days_to_sla != null ? (
-                        <span className="mt-0.5 inline-block text-[10px] text-slate-400">
-                          {c.days_to_sla}d left
-                        </span>
-                      ) : null}
-                    </td>
-                    <td className="tnum px-3 py-2 text-right text-slate-700">
-                      {rand(c.rand_at_stake)}
-                    </td>
-                    <td className="px-3 py-2 text-xs text-slate-600">
-                      {c.assigned_to ?? (
-                        <span className="text-slate-300">—</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2">
-                      {c.verdict ? (
-                        <StateChip state={c.verdict} />
-                      ) : (
-                        <span className="text-slate-300">—</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2">
-                      <RowActions
-                        item={c}
-                        busyKey={busyKey}
-                        closeOpen={closeFor === c.id}
-                        openClose={() => setCloseFor(c.id)}
-                        cancelClose={() => setCloseFor(null)}
-                        run={run}
-                      />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                        {c.reason && (
+                          <div className="mt-0.5 max-w-[16rem] truncate text-[11px] text-slate-400">
+                            {c.reason}
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-3 py-2">
+                        <StateChip state={c.lane} />
+                      </td>
+                      <td className="px-3 py-2">
+                        <StateChip state={c.status} />
+                      </td>
+                      <td className="px-3 py-2 text-xs">
+                        <SlaCell item={c} />
+                      </td>
+                      <td className="tnum px-3 py-2 text-right text-slate-700">
+                        {rand(c.rand_at_stake)}
+                      </td>
+                      <td className="px-3 py-2 text-xs">
+                        {c.assigned_to ? (
+                          <span className="text-slate-700">
+                            {c.assigned_to}
+                          </span>
+                        ) : (
+                          <span className="text-slate-400">
+                            unassigned
+                            {c.owner_role && (
+                              <span className="block text-[10px] text-slate-300">
+                                {c.owner_role} owns
+                              </span>
+                            )}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2">
+                        {c.verdict ? (
+                          <VerdictCell item={c} />
+                        ) : (
+                          <span className="text-slate-300">—</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2">
+                        <RowActions
+                          item={c}
+                          busyKey={busyKey}
+                          closeOpen={closeFor === c.id}
+                          openClose={() => setCloseFor(c.id)}
+                          cancelClose={() => setCloseFor(null)}
+                          run={run}
+                        />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <Pagination
+              page={page}
+              pageCount={pageCount}
+              total={total}
+              onPage={setPage}
+              unit="cases"
+            />
           </div>
-          <Pagination
-            page={page}
-            pageCount={pageCount}
-            total={total}
-            onPage={setPage}
-            unit="cases"
-          />
-        </div>
-      )}
+        )}
+      </Card>
 
       {toast && (
         <Toast
@@ -443,6 +503,93 @@ export default function CasesPage() {
           tone={toast.tone}
           onClose={() => setToast(null)}
         />
+      )}
+    </div>
+  );
+}
+
+// A titled breakdown panel: a small header (what the cut is) over the count
+// chips. Wraps `Chips` so the three analytics cuts read consistently.
+function Breakdown({
+  title,
+  hint,
+  map,
+}: {
+  title: string;
+  hint: string;
+  map: Record<string, number>;
+}) {
+  return (
+    <div className="rounded-md border border-slate-100 p-3">
+      <div className="mb-2 flex items-baseline justify-between gap-2">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+          {title}
+        </span>
+        <span className="text-[10px] text-slate-400">{hint}</span>
+      </div>
+      <Chips map={map} empty="No cases." />
+    </div>
+  );
+}
+
+// Priority + SLA presentation. Priority sets the clock (P1=1d … P5=14d, §8e);
+// `overdue` is the backend's breach flag, `days_to_sla` the countdown while
+// still in-window. Closed cases have stopped the clock — neither is shown.
+function SlaCell({ item }: { item: CaseItem }) {
+  const closed = item.status === "CLOSED";
+  return (
+    <div>
+      <div className="flex items-center gap-1.5">
+        <span className="font-semibold text-slate-700">P{item.priority}</span>
+        {item.sla_days != null && (
+          <span className="text-slate-400">{item.sla_days}d SLA</span>
+        )}
+      </div>
+      {closed ? (
+        <span className="mt-0.5 inline-block text-[10px] text-slate-400">
+          clock stopped
+        </span>
+      ) : item.overdue ? (
+        <span className="mt-0.5 inline-flex items-center rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700 ring-1 ring-inset ring-rose-600/20">
+          overdue
+        </span>
+      ) : item.days_to_sla != null ? (
+        <span
+          className={`mt-0.5 inline-block text-[10px] ${
+            item.days_to_sla <= 1 ? "font-semibold text-amber-600" : "text-slate-400"
+          }`}
+        >
+          {item.days_to_sla}d left
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+// A closed case's verdict is a ground-truth label (§11); show it with the root
+// cause and any money recovered / prevented captured at close — the full
+// outcome, not just the tag.
+function VerdictCell({ item }: { item: CaseItem }) {
+  const recovered = item.rand_recovered > 0;
+  const prevented = item.rand_prevented > 0;
+  return (
+    <div className="space-y-0.5">
+      {item.verdict && <StateChip state={item.verdict} />}
+      {item.root_cause && (
+        <div className="max-w-[14rem] truncate text-[11px] text-slate-500">
+          {item.root_cause}
+        </div>
+      )}
+      {(recovered || prevented) && (
+        <div className="tnum text-[10px] text-slate-400">
+          {recovered && (
+            <span className="text-emerald-600">+{rand(item.rand_recovered)} recovered</span>
+          )}
+          {recovered && prevented && <span> · </span>}
+          {prevented && (
+            <span className="text-emerald-600">{rand(item.rand_prevented)} prevented</span>
+          )}
+        </div>
       )}
     </div>
   );
@@ -547,7 +694,14 @@ function RowActions({
 
       {/* Close inline form */}
       {closeOpen && item.actions.includes("close") && (
-        <div className="flex flex-wrap items-end gap-2 rounded-md border border-slate-200 bg-slate-50/60 p-2">
+        <div className="rounded-md border border-slate-200 bg-slate-50/60 p-2">
+          <p className="mb-2 text-[10px] leading-relaxed text-slate-400">
+            Closing labels the claim: the verdict becomes ground truth (§11).
+            CONFIRMED_FRAUD / ADJUSTED / REFERRED_LEGAL count as adverse — the
+            signal was right; CLEARED / NO_ACTION as benign. Record what was
+            recovered or prevented if any.
+          </p>
+          <div className="flex flex-wrap items-end gap-2">
           <div className="w-44">
             <label className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-slate-400">
               verdict
@@ -624,6 +778,7 @@ function RowActions({
           >
             Cancel
           </button>
+          </div>
         </div>
       )}
     </div>
