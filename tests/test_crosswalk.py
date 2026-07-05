@@ -1,18 +1,15 @@
-"""COIDA→RAF crosswalk machinery — additive aliasing, and the production-safety invariant.
+"""COIDA→RAF crosswalk machinery + its wiring into build_refbook.
 
-Hermetic: builds tiny in-memory RefBooks, no external snapshots. The key guarantee tested is that
-`apply_crosswalk` changes nothing until an entry is SME-CONFIRMED (default applies CONFIRMED only),
-so drafting the stub never shifts production pricing.
+Hermetic. The key guarantees:
+  - `apply_crosswalk` aliases additively and the engine then prices the alias;
+  - it never overwrites a real reference rate, and skips missing targets;
+  - PRODUCTION SAFETY: CONFIRMED-only by default, so drafting the crosswalk shifts no live price;
+  - build_refbook actually calls it (a CONFIRMED entry flows through to a priced RefBook).
 """
 from __future__ import annotations
 
-import os
-import sys
-
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "db"))
-
-import crosswalk as xw  # noqa: E402
-from engine import RefBook, resolve  # noqa: E402
+import server.crosswalk as xw
+from engine import RefBook, resolve
 
 
 def _book(rpl):
@@ -50,5 +47,23 @@ def test_missing_target_is_skipped():
 def test_every_entry_is_well_formed():
     for e in xw.CROSSWALK:
         assert e.status in (xw.CONFIRMED, xw.PROPOSED, xw.NEEDS_SME, xw.NO_RAF)
-        assert (e.raf is None) == (e.status in (xw.NEEDS_SME, xw.NO_RAF))  # target iff (C)ONFIRMED/PROPOSED
+        assert (e.raf is None) == (e.status in (xw.NEEDS_SME, xw.NO_RAF))  # target iff CONFIRMED/PROPOSED
         assert e.evidence and e.corpus_desc
+
+
+def test_build_refbook_applies_confirmed_crosswalk(monkeypatch):
+    # end-to-end wiring: a CONFIRMED equivalence must flow through build_refbook into pricing.
+    from server import models
+    from server.db import Base, SessionLocal, engine as db_engine
+    from server.reference_data import build_refbook
+
+    Base.metadata.create_all(db_engine)
+    with SessionLocal() as db:
+        db.merge(models.RefRpl(code="88888", discipline="GP", rate=123.45))    # a RAF target
+        db.commit()
+        confirmed = xw.XW("77777", "test", "unit", "88888", xw.CONFIRMED, "unit-test equivalence")
+        monkeypatch.setattr(xw, "CROSSWALK", [confirmed])
+        book = build_refbook(db, nappi_codes=set())
+
+    rate, src, status = resolve(book, "TARIFF", "77777")     # aliased onto 88888 by build_refbook
+    assert rate == 123.45 and status.name == "ACCEPTED"

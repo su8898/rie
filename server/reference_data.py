@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 import engine
 
 from . import models
+from .crosswalk import apply_crosswalk
 
 
 def _norm(code: str) -> str:
@@ -43,8 +44,10 @@ def build_refbook(db: Session, nappi_codes=None) -> engine.RefBook:
             select(models.RefNappiSep).where(models.RefNappiSep.nappi_code.in_(set(nappi_codes))))}
     else:
         sep = {}
-    return engine.RefBook(negotiated=negotiated, rpl=rpl, raf2022=raf2022,
+    book = engine.RefBook(negotiated=negotiated, rpl=rpl, raf2022=raf2022,
                           empirical=empirical, sep=sep, non_benchmarkable=non_bench)
+    apply_crosswalk(book)         # activate SME-CONFIRMED COIDA→RAF equivalences (no-op until confirmed)
+    return book
 
 
 def build_ruleset(db: Session) -> engine.Ruleset:
