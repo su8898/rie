@@ -250,12 +250,25 @@ export default function PaymentsPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-xl font-semibold text-slate-900">Payments</h1>
-        <span className="text-xs text-slate-400">
-          assemble → approve (different admin) → pay
-        </span>
-      </div>
+      <header>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h1 className="text-xl font-semibold text-slate-900">Payments</h1>
+          <span className="text-xs text-slate-400">
+            assemble → approve (different admin) → pay
+          </span>
+        </div>
+        <p className="mt-0.5 max-w-3xl text-sm text-slate-500">
+          The payment-batch machine (§8e): a batch is assembled from claims that
+          cleared the gate, then approved by a{" "}
+          <span className="font-medium text-slate-600">different</span> admin
+          than the one who assembled it, then paid — OPEN → APPROVED →
+          PAID/CANCELLED. The two-person split is the control: segregation of
+          duties is what stops a single operator paying themselves. Approve and
+          pay are ADMIN-gated here as a courtesy, but the backend is
+          authoritative — it enforces the different-approver rule, payee
+          verification and legal transitions, and its refusal is shown verbatim.
+        </p>
+      </header>
 
       {loadError && <ErrorBox message={loadError} />}
 
@@ -280,7 +293,10 @@ export default function PaymentsPage() {
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         {/* ── Left: batch inbox ─────────────────────────────────────────── */}
         <div className="md:col-span-1">
-          <Card title="Batches">
+          <Card
+            title="Batches"
+            sub="Every payment run, actionable-first: OPEN (being assembled) and APPROVED (awaiting payment) sort above terminal PAID / CANCELLED, newest first within a status. New batch opens an empty OPEN batch to start assembling."
+          >
             {/* New batch — the entry action */}
             <div className="mb-3 space-y-2 rounded-md border border-slate-200 bg-slate-50/60 p-3">
               <label className={microLabel}>New batch note (optional)</label>
@@ -360,7 +376,7 @@ export default function PaymentsPage() {
           ) : (
             <div className="space-y-4">
               {/* Header + next actions */}
-              <Card>
+              <Card sub="The batch at a glance: its status and total, and who assembled (created), approved and paid it — the segregation-of-duties trail, filled in as it advances. Next lists only the transitions the backend allows right now; approve and pay are ADMIN and cannot be fired by whoever assembled it (§8e).">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="flex items-center gap-3">
                     <h2 className="text-lg font-semibold text-slate-900">
@@ -440,7 +456,10 @@ export default function PaymentsPage() {
               </Card>
 
               {/* Instructions */}
-              <Card title={`Instructions (${batch.instructions.length})`}>
+              <Card
+                title={`Instructions (${batch.instructions.length})`}
+                sub="One line per payment: a claim, the source it pays under (SETTLEMENT / COURT_ORDER / UNDERTAKING_INVOICE / SUPPLIER / INTERIM), and an amount that defaults to the claim's net_payable. They sum to the batch total; Paid flips once the batch is paid."
+              >
                 {batch.instructions.length === 0 ? (
                   <div className="text-sm text-slate-400">
                     {batch.status === "OPEN"
@@ -488,7 +507,10 @@ export default function PaymentsPage() {
 
               {/* Assemble — add instructions from the eligible queue (OPEN only) */}
               {batch.status === "OPEN" && (
-                <Card title="Add instructions">
+                <Card
+                  title="Add instructions"
+                  sub="Assemble the batch from the eligible queue — claims that cleared the gate and are ready to pay. Pick one to prefill its claim id, choose the source it pays under and an amount (blank uses net_payable), then Add. Only while the batch is OPEN."
+                >
                   {/* the instruction form (prefilled from the queue picker below) */}
                   <div className="flex flex-wrap items-end gap-2">
                     <div className="w-40">
@@ -618,7 +640,10 @@ export default function PaymentsPage() {
               )}
 
               {/* Event timeline */}
-              <Card title="Payment events">
+              <Card
+                title="Payment events"
+                sub="The append-only payment_event log (§8e): each assemble / approve / pay stamped with actor, role and time — the audit trail behind the segregation of duties, oldest first."
+              >
                 {batch.events.length === 0 ? (
                   <div className="text-sm text-slate-400">No events.</div>
                 ) : (
