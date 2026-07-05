@@ -69,11 +69,29 @@ CREATE TABLE ref_cap (
 	PRIMARY KEY (effective_from)
 );
 
+CREATE TABLE ref_edition (
+	kind VARCHAR NOT NULL, 
+	version VARCHAR NOT NULL, 
+	n INTEGER NOT NULL, 
+	synced_at VARCHAR, 
+	PRIMARY KEY (kind)
+);
+
 CREATE TABLE ref_empirical (
 	kind VARCHAR NOT NULL, 
 	code VARCHAR NOT NULL, 
 	median FLOAT NOT NULL, 
 	PRIMARY KEY (kind, code)
+);
+
+CREATE TABLE ref_icd10 (
+	code VARCHAR NOT NULL, 
+	description VARCHAR NOT NULL, 
+	code3_desc VARCHAR NOT NULL, 
+	chapter_desc VARCHAR NOT NULL, 
+	valid_primary BOOLEAN NOT NULL, 
+	valid_clinical BOOLEAN NOT NULL, 
+	PRIMARY KEY (code)
 );
 
 CREATE TABLE ref_nappi_sep (

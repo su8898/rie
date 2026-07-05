@@ -43,7 +43,8 @@ def _line_details(claim: engine.Claim, book: engine.RefBook, rs: engine.Ruleset,
 
 def assess_and_store(db: Session, payload: dict, today: Optional[date] = None) -> dict:
     claim = adapter.json_to_claim(payload)
-    book, rs = build_refbook(db), build_ruleset(db)
+    nappi_codes = {l.code for l in claim.lines if l.kind == "NAPPI"}
+    book, rs = build_refbook(db, nappi_codes), build_ruleset(db)
     tier = payload.get("provider_tier", "GP")
     dx_regions = set(payload.get("accident_dx_regions", []))
 
@@ -83,6 +84,7 @@ def _persist(db: Session, claim: engine.Claim, payload: dict, record: dict,
             claim_id=claim.claim_id, claim_type=claim.claim_type, party_token=claim.party_token,
             accident_date=claim.accident_date, lodged_on=claim.lodged_on, raw=payload,
         ))
+        db.flush()                                              # insert the claim before its FK children (Postgres enforces order)
         for ld in lines:                                        # billing lines feed leakage
             db.add(models.BillingLineRecord(claim_id=claim.claim_id, **ld))
         db.add(models.ClaimLifecycle(claim_id=claim.claim_id, stage="LODGED"))

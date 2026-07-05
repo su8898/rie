@@ -74,6 +74,25 @@ class RefPreauth(Base):
     code: Mapped[str] = mapped_column(String, primary_key=True)
 
 
+class RefIcd10(Base):
+    __tablename__ = "ref_icd10"
+    code: Mapped[str] = mapped_column(String, primary_key=True)
+    description: Mapped[str] = mapped_column(String, default="")
+    code3_desc: Mapped[str] = mapped_column(String, default="")
+    chapter_desc: Mapped[str] = mapped_column(String, default="")
+    valid_primary: Mapped[bool] = mapped_column(default=True)
+    valid_clinical: Mapped[bool] = mapped_column(default=True)
+
+
+class RefEdition(Base):
+    """Provenance of loaded reference editions (from reference.db ref_meta)."""
+    __tablename__ = "ref_edition"
+    kind: Mapped[str] = mapped_column(String, primary_key=True)
+    version: Mapped[str] = mapped_column(String, default="")
+    n: Mapped[int] = mapped_column(Integer, default=0)
+    synced_at: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+
+
 # ── corpus + operational ─────────────────────────────────────────────────────
 class AccidentRecord(Base):
     __tablename__ = "accidents"

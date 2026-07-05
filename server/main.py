@@ -14,7 +14,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from .api import (
     accidents, audit, auth, claims, dashboard, health, leakage, lifecycle, litigation, merits,
-    offers, parties, payments, rails, reasons, serious_injury, undertakings,
+    offers, parties, payments, rails, reasons, reference, serious_injury, undertakings,
 )
 from .config import SECRET_KEY
 from .seed import init_db
@@ -50,7 +50,7 @@ app.include_router(health.router)
 for r in (auth.router, claims.router, offers.router, reasons.router, dashboard.router,
           accidents.router, leakage.router, lifecycle.router, merits.router,
           serious_injury.router, undertakings.router, litigation.router, payments.router,
-          parties.router, audit.router):
+          parties.router, audit.router, reference.router):
     app.include_router(r, prefix="/api")
 
 app.include_router(rails.router)          # provider->fund rails: /rails/v1/... (JWS-authenticated)

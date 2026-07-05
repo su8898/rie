@@ -1,0 +1,14 @@
+.git
+*.db
+reference.db
+rie.db
+ui/node_modules
+ui/dist
+**/__pycache__
+.pytest_cache
+.coverage
+htmlcov
+tests
+spec
+.venv
+*.tsbuildinfo

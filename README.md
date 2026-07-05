@@ -49,6 +49,26 @@ cd ui && npm install && npm run dev
 
 Dev logins (username == password): `admin`, `handler`, `medical`, `investigator`, `legal`.
 
+## Deployment (Docker + PostgreSQL + real reference data)
+
+The stack runs on one command: PostgreSQL 16, a one-shot **reference loader** that seeds the RAF
+reference snapshot (`reference.db` — ~540k NAPPI prices, 1,367 gazetted tariffs, 41k ICD-10)
+into Postgres, then the API (serving the built SPA + JSON API + provider rails on one port).
+
+```bash
+cd db && docker compose up --build          # db + loader + api
+open http://localhost:8021                    # the operator console
+```
+
+`reference.db` (at the repo root) is bind-mounted into the loader and mapped into RIE's
+reference tables ([`db/load_reference.py`](db/load_reference.py)): tariffs → the ACCEPTED
+tariff reference (claims pay `min(billed, rate)`), NAPPI → SEP (+dispensing fee), ICD-10 →
+diagnoses. Claims are then priced against the **real** rates — e.g. tariff `10190` → R587.24,
+NAPPI Traumeel → R43.54 SEP+fee. Browse it at `/api/reference/{tariffs,nappi,icd10,editions}`.
+
+To load reference data into any target DB directly (SQLite or Postgres):
+`RIE_DATABASE_URL=... python3 db/load_reference.py`.
+
 ## API
 
 | Method | Path | Notes |

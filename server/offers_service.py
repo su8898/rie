@@ -23,7 +23,8 @@ from .reference_data import build_refbook, build_ruleset
 
 def compute_offer(db: Session, payload: dict, today: Optional[date] = None) -> dict:
     claim = adapter.json_to_claim(payload)
-    book, rs = build_refbook(db), build_ruleset(db)
+    nappi_codes = {l.code for l in claim.lines if l.kind == "NAPPI"}
+    book, rs = build_refbook(db, nappi_codes), build_ruleset(db)
     accidents = [adapter.accident_to_engine(r) for r in db.scalars(select(models.AccidentRecord))]
 
     record = engine.process_claim(
