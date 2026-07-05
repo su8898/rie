@@ -208,6 +208,24 @@ CREATE TABLE case_notes (
 	FOREIGN KEY(case_id) REFERENCES cases (id)
 );
 
+CREATE TABLE disputes (
+	id SERIAL NOT NULL,
+	claim_id VARCHAR NOT NULL,
+	subject VARCHAR NOT NULL,
+	raised_by VARCHAR NOT NULL,
+	grounds VARCHAR NOT NULL,
+	status VARCHAR NOT NULL,
+	channel VARCHAR,
+	outcome VARCHAR,
+	linked_ref VARCHAR,
+	opened_by VARCHAR NOT NULL,
+	opened_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now() NOT NULL,
+	deadline TIMESTAMP WITHOUT TIME ZONE,
+	closed_at TIMESTAMP WITHOUT TIME ZONE,
+	PRIMARY KEY (id),
+	FOREIGN KEY(claim_id) REFERENCES claims (claim_id)
+);
+
 CREATE TABLE billing_lines (
 	id SERIAL NOT NULL, 
 	claim_id VARCHAR NOT NULL, 

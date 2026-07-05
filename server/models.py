@@ -356,6 +356,27 @@ class CaseNote(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+class Dispute(Base):
+    """Objection / dispute register (§6 — the CIE s91-objection pattern generalised):
+    LODGED -> UNDER_RECONSIDERATION -> UPHELD / REJECTED -> REFERRED -> RESOLVED (or WITHDRAWN).
+    Reconsideration is internal; referral routes to the HPCSA tribunal (serious injury) or the
+    litigation hand-off (channel + linked_ref)."""
+    __tablename__ = "disputes"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    claim_id: Mapped[str] = mapped_column(ForeignKey("claims.claim_id"), index=True)
+    subject: Mapped[str] = mapped_column(String)          # MERITS|QUANTUM|TARIFF|REPUDIATION|SERIOUS_INJURY
+    raised_by: Mapped[str] = mapped_column(String)        # CLAIMANT|PROVIDER|ATTORNEY
+    grounds: Mapped[str] = mapped_column(String, default="")
+    status: Mapped[str] = mapped_column(String, default="LODGED", index=True)
+    channel: Mapped[Optional[str]] = mapped_column(String, nullable=True)   # INTERNAL|HPCSA_TRIBUNAL|LITIGATION
+    outcome: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    linked_ref: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    opened_by: Mapped[str] = mapped_column(String)
+    opened_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    deadline: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    closed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
 class PaymentEvent(Base):
     """Append-only money-audit log (§8e) — one row per created/instruction/approved/paid/cancelled."""
     __tablename__ = "payment_event"
