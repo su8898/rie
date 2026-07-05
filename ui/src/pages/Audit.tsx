@@ -19,8 +19,10 @@ import {
   Empty,
   ErrorBox,
   Loading,
+  Pagination,
   Stat,
   Toast,
+  usePaged,
 } from "../components/ui";
 import { num, rand } from "../format";
 import type {
@@ -147,6 +149,8 @@ export default function AuditPage() {
   const selectCls =
     "rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm outline-none focus:border-slate-500 focus:ring-1 focus:ring-slate-500";
 
+  const { page, setPage, pageCount, total, slice } = usePaged(items ?? [], 20);
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -262,7 +266,7 @@ export default function AuditPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {items.map((it) => (
+                {slice.map((it) => (
                   <tr key={it.id} className="align-top hover:bg-slate-50">
                     <td className="px-3 py-2 text-xs text-slate-400">
                       #{it.id}
@@ -308,9 +312,13 @@ export default function AuditPage() {
               </tbody>
             </table>
           </div>
-          <div className="border-t border-slate-100 px-3 py-2 text-xs text-slate-400">
-            {items.length} item{items.length === 1 ? "" : "s"}
-          </div>
+          <Pagination
+            page={page}
+            pageCount={pageCount}
+            total={total}
+            onPage={setPage}
+            unit="items"
+          />
         </div>
       )}
 

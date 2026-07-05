@@ -8,12 +8,15 @@ import {
   Empty,
   ErrorBox,
   Loading,
+  Pagination,
+  usePaged,
 } from "../components/ui";
 import type { Accident } from "../types";
 
 export default function AccidentsPage() {
   const [rows, setRows] = useState<Accident[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const { page, setPage, pageCount, total, slice } = usePaged(rows ?? [], 25);
 
   useEffect(() => {
     let alive = true;
@@ -53,7 +56,7 @@ export default function AccidentsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {rows.map((a) => (
+                {slice.map((a) => (
                   <tr key={a.accident_id} className="align-top transition hover:bg-slate-50">
                     <td className="px-4 py-2.5 font-mono text-[13px] text-slate-800">
                       {a.accident_id}
@@ -94,9 +97,13 @@ export default function AccidentsPage() {
               </tbody>
             </table>
           </div>
-          <div className="border-t border-slate-100 px-4 py-2 text-xs text-slate-400">
-            {rows.length} accident{rows.length === 1 ? "" : "s"}
-          </div>
+          <Pagination
+            page={page}
+            pageCount={pageCount}
+            total={total}
+            onPage={setPage}
+            unit="accidents"
+          />
         </div>
       )}
     </div>

@@ -51,6 +51,11 @@ def test_caps_preauth_negotiated():
     client.post("/api/admin/negotiated", json={"kind": "TARIFF", "code": "9999", "rate": 123.0})
     assert any(n["code"] == "9999" and n["rate"] == 123.0
                for n in client.get("/api/admin/negotiated").json())
+    # delete cap + negotiated (reference data is fully CRUD-able)
+    client.delete("/api/admin/caps/2027-01-31")
+    assert not any(c["effective_from"] == "2027-01-31" for c in client.get("/api/admin/caps").json())
+    client.delete("/api/admin/negotiated/TARIFF/9999")
+    assert not any(n["code"] == "9999" for n in client.get("/api/admin/negotiated").json())
 
 
 def test_signal_modes_list_and_override_guards():

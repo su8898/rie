@@ -2,7 +2,7 @@
 // band / disposition / maturity / mode, a card shell, a convergence bar,
 // and loading / error / empty states.
 
-import type { ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import type { Band, Disposition } from "../types";
 
 // ── Band chip (GREEN=emerald, AMBER=amber, RED=rose) ─────────────────────────
@@ -352,5 +352,69 @@ export function LowNTag() {
     >
       low-n
     </span>
+  );
+}
+
+// ── Client-side pagination ───────────────────────────────────────────────────
+// `usePaged` slices an in-memory list; `<Pagination>` is the matching footer.
+// Page auto-clamps when the underlying list shrinks (filter / delete) so the
+// caller never renders an out-of-range empty page.
+export function usePaged<T>(rows: T[], pageSize = 25) {
+  const [page, setPage] = useState(0);
+  const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
+  const clamped = Math.min(page, pageCount - 1);
+  const slice = useMemo(
+    () => rows.slice(clamped * pageSize, clamped * pageSize + pageSize),
+    [rows, clamped, pageSize],
+  );
+  return { page: clamped, setPage, pageCount, total: rows.length, slice };
+}
+
+export function Pagination({
+  page,
+  pageCount,
+  total,
+  onPage,
+  unit = "rows",
+}: {
+  page: number;
+  pageCount: number;
+  total: number;
+  onPage: (p: number) => void;
+  unit?: string;
+}) {
+  const btn =
+    "rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40";
+  return (
+    <div className="flex items-center justify-between gap-3 border-t border-slate-100 px-3 py-2 text-xs text-slate-500">
+      <span className="tnum">
+        {total.toLocaleString("en-ZA")} {unit}
+        {pageCount > 1 && ` · page ${page + 1} of ${pageCount}`}
+      </span>
+      {pageCount > 1 && (
+        <div className="flex items-center gap-1">
+          <button className={btn} disabled={page <= 0} onClick={() => onPage(0)}>
+            «
+          </button>
+          <button className={btn} disabled={page <= 0} onClick={() => onPage(page - 1)}>
+            Prev
+          </button>
+          <button
+            className={btn}
+            disabled={page >= pageCount - 1}
+            onClick={() => onPage(page + 1)}
+          >
+            Next
+          </button>
+          <button
+            className={btn}
+            disabled={page >= pageCount - 1}
+            onClick={() => onPage(pageCount - 1)}
+          >
+            »
+          </button>
+        </div>
+      )}
+    </div>
   );
 }

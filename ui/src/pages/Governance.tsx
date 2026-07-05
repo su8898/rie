@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   Card,
@@ -10,6 +10,8 @@ import {
   MaturityChip,
   CodePill,
   Bar,
+  Pagination,
+  usePaged,
 } from "../components/ui";
 import { num } from "../format";
 import type { PrecisionRow, RecallEstimate, LabelRow } from "../types";
@@ -81,6 +83,13 @@ export default function GovernancePage() {
     void load();
   }, [load]);
 
+  const precisionSorted = useMemo(
+    () => [...(precision ?? [])].sort((a, b) => b.labeled - a.labeled),
+    [precision],
+  );
+  const precPg = usePaged(precisionSorted, 20);
+  const labelsPg = usePaged(labels ?? [], 25);
+
   if (loadError) return <ErrorBox message={loadError} />;
   if (
     precision === null ||
@@ -89,9 +98,6 @@ export default function GovernancePage() {
     labels === null
   )
     return <Loading />;
-
-  const precisionSorted = [...precision].sort((a, b) => b.labeled - a.labeled);
-  const recentLabels = labels.slice(0, 25);
 
   return (
     <div className="space-y-4">
@@ -169,7 +175,7 @@ export default function GovernancePage() {
       </Card>
 
       <Card title="Precision by signal">
-        {precisionSorted.length === 0 ? (
+        {precPg.total === 0 ? (
           <Empty label="No signals labeled yet." />
         ) : (
           <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
@@ -188,7 +194,7 @@ export default function GovernancePage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {precisionSorted.map((r) => (
+                  {precPg.slice.map((r) => (
                     <tr key={r.signal}>
                       <td className="px-3 py-2">
                         <CodePill>{r.signal}</CodePill>
@@ -231,12 +237,19 @@ export default function GovernancePage() {
                 </tbody>
               </table>
             </div>
+            <Pagination
+              page={precPg.page}
+              pageCount={precPg.pageCount}
+              total={precPg.total}
+              onPage={precPg.setPage}
+              unit="signals"
+            />
           </div>
         )}
       </Card>
 
       <Card title="Recent labels (ground truth)">
-        {recentLabels.length === 0 ? (
+        {labelsPg.total === 0 ? (
           <Empty label="No closed-case labels yet." />
         ) : (
           <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
@@ -251,7 +264,7 @@ export default function GovernancePage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {recentLabels.map((r) => (
+                  {labelsPg.slice.map((r) => (
                     <tr key={`${r.case_id}-${r.claim_id}`}>
                       <td className="px-3 py-2">
                         <Link
@@ -271,6 +284,13 @@ export default function GovernancePage() {
                 </tbody>
               </table>
             </div>
+            <Pagination
+              page={labelsPg.page}
+              pageCount={labelsPg.pageCount}
+              total={labelsPg.total}
+              onPage={labelsPg.setPage}
+              unit="labels"
+            />
           </div>
         )}
       </Card>

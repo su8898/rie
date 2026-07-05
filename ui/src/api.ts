@@ -408,6 +408,27 @@ export const api = {
       `/api/admin/signal-modes/${encodeURIComponent(code)}`,
       { method: "DELETE" },
     ),
+  deleteCap: (effectiveFrom: string) =>
+    request<{ ok: boolean }>(
+      `/api/admin/caps/${encodeURIComponent(effectiveFrom)}`,
+      { method: "DELETE" },
+    ),
+  deleteNegotiated: (kind: string, code: string) =>
+    request<{ ok: boolean }>(
+      `/api/admin/negotiated/${encodeURIComponent(kind)}/${encodeURIComponent(code)}`,
+      { method: "DELETE" },
+    ),
+  adminPreauth: () => request<string[]>("/api/admin/preauth"),
+  addPreauth: (code: string) =>
+    request<{ ok: boolean }>("/api/admin/preauth", {
+      method: "POST",
+      body: JSON.stringify({ code }),
+    }),
+  removePreauth: (code: string) =>
+    request<{ ok: boolean }>(
+      `/api/admin/preauth/${encodeURIComponent(code)}`,
+      { method: "DELETE" },
+    ),
   adminAudit: () => request<AdminAuditRow[]>("/api/admin/audit"),
 
   // — coding intelligence (aggregation / negotiation targets / condition bands) —

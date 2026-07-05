@@ -21,7 +21,9 @@ import {
   ErrorBox,
   Loading,
   LowNTag,
+  Pagination,
   RatingChip,
+  usePaged,
 } from "../components/ui";
 import { num, rand } from "../format";
 import type {
@@ -118,6 +120,8 @@ function ProvidersTab() {
     return [...data].sort((a, b) => b[sort] - a[sort]);
   }, [data, sort]);
 
+  const { page, setPage, pageCount, total, slice } = usePaged(rows ?? [], 20);
+
   if (error) return <ErrorBox message={error} />;
   if (rows === null) return <Loading label="Scoring providers…" />;
   if (rows.length === 0)
@@ -153,7 +157,7 @@ function ProvidersTab() {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {rows.map((p) => {
+            {slice.map((p) => {
               const open = expanded === p.provider_id;
               const lowN = p.confidence === "LOW_N";
               return (
@@ -213,6 +217,13 @@ function ProvidersTab() {
           </tbody>
         </table>
       </div>
+      <Pagination
+        page={page}
+        pageCount={pageCount}
+        total={total}
+        onPage={setPage}
+        unit="providers"
+      />
     </div>
   );
 }
@@ -245,6 +256,7 @@ function ComponentBars({
 // ── Attorneys ────────────────────────────────────────────────────────────────
 function AttorneysTab() {
   const { data, error } = useFetch<Attorney[]>(() => api.attorneys());
+  const { page, setPage, pageCount, total, slice } = usePaged(data ?? [], 20);
   if (error) return <ErrorBox message={error} />;
   if (data === null) return <Loading label="Scoring attorneys…" />;
   if (data.length === 0)
@@ -268,7 +280,7 @@ function AttorneysTab() {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {data.map((a) => {
+            {slice.map((a) => {
               const lowN = a.confidence === "LOW_N";
               return (
                 <tr key={a.attorney} className="hover:bg-slate-50">
@@ -311,6 +323,13 @@ function AttorneysTab() {
           </tbody>
         </table>
       </div>
+      <Pagination
+        page={page}
+        pageCount={pageCount}
+        total={total}
+        onPage={setPage}
+        unit="attorneys"
+      />
     </div>
   );
 }
@@ -318,6 +337,7 @@ function AttorneysTab() {
 // ── Claimants (recurrence) ───────────────────────────────────────────────────
 function ClaimantsTab() {
   const { data, error } = useFetch<Claimant[]>(() => api.claimants());
+  const { page, setPage, pageCount, total, slice } = usePaged(data ?? [], 25);
   if (error) return <ErrorBox message={error} />;
   if (data === null) return <Loading label="Scanning recurrence…" />;
   if (data.length === 0)
@@ -336,7 +356,7 @@ function ClaimantsTab() {
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-100">
-          {data.map((c) => (
+          {slice.map((c) => (
             <tr key={c.party_token} className="hover:bg-slate-50">
               <td className="px-3 py-2 font-mono text-[13px] text-slate-900">
                 {c.party_token}
@@ -355,6 +375,13 @@ function ClaimantsTab() {
           ))}
         </tbody>
       </table>
+      <Pagination
+        page={page}
+        pageCount={pageCount}
+        total={total}
+        onPage={setPage}
+        unit="claimants"
+      />
     </div>
   );
 }
@@ -434,6 +461,10 @@ function SweepTab() {
   const [result, setResult] = useState<RiskSweep | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const { page, setPage, pageCount, total, slice } = usePaged(
+    result?.flagged ?? [],
+    25,
+  );
 
   const runSweep = useCallback((t: number) => {
     setBusy(true);
@@ -505,7 +536,7 @@ function SweepTab() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {result.flagged.map((f) => (
+              {slice.map((f) => (
                 <tr key={`${f.type}:${f.id}`} className="hover:bg-slate-50">
                   <td className="px-3 py-2">
                     <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium text-slate-600">
@@ -528,6 +559,13 @@ function SweepTab() {
               ))}
             </tbody>
           </table>
+          <Pagination
+            page={page}
+            pageCount={pageCount}
+            total={total}
+            onPage={setPage}
+            unit="flagged"
+          />
         </div>
       )}
     </div>

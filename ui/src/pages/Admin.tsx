@@ -22,8 +22,10 @@ import {
   Loading,
   MaturityChip,
   ModeChip,
+  Pagination,
   Toast,
   YesNo,
+  usePaged,
 } from "../components/ui";
 import { rand } from "../format";
 import type {
@@ -35,12 +37,19 @@ import type {
   StatutoryCap,
 } from "../types";
 
-type Tab = "users" | "signal-modes" | "caps" | "negotiated" | "audit";
+type Tab =
+  | "users"
+  | "signal-modes"
+  | "caps"
+  | "preauth"
+  | "negotiated"
+  | "audit";
 
 const TABS: { key: Tab; label: string }[] = [
   { key: "users", label: "Users" },
   { key: "signal-modes", label: "Signal modes" },
   { key: "caps", label: "Caps" },
+  { key: "preauth", label: "Pre-auth" },
   { key: "negotiated", label: "Negotiated" },
   { key: "audit", label: "Audit" },
 ];
@@ -64,6 +73,8 @@ const primaryBtn =
   "rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-40";
 const smallBtn =
   "rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-40";
+const dangerBtn =
+  "rounded-md border border-rose-200 px-2.5 py-1 text-xs font-medium text-rose-600 hover:bg-rose-50 disabled:opacity-40";
 
 const tableShell =
   "overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm";
@@ -76,6 +87,7 @@ export default function AdminPage() {
   const [users, setUsers] = useState<AdminUser[] | null>(null);
   const [signalModes, setSignalModes] = useState<SignalMode[] | null>(null);
   const [caps, setCaps] = useState<StatutoryCap[] | null>(null);
+  const [preauth, setPreauth] = useState<string[] | null>(null);
   const [negotiated, setNegotiated] = useState<NegotiatedRate[] | null>(null);
   const [audit, setAudit] = useState<AdminAuditRow[] | null>(null);
 
@@ -90,16 +102,18 @@ export default function AdminPage() {
 
   const load = useCallback(async () => {
     try {
-      const [u, s, c, n, a] = await Promise.all([
+      const [u, s, c, p, n, a] = await Promise.all([
         api.adminUsers(),
         api.signalModes(),
         api.adminCaps(),
+        api.adminPreauth(),
         api.adminNegotiated(),
         api.adminAudit(),
       ]);
       setUsers(u);
       setSignalModes(s);
       setCaps(c);
+      setPreauth(p);
       setNegotiated(n);
       setAudit(a);
       setLoadError(null);
@@ -181,6 +195,9 @@ export default function AdminPage() {
       {tab === "caps" && (
         <CapsTab caps={caps} busy={busy} busyKey={busyKey} run={run} />
       )}
+      {tab === "preauth" && (
+        <PreauthTab rows={preauth} busy={busy} busyKey={busyKey} run={run} />
+      )}
       {tab === "negotiated" && (
         <NegotiatedTab
           rows={negotiated}
@@ -219,6 +236,7 @@ function UsersTab({
   const [username, setUsername] = useState("");
   const [role, setRole] = useState<Role>("HANDLER");
   const [password, setPassword] = useState("");
+  const { page, setPage, pageCount, total, slice } = usePaged(users ?? [], 20);
 
   const canCreate = username.trim() !== "" && password !== "" && !busy;
 
@@ -299,7 +317,7 @@ function UsersTab({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {users.map((u) => (
+                {slice.map((u) => (
                   <tr key={u.id} className="align-middle hover:bg-slate-50">
                     <td className="px-3 py-2 font-mono text-[13px] text-slate-900">
                       {u.username}
@@ -359,6 +377,13 @@ function UsersTab({
               </tbody>
             </table>
           </div>
+          <Pagination
+            page={page}
+            pageCount={pageCount}
+            total={total}
+            onPage={setPage}
+            unit="users"
+          />
         </div>
       )}
     </div>
@@ -372,6 +397,7 @@ function SignalModesTab({
   busyKey,
   run,
 }: TabProps & { rows: SignalMode[] | null }) {
+  const { page, setPage, pageCount, total, slice } = usePaged(rows ?? [], 20);
   if (rows === null) return <Loading label="Loading signal modes…" />;
   if (rows.length === 0) return <Empty label="No signals." />;
 
@@ -392,7 +418,7 @@ function SignalModesTab({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {rows.map((r) => (
+              {slice.map((r) => (
                 <SignalModeRow
                   key={r.signal}
                   row={r}
@@ -404,6 +430,13 @@ function SignalModesTab({
             </tbody>
           </table>
         </div>
+        <Pagination
+          page={page}
+          pageCount={pageCount}
+          total={total}
+          onPage={setPage}
+          unit="signals"
+        />
       </div>
       <p className="px-1 text-xs text-slate-400">
         Mode changes are audit-logged, effective-dated reference data — never a
@@ -528,6 +561,7 @@ function CapsTab({
 }: TabProps & { caps: StatutoryCap[] | null }) {
   const [effectiveFrom, setEffectiveFrom] = useState("");
   const [annualCap, setAnnualCap] = useState("");
+  const { page, setPage, pageCount, total, slice } = usePaged(caps ?? [], 15);
 
   const canSave = effectiveFrom !== "" && annualCap !== "" && !busy;
 
@@ -581,10 +615,11 @@ function CapsTab({
                 <tr>
                   <th className={`${th} text-left`}>Effective from</th>
                   <th className={`${th} text-right`}>Annual cap</th>
+                  <th className={`${th} text-right`}>Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {caps.map((c) => (
+                {slice.map((c) => (
                   <tr
                     key={c.effective_from}
                     className="align-middle hover:bg-slate-50"
@@ -595,11 +630,35 @@ function CapsTab({
                     <td className="tnum px-3 py-2 text-right font-medium text-slate-800">
                       {rand(c.annual_cap)}
                     </td>
+                    <td className="px-3 py-2 text-right">
+                      <button
+                        onClick={() =>
+                          run(
+                            `cap.delete.${c.effective_from}`,
+                            () => api.deleteCap(c.effective_from),
+                            `Cap effective ${c.effective_from} deleted.`,
+                          )
+                        }
+                        disabled={busy}
+                        className={dangerBtn}
+                      >
+                        {busyKey === `cap.delete.${c.effective_from}`
+                          ? "…"
+                          : "delete"}
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
+          <Pagination
+            page={page}
+            pageCount={pageCount}
+            total={total}
+            onPage={setPage}
+            unit="caps"
+          />
         </div>
       )}
     </div>
@@ -616,6 +675,7 @@ function NegotiatedTab({
   const [kind, setKind] = useState("TARIFF");
   const [code, setCode] = useState("");
   const [rate, setRate] = useState("");
+  const { page, setPage, pageCount, total, slice } = usePaged(rows ?? [], 15);
 
   const canSave = kind.trim() !== "" && code.trim() !== "" && rate !== "" && !busy;
 
@@ -686,10 +746,11 @@ function NegotiatedTab({
                   <th className={`${th} text-left`}>Kind</th>
                   <th className={`${th} text-left`}>Code</th>
                   <th className={`${th} text-right`}>Rate</th>
+                  <th className={`${th} text-right`}>Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {rows.map((r) => (
+                {slice.map((r) => (
                   <tr
                     key={`${r.kind}:${r.code}`}
                     className="align-middle hover:bg-slate-50"
@@ -701,11 +762,121 @@ function NegotiatedTab({
                     <td className="tnum px-3 py-2 text-right font-medium text-slate-800">
                       {rand(r.rate)}
                     </td>
+                    <td className="px-3 py-2 text-right">
+                      <button
+                        onClick={() =>
+                          run(
+                            `negotiated.delete.${r.kind}:${r.code}`,
+                            () => api.deleteNegotiated(r.kind, r.code),
+                            `Rate for ${r.code} deleted.`,
+                          )
+                        }
+                        disabled={busy}
+                        className={dangerBtn}
+                      >
+                        {busyKey === `negotiated.delete.${r.kind}:${r.code}`
+                          ? "…"
+                          : "delete"}
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
+          <Pagination
+            page={page}
+            pageCount={pageCount}
+            total={total}
+            onPage={setPage}
+            unit="rates"
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Pre-auth code classes ────────────────────────────────────────────────────
+// Codes that require pre-authorisation (ENFORCEABLE ruleset tier). Add / remove
+// only — a code is either in the pre-auth set or it isn't.
+function PreauthTab({
+  rows,
+  busy,
+  busyKey,
+  run,
+}: TabProps & { rows: string[] | null }) {
+  const [code, setCode] = useState("");
+  const { page, setPage, pageCount, total, slice } = usePaged(rows ?? [], 24);
+
+  const canAdd = code.trim() !== "" && !busy;
+
+  const add = () =>
+    run(
+      "preauth.add",
+      () => api.addPreauth(code.trim()),
+      `Pre-auth code ${code.trim()} added.`,
+    );
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-end gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <div>
+          <label className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-slate-400">
+            Code
+          </label>
+          <input
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && canAdd) add();
+            }}
+            className={inputCls}
+            placeholder="0600"
+          />
+        </div>
+        <button onClick={add} disabled={!canAdd} className={primaryBtn}>
+          {busyKey === "preauth.add" ? "Adding…" : "Add code"}
+        </button>
+      </div>
+
+      {rows === null ? (
+        <Loading label="Loading pre-auth codes…" />
+      ) : rows.length === 0 ? (
+        <Empty label="No pre-auth codes configured." />
+      ) : (
+        <div className={tableShell}>
+          <div className="flex flex-wrap gap-2 p-4">
+            {slice.map((c) => (
+              <span
+                key={c}
+                className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 py-1 pl-2.5 pr-1.5 font-mono text-[13px] text-slate-800"
+              >
+                {c}
+                <button
+                  onClick={() =>
+                    run(
+                      `preauth.remove.${c}`,
+                      () => api.removePreauth(c),
+                      `Pre-auth code ${c} removed.`,
+                    )
+                  }
+                  disabled={busy}
+                  title={`Remove ${c}`}
+                  className="rounded px-1 text-slate-400 transition hover:bg-rose-100 hover:text-rose-600 disabled:opacity-40"
+                >
+                  {busyKey === `preauth.remove.${c}` ? "…" : "✕"}
+                </button>
+              </span>
+            ))}
+          </div>
+          <Pagination
+            page={page}
+            pageCount={pageCount}
+            total={total}
+            onPage={setPage}
+            unit="codes"
+          />
         </div>
       )}
     </div>
@@ -714,6 +885,7 @@ function NegotiatedTab({
 
 // ── Audit log ────────────────────────────────────────────────────────────────
 function AuditTab({ rows }: { rows: AdminAuditRow[] | null }) {
+  const { page, setPage, pageCount, total, slice } = usePaged(rows ?? [], 25);
   if (rows === null) return <Loading label="Loading audit log…" />;
   if (rows.length === 0) return <Empty label="No audit entries." />;
 
@@ -731,7 +903,7 @@ function AuditTab({ rows }: { rows: AdminAuditRow[] | null }) {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {rows.map((r) => (
+            {slice.map((r) => (
               <tr key={r.id} className="align-top hover:bg-slate-50">
                 <td className="px-3 py-2 text-xs text-slate-500">
                   {r.at ?? "—"}
@@ -751,6 +923,13 @@ function AuditTab({ rows }: { rows: AdminAuditRow[] | null }) {
           </tbody>
         </table>
       </div>
+      <Pagination
+        page={page}
+        pageCount={pageCount}
+        total={total}
+        onPage={setPage}
+        unit="entries"
+      />
     </div>
   );
 }

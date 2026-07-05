@@ -21,9 +21,11 @@ import {
   Empty,
   ErrorBox,
   Loading,
+  Pagination,
   Stat,
   StateChip,
   Toast,
+  usePaged,
 } from "../components/ui";
 import { rand } from "../format";
 import type {
@@ -144,6 +146,7 @@ export default function CasesPage() {
   }
 
   const anyInFlight = busyKey !== null;
+  const { page, setPage, pageCount, total, slice } = usePaged(cases ?? [], 20);
 
   return (
     <div className="space-y-4">
@@ -329,7 +332,7 @@ export default function CasesPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {cases.map((c) => (
+                {slice.map((c) => (
                   <tr key={c.id} className="align-top hover:bg-slate-50">
                     <td className="px-3 py-2 text-xs text-slate-400">
                       #{c.id}
@@ -403,9 +406,13 @@ export default function CasesPage() {
               </tbody>
             </table>
           </div>
-          <div className="border-t border-slate-100 px-3 py-2 text-xs text-slate-400">
-            {cases.length} case{cases.length === 1 ? "" : "s"}
-          </div>
+          <Pagination
+            page={page}
+            pageCount={pageCount}
+            total={total}
+            onPage={setPage}
+            unit="cases"
+          />
         </div>
       )}
 

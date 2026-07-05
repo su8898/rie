@@ -10,7 +10,9 @@ import {
   Empty,
   ErrorBox,
   Loading,
+  Pagination,
   YesNo,
+  usePaged,
 } from "../components/ui";
 import { rand } from "../format";
 import type { Band, Determination, Disposition } from "../types";
@@ -31,6 +33,7 @@ export default function ClaimsPage() {
   const [error, setError] = useState<string | null>(null);
   const [band, setBand] = useState("");
   const [disposition, setDisposition] = useState("");
+  const { page, setPage, pageCount, total, slice } = usePaged(rows ?? [], 25);
 
   useEffect(() => {
     let alive = true;
@@ -121,7 +124,7 @@ export default function ClaimsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {rows.map((r) => (
+                {slice.map((r) => (
                   <tr key={r.id} className="transition hover:bg-slate-50">
                     <td className="px-4 py-2.5">
                       <Link
@@ -157,9 +160,13 @@ export default function ClaimsPage() {
               </tbody>
             </table>
           </div>
-          <div className="border-t border-slate-100 px-4 py-2 text-xs text-slate-400">
-            {rows.length} determination{rows.length === 1 ? "" : "s"}
-          </div>
+          <Pagination
+            page={page}
+            pageCount={pageCount}
+            total={total}
+            onPage={setPage}
+            unit="determinations"
+          />
         </div>
       )}
     </div>

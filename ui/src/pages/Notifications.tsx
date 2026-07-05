@@ -1,7 +1,18 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, ApiError } from "../api";
-import { Card, Stat, Loading, ErrorBox, Empty, Toast, StateChip, CodePill } from "../components/ui";
+import {
+  Card,
+  Stat,
+  Loading,
+  ErrorBox,
+  Empty,
+  Pagination,
+  Toast,
+  StateChip,
+  CodePill,
+  usePaged,
+} from "../components/ui";
 import { num } from "../format";
 import type { Notification, NotifPref, NotifChannel } from "../types";
 
@@ -96,6 +107,7 @@ export default function NotificationsPage() {
   }, [pref, tokenInput, prefChannel, prefOptedIn]);
 
   const disabled = busyKey !== null;
+  const { page, setPage, pageCount, total, slice } = usePaged(notifs ?? [], 25);
 
   return (
     <div className="space-y-4">
@@ -226,7 +238,7 @@ export default function NotificationsPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {notifs.map((n) => (
+                  {slice.map((n) => (
                     <tr key={n.id}>
                       <td className="px-3 py-2 font-mono text-[13px] text-slate-700">
                         {n.id}
@@ -293,6 +305,13 @@ export default function NotificationsPage() {
                 </tbody>
               </table>
             </div>
+            <Pagination
+              page={page}
+              pageCount={pageCount}
+              total={total}
+              onPage={setPage}
+              unit="notifications"
+            />
           </div>
           <p className="text-xs text-slate-500">
             Delivery (SMS/e-mail) is external; bodies carry only the claim

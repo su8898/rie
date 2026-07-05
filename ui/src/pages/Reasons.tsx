@@ -10,6 +10,8 @@ import {
   Loading,
   MaturityChip,
   ModeChip,
+  Pagination,
+  usePaged,
 } from "../components/ui";
 import type { Reason } from "../types";
 
@@ -44,6 +46,11 @@ export default function ReasonsPage() {
         r.mode.toLowerCase().includes(needle),
     );
   }, [rows, q]);
+
+  const { page, setPage, pageCount, total, slice } = usePaged(
+    filtered ?? [],
+    25,
+  );
 
   return (
     <div className="space-y-4">
@@ -82,7 +89,7 @@ export default function ReasonsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {filtered.map((r) => (
+                {slice.map((r) => (
                   <tr key={r.code} className="align-top transition hover:bg-slate-50">
                     <td className="px-4 py-2.5 font-mono text-[13px] font-medium text-slate-900">
                       {r.code}
@@ -123,9 +130,13 @@ export default function ReasonsPage() {
               </tbody>
             </table>
           </div>
-          <div className="border-t border-slate-100 px-4 py-2 text-xs text-slate-400">
-            {filtered.length} of {rows?.length ?? 0} reason codes
-          </div>
+          <Pagination
+            page={page}
+            pageCount={pageCount}
+            total={total}
+            onPage={setPage}
+            unit={`of ${rows?.length ?? 0} reason codes`}
+          />
         </div>
       )}
     </div>

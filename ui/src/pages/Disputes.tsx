@@ -1,7 +1,17 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, ApiError } from "../api";
-import { Card, Stat, Loading, ErrorBox, Empty, Toast, StateChip } from "../components/ui";
+import {
+  Card,
+  Stat,
+  Loading,
+  ErrorBox,
+  Empty,
+  Pagination,
+  Toast,
+  StateChip,
+  usePaged,
+} from "../components/ui";
 import { num } from "../format";
 import type {
   DisputeItem,
@@ -158,6 +168,7 @@ export default function DisputesPage() {
   };
 
   const busy = busyKey !== null;
+  const { page, setPage, pageCount, total, slice } = usePaged(items ?? [], 20);
 
   if (items === null || analytics === null) {
     if (loadError) return <ErrorBox message={loadError} />;
@@ -328,7 +339,7 @@ export default function DisputesPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {items.map((item) => (
+                {slice.map((item) => (
                   <tr key={item.id} className="align-top">
                     <td className="px-3 py-2 text-slate-500">{item.id}</td>
                     <td className="px-3 py-2">
@@ -444,6 +455,13 @@ export default function DisputesPage() {
               </tbody>
             </table>
           </div>
+          <Pagination
+            page={page}
+            pageCount={pageCount}
+            total={total}
+            onPage={setPage}
+            unit="disputes"
+          />
         </div>
       )}
 

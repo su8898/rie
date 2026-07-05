@@ -55,6 +55,13 @@ def upsert_cap(body: dict = Body(...), db: Session = Depends(get_db), user: dict
     return svc.upsert_cap(db, user, body.get("effective_from"), body.get("annual_cap"))
 
 
+@router.delete("/caps/{effective_from}")
+def delete_cap(effective_from: str, db: Session = Depends(get_db),
+               user: dict = Depends(_admin)) -> dict:
+    svc.delete_cap(db, user, effective_from)
+    return {"ok": True}
+
+
 # ── pre-auth + negotiated ──
 @router.get("/preauth")
 def preauth(db: Session = Depends(get_db), user: dict = Depends(_admin)) -> list[str]:
@@ -83,6 +90,13 @@ def upsert_negotiated(body: dict = Body(...), db: Session = Depends(get_db),
                       user: dict = Depends(_admin)) -> dict:
     return svc.upsert_negotiated(db, user, body.get("kind", "TARIFF"), body.get("code", ""),
                                  body.get("rate", 0.0))
+
+
+@router.delete("/negotiated/{kind}/{code}")
+def delete_negotiated(kind: str, code: str, db: Session = Depends(get_db),
+                      user: dict = Depends(_admin)) -> dict:
+    svc.delete_negotiated(db, user, kind, code)
+    return {"ok": True}
 
 
 # ── signal-mode overrides (§11) ──

@@ -12,7 +12,9 @@ import {
   ErrorBox,
   Loading,
   LowNTag,
+  Pagination,
   Toast,
+  usePaged,
 } from "../components/ui";
 import { num, rand } from "../format";
 import type { CodeAgg, ConditionRow, CostEstimate } from "../types";
@@ -164,7 +166,7 @@ function CodesTab({
   kind: CodeKind;
   onKind: (k: CodeKind) => void;
 }) {
-  const rows = codes.slice(0, 200);
+  const { page, setPage, pageCount, total, slice } = usePaged(codes, 25);
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2">
@@ -180,7 +182,7 @@ function CodesTab({
         </select>
       </div>
 
-      {rows.length === 0 ? (
+      {codes.length === 0 ? (
         <Empty label="No codes." />
       ) : (
         <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
@@ -202,7 +204,7 @@ function CodesTab({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {rows.map((r) => (
+                {slice.map((r) => (
                   <tr key={`${r.kind}:${r.code}`} className="hover:bg-slate-50">
                     <td className="px-3 py-2 text-slate-500">{r.kind}</td>
                     <td className="px-3 py-2">
@@ -242,6 +244,13 @@ function CodesTab({
               </tbody>
             </table>
           </div>
+          <Pagination
+            page={page}
+            pageCount={pageCount}
+            total={total}
+            onPage={setPage}
+            unit="codes"
+          />
         </div>
       )}
     </div>
@@ -250,6 +259,7 @@ function CodesTab({
 
 // ── Negotiation targets ──────────────────────────────────────────────────────
 function TargetsTab({ targets }: { targets: CodeAgg[] }) {
+  const { page, setPage, pageCount, total, slice } = usePaged(targets, 25);
   if (targets.length === 0) {
     return (
       <Empty label="No negotiation targets — everything is benchmarked or already negotiated." />
@@ -275,7 +285,7 @@ function TargetsTab({ targets }: { targets: CodeAgg[] }) {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {targets.map((r) => (
+              {slice.map((r) => (
                 <tr key={`${r.kind}:${r.code}`} className="hover:bg-slate-50">
                   <td className="px-3 py-2">
                     <CodePill>{r.code}</CodePill>
@@ -300,6 +310,13 @@ function TargetsTab({ targets }: { targets: CodeAgg[] }) {
             </tbody>
           </table>
         </div>
+        <Pagination
+          page={page}
+          pageCount={pageCount}
+          total={total}
+          onPage={setPage}
+          unit="targets"
+        />
       </div>
     </div>
   );
@@ -327,6 +344,7 @@ function ConditionsTab({
   onRun: () => void;
   note: string | null;
 }) {
+  const { page, setPage, pageCount, total, slice } = usePaged(rows, 25);
   return (
     <div className="space-y-3">
       <Card title="Estimate">
@@ -394,7 +412,7 @@ function ConditionsTab({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {rows.map((r) => (
+                {slice.map((r) => (
                   <tr key={r.injury_class} className="hover:bg-slate-50">
                     <td className="px-3 py-2 font-medium text-slate-800">
                       {r.injury_class}
@@ -425,6 +443,13 @@ function ConditionsTab({
               </tbody>
             </table>
           </div>
+          <Pagination
+            page={page}
+            pageCount={pageCount}
+            total={total}
+            onPage={setPage}
+            unit="conditions"
+          />
         </div>
       )}
 

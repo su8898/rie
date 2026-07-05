@@ -26,8 +26,10 @@ import {
   Empty,
   ErrorBox,
   Loading,
+  Pagination,
   Toast,
   YesNo,
+  usePaged,
 } from "../components/ui";
 import { rand } from "../format";
 import type {
@@ -204,6 +206,9 @@ export default function PaymentsPage() {
 
   const canPrefill = batch != null && batch.status === "OPEN";
 
+  const queuePg = usePaged(queue ?? [], 8);
+  const batchesPg = usePaged(batches ?? [], 8);
+
   const labelBtn = (a: string) => a.replace(/_/g, " ");
 
   return (
@@ -240,7 +245,7 @@ export default function PaymentsPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {queue.map((r) => (
+                    {queuePg.slice.map((r) => (
                       <tr key={r.claim_id} className="hover:bg-slate-50">
                         <td className="px-3 py-2">
                           <Link
@@ -274,6 +279,13 @@ export default function PaymentsPage() {
                     ))}
                   </tbody>
                 </table>
+                <Pagination
+                  page={queuePg.page}
+                  pageCount={queuePg.pageCount}
+                  total={queuePg.total}
+                  onPage={queuePg.setPage}
+                  unit="eligible"
+                />
               </div>
             )}
           </Card>
@@ -313,7 +325,7 @@ export default function PaymentsPage() {
               <div className="text-sm text-slate-400">No batches yet.</div>
             ) : (
               <ul className="space-y-1.5">
-                {batches.map((b) => {
+                {batchesPg.slice.map((b) => {
                   const active = b.id === selectedId;
                   return (
                     <li key={b.id}>
@@ -343,6 +355,15 @@ export default function PaymentsPage() {
                   );
                 })}
               </ul>
+            )}
+            {batches !== null && batches.length > 0 && (
+              <Pagination
+                page={batchesPg.page}
+                pageCount={batchesPg.pageCount}
+                total={batchesPg.total}
+                onPage={batchesPg.setPage}
+                unit="batches"
+              />
             )}
           </Card>
         </div>

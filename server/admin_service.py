@@ -108,6 +108,13 @@ def upsert_cap(db: Session, user: dict, effective_from, annual_cap: float) -> di
     return {"effective_from": eff.isoformat(), "annual_cap": float(annual_cap)}
 
 
+def delete_cap(db: Session, user: dict, effective_from) -> None:
+    eff = date.fromisoformat(effective_from) if isinstance(effective_from, str) else effective_from
+    db.execute(delete(models.RefCap).where(models.RefCap.effective_from == eff))
+    _audit(db, user, "cap.delete", eff.isoformat())
+    db.commit()
+
+
 # ── pre-auth code classes + negotiated rates (ruleset / ENFORCEABLE tier) ──────
 def list_preauth(db: Session) -> list[str]:
     return [r.code for r in db.scalars(select(models.RefPreauth).order_by(models.RefPreauth.code))]
@@ -142,6 +149,13 @@ def upsert_negotiated(db: Session, user: dict, kind: str, code: str, rate: float
     _audit(db, user, "negotiated.upsert", f"{kind}:{code}", {"rate": float(rate)})
     db.commit()
     return {"kind": kind, "code": code, "rate": float(rate)}
+
+
+def delete_negotiated(db: Session, user: dict, kind: str, code: str) -> None:
+    db.execute(delete(models.RefNegotiated).where(
+        models.RefNegotiated.kind == kind, models.RefNegotiated.code == code))
+    _audit(db, user, "negotiated.delete", f"{kind}:{code}")
+    db.commit()
 
 
 # ── signal-mode overrides (§11 promotion lifecycle) ────────────────────────────
