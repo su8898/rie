@@ -108,6 +108,21 @@ CREATE TABLE transition_log (
 	PRIMARY KEY (id)
 );
 
+CREATE TABLE audit_queue (
+	id SERIAL NOT NULL, 
+	claim_id VARCHAR NOT NULL, 
+	status VARCHAR NOT NULL, 
+	reason VARCHAR NOT NULL, 
+	amount_at_stake FLOAT NOT NULL, 
+	amount_recovered FLOAT NOT NULL, 
+	recovery_outcome VARCHAR, 
+	assigned_to VARCHAR, 
+	opened_by VARCHAR NOT NULL, 
+	opened_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now() NOT NULL, 
+	PRIMARY KEY (id), 
+	FOREIGN KEY(claim_id) REFERENCES claims (claim_id)
+);
+
 CREATE TABLE billing_lines (
 	id SERIAL NOT NULL, 
 	claim_id VARCHAR NOT NULL, 

@@ -247,6 +247,21 @@ class PaymentInstruction(Base):
     paid: Mapped[bool] = mapped_column(default=False)
 
 
+class AuditQueue(Base):
+    """Post-payment clawback recovery queue (§8e): OPEN -> UNDER_REVIEW -> RECOVERED / CLEARED."""
+    __tablename__ = "audit_queue"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    claim_id: Mapped[str] = mapped_column(ForeignKey("claims.claim_id"), index=True)
+    status: Mapped[str] = mapped_column(String, default="OPEN", index=True)
+    reason: Mapped[str] = mapped_column(String)
+    amount_at_stake: Mapped[float] = mapped_column(Float, default=0.0)
+    amount_recovered: Mapped[float] = mapped_column(Float, default=0.0)
+    recovery_outcome: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    assigned_to: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    opened_by: Mapped[str] = mapped_column(String)
+    opened_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 class PaymentEvent(Base):
     """Append-only money-audit log (§8e) — one row per created/instruction/approved/paid/cancelled."""
     __tablename__ = "payment_event"
