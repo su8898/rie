@@ -10,3 +10,4 @@ ui/dist/
 .venv/
 .coverage
 htmlcov/
+*.tsbuildinfo
