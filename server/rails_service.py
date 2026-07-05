@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from . import jws, models
 from .config import RAILS_SECRET
 from .pipeline_service import assess_and_store
+from .pseudonymise import pseudonymise_ingest
 
 _NS = uuid.UUID("1b671a64-40d5-491e-99b0-da01ff1f3341")   # idempotency-key -> submission_id
 _REQUIRED = ("claim_id", "claim_type", "party_token", "accident_date", "lodged_on")
@@ -81,6 +82,7 @@ def submit(db: Session, body: dict, idempotency_key: Optional[str], signature: O
 
     if db.get(models.RailsSeenJti, jti) is not None:          # replay guard
         raise RailsError(409, "replay detected: jti already used")
+    body = pseudonymise_ingest(body)                          # POPIA — after JWS verify, before persist (§2)
     if [k for k in _REQUIRED if k not in body]:
         raise RailsError(422, "missing required claim fields")
 

@@ -14,6 +14,7 @@ from .. import (
 from ..db import get_db
 from ..models import ClaimRecord, Determination
 from ..pipeline_service import assess_and_store
+from ..pseudonymise import pseudonymise_ingest
 from .deps import current_user, require_role
 
 router = APIRouter(prefix="/claims")
@@ -48,6 +49,7 @@ def _claim_dict(c: ClaimRecord | None) -> dict | None:
 @router.post("")
 def submit(payload: dict = Body(...), db: Session = Depends(get_db),
            user: dict = Depends(require_role("HANDLER", "MEDICAL_OFFICER"))) -> dict:
+    payload = pseudonymise_ingest(payload)              # POPIA — derive P_* from a raw ID + strip PII (§2)
     missing = [k for k in _REQUIRED if k not in payload]
     if missing:
         raise HTTPException(status_code=422, detail={"missing": missing})
