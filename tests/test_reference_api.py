@@ -33,3 +33,9 @@ def test_reference_requires_auth():
 def test_editions_endpoint_ok():
     _login()
     assert client.get("/api/reference/editions").status_code == 200   # empty under demo seed
+
+
+def test_disciplines_endpoint():
+    _login()
+    d = client.get("/api/reference/disciplines").json()
+    assert "GP" in d and "SPECIALIST" in d                            # demo seed disciplines

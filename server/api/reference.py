@@ -23,6 +23,13 @@ def editions(db: Session = Depends(get_db), user: dict = Depends(current_user)) 
             for e in db.scalars(select(models.RefEdition))]
 
 
+@router.get("/disciplines")
+def disciplines(db: Session = Depends(get_db), user: dict = Depends(current_user)) -> list[str]:
+    """Distinct provider disciplines present in the loaded tariff schedules (for the submit UI)."""
+    return list(db.scalars(select(models.RefRpl.discipline).distinct()
+                           .order_by(models.RefRpl.discipline)))
+
+
 @router.get("/tariffs")
 def tariffs(code: str | None = None, q: str | None = None, limit: int = Query(50, le=200),
             db: Session = Depends(get_db), user: dict = Depends(current_user)) -> list[dict]:
