@@ -70,7 +70,7 @@ CREATE TABLE ref_cap (
 );
 
 CREATE TABLE ref_comparable_award (
-	id INTEGER NOT NULL,
+	id SERIAL NOT NULL,
 	injury_class VARCHAR NOT NULL,
 	severity_tier VARCHAR NOT NULL,
 	award_rand FLOAT NOT NULL,
@@ -173,8 +173,39 @@ CREATE TABLE audit_queue (
 	assigned_to VARCHAR, 
 	opened_by VARCHAR NOT NULL, 
 	opened_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now() NOT NULL, 
-	PRIMARY KEY (id), 
+	PRIMARY KEY (id),
 	FOREIGN KEY(claim_id) REFERENCES claims (claim_id)
+);
+
+CREATE TABLE cases (
+	id SERIAL NOT NULL,
+	claim_id VARCHAR,
+	lane VARCHAR NOT NULL,
+	status VARCHAR NOT NULL,
+	priority INTEGER NOT NULL,
+	reason VARCHAR NOT NULL,
+	rand_at_stake FLOAT NOT NULL,
+	assigned_to VARCHAR,
+	verdict VARCHAR,
+	root_cause VARCHAR,
+	rand_recovered FLOAT NOT NULL,
+	rand_prevented FLOAT NOT NULL,
+	opened_by VARCHAR NOT NULL,
+	opened_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now() NOT NULL,
+	due_at TIMESTAMP WITHOUT TIME ZONE,
+	closed_at TIMESTAMP WITHOUT TIME ZONE,
+	PRIMARY KEY (id),
+	FOREIGN KEY(claim_id) REFERENCES claims (claim_id)
+);
+
+CREATE TABLE case_notes (
+	id SERIAL NOT NULL,
+	case_id INTEGER NOT NULL,
+	author VARCHAR NOT NULL,
+	body VARCHAR NOT NULL,
+	created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now() NOT NULL,
+	PRIMARY KEY (id),
+	FOREIGN KEY(case_id) REFERENCES cases (id)
 );
 
 CREATE TABLE billing_lines (

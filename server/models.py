@@ -322,6 +322,40 @@ class AuditQueue(Base):
     opened_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+class Case(Base):
+    """Investigation / review case (§8e): OPEN -> IN_REVIEW / ESCALATED -> CLOSED.
+    Lanes: REVIEW (HANDLER), BLOCK / CLAWBACK (INVESTIGATOR); escalation -> INVESTIGATOR pool. SLA
+    by priority; rand-at-stake; outcome capture (verdict, root cause, recovered/prevented) on close."""
+    __tablename__ = "cases"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    claim_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("claims.claim_id"), nullable=True, index=True)
+    lane: Mapped[str] = mapped_column(String, index=True)
+    status: Mapped[str] = mapped_column(String, default="OPEN", index=True)
+    priority: Mapped[int] = mapped_column(Integer, default=3)
+    reason: Mapped[str] = mapped_column(String)
+    rand_at_stake: Mapped[float] = mapped_column(Float, default=0.0)
+    assigned_to: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    verdict: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    root_cause: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    rand_recovered: Mapped[float] = mapped_column(Float, default=0.0)
+    rand_prevented: Mapped[float] = mapped_column(Float, default=0.0)
+    opened_by: Mapped[str] = mapped_column(String)
+    opened_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    due_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    closed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class CaseNote(Base):
+    """Append-only case notes (§8e)."""
+    __tablename__ = "case_notes"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    case_id: Mapped[int] = mapped_column(ForeignKey("cases.id"), index=True)
+    author: Mapped[str] = mapped_column(String)
+    body: Mapped[str] = mapped_column(String)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 class PaymentEvent(Base):
     """Append-only money-audit log (§8e) — one row per created/instruction/approved/paid/cancelled."""
     __tablename__ = "payment_event"
