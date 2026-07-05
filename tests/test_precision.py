@@ -110,3 +110,27 @@ def test_governance_api_precision_promotions_labels_csv_recall():
     assert csv_resp.status_code == 200 and csv_resp.text.startswith("claim_id,verdict,label,lane,case_id")
     samp = client.get("/api/governance/recall/sample", params={"n": 5}).json()
     assert samp["sample_size"] <= 5 and "claims" in samp
+
+
+# ── QA-draw workflow (recall close-the-loop) ──────────────────────────────────
+def test_draw_recall_qa_opens_review_cases_idempotently():
+    from sqlalchemy import select
+    _seed("ZZ_DRAW", 0, 3, band="GREEN")                          # fresh GREEN pool, no REVIEW cases
+    user = {"username": "qa", "role": "ADMIN"}
+    with SessionLocal() as db:
+        first = svc.draw_recall_qa(db, user, n=5)
+        assert first["drawn"] >= 1                                # opened blind-QA REVIEW cases
+        opened = list(db.scalars(select(models.Case).where(
+            models.Case.lane == "REVIEW", models.Case.status == "OPEN",
+            models.Case.reason.like("Blind QA%"))))
+        assert len(opened) >= first["drawn"]
+        second = svc.draw_recall_qa(db, user, n=5)               # same deterministic sample
+        assert second["drawn"] == 0 and second["skipped"] == second["sampled"]
+
+
+def test_draw_recall_qa_api():
+    _login()
+    r = client.post("/api/governance/recall/draw", params={"n": 4}).json()
+    assert set(r) == {"drawn", "sampled", "skipped"} and r["drawn"] + r["skipped"] == r["sampled"]
+    client.post("/api/auth/logout")
+    assert client.post("/api/governance/recall/draw").status_code == 401

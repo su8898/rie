@@ -146,21 +146,40 @@ def claimants(db: Session) -> list[dict]:
     return out
 
 
+IMPACT_LOW = 0.80          # cohort rate < 0.8x overall -> under-scrutiny tail (review)
+IMPACT_HIGH = 1.25         # cohort rate > 1.25x overall -> over-scrutiny tail (review)
+MIN_GROUP = 5              # too few claims in a cohort to judge its impact
+
+
 def fairness(db: Session) -> dict:
-    """Disparate-impact: flag rate per provider cohort + the four-fifths ratio."""
+    """Disparate-impact by provider cohort. Reports each cohort's flag rate, its **impact ratio**
+    (cohort rate / overall rate) and — for cohorts with enough claims whose impact falls outside
+    [IMPACT_LOW, IMPACT_HIGH] on *either* tail — a review flag (over-scrutiny AND under-scrutiny
+    both warrant a look). Also the classic four-fifths ratio (min/max) as a headline gauge."""
     by_cohort: dict = defaultdict(lambda: {"n": 0, "flagged": 0.0})
     for p in providers(db):
         c = by_cohort[p["cohort"]]
         c["n"] += p["n_claims"]
         c["flagged"] += p["flag_rate"] * p["n_claims"] / 100.0
-    rows = [{"cohort": k, "n_claims": v["n"],
-             "flag_rate": round(100.0 * v["flagged"] / v["n"], 1) if v["n"] else 0.0}
-            for k, v in by_cohort.items()]
+    total_n = sum(v["n"] for v in by_cohort.values())
+    total_flagged = sum(v["flagged"] for v in by_cohort.values())
+    overall = round(100.0 * total_flagged / total_n, 1) if total_n else 0.0
+    rows = []
+    for k, v in by_cohort.items():
+        rate = round(100.0 * v["flagged"] / v["n"], 1) if v["n"] else 0.0
+        small = v["n"] < MIN_GROUP
+        impact = round(rate / overall, 2) if overall > 0 else None
+        review = bool(not small and impact is not None
+                      and (impact < IMPACT_LOW or impact > IMPACT_HIGH))
+        rows.append({"cohort": k, "n_claims": v["n"], "flag_rate": rate,
+                     "impact": impact, "small": small, "review": review})
     rows.sort(key=lambda r: r["cohort"])
     rates = [r["flag_rate"] for r in rows if r["n_claims"] > 0]
     hi = max(rates) if rates else 0.0
     ratio = round(min(rates) / hi, 2) if rates and hi > 0 else 1.0
-    return {"by_cohort": rows, "four_fifths_ratio": ratio, "pass": ratio >= 0.8}
+    return {"by_cohort": rows, "overall_flag_rate": overall,
+            "four_fifths_ratio": ratio, "pass": ratio >= 0.8,
+            "impact_low": IMPACT_LOW, "impact_high": IMPACT_HIGH, "min_group": MIN_GROUP}
 
 
 def risk_sweep(db: Session, threshold: float = 55.0) -> dict:

@@ -117,6 +117,28 @@ def recall_qa_sample(db: Session, n: int = 20) -> dict:
     return {"population": len(greens), "sample_size": len(sample), "claims": sample}
 
 
+def draw_recall_qa(db: Session, user: dict, n: int = 30) -> dict:
+    """Draw the recall sample into the Cases module as blind-QA REVIEW cases: GREEN (auto-cleared)
+    claims a reviewer decides blind, whose closed verdict becomes ground truth for the recall
+    estimate (§11 close-the-loop). Skips claims that already carry an open REVIEW case so repeated
+    draws never duplicate."""
+    from . import cases_service                         # lazy import: avoid a service-layer cycle
+    sample = recall_qa_sample(db, n=n)["claims"]
+    open_states = ("OPEN", "IN_REVIEW", "ESCALATED")
+    existing = {c.claim_id for c in db.scalars(
+        select(models.Case).where(models.Case.lane == "REVIEW",
+                                  models.Case.status.in_(open_states))) if c.claim_id}
+    drawn = 0
+    for cid in sample:
+        if cid in existing:
+            continue
+        cases_service.open_case(db, user, lane="REVIEW",
+                                reason="Blind QA — recall sample (§11)",
+                                claim_id=cid, priority=4)
+        drawn += 1
+    return {"drawn": drawn, "sampled": len(sample), "skipped": len(sample) - drawn}
+
+
 def recall_estimate(db: Session) -> dict:
     """From GREEN claims already case-reviewed: the miss rate (false negatives) + a conservative
     recall floor (1 - Wilson upper bound of the miss rate)."""

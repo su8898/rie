@@ -87,6 +87,13 @@ def test_fairness_report():
     assert "four_fifths_ratio" in f and isinstance(f["pass"], bool)
     cohorts = {r["cohort"] for r in f["by_cohort"]}
     assert "GENERAL" in cohorts and "SPECIALIST" in cohorts
+    # disparate-impact enrichment: overall rate, band constants, per-cohort impact + review flag
+    assert "overall_flag_rate" in f and f["impact_low"] == 0.8 and f["impact_high"] == 1.25
+    for r in f["by_cohort"]:
+        assert {"impact", "small", "review"} <= set(r)
+        # a review flag is only ever raised on a non-small cohort outside the band
+        if r["review"]:
+            assert not r["small"] and (r["impact"] < f["impact_low"] or r["impact"] > f["impact_high"])
 
 
 def test_risk_sweep():

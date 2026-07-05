@@ -368,6 +368,11 @@ export const api = {
   recall: () => request<RecallEstimate>("/api/governance/recall"),
   recallSample: (n: number) =>
     request<RecallSample>(`/api/governance/recall/sample?n=${n}`),
+  drawQaReviews: (n: number) =>
+    request<{ drawn: number; sampled: number; skipped: number }>(
+      `/api/governance/recall/draw?n=${n}`,
+      { method: "POST" },
+    ),
   labels: () => request<LabelRow[]>("/api/governance/labels"),
 
   // — admin (users / statutory config / signal-mode overrides / audit) —

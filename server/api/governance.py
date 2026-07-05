@@ -40,6 +40,13 @@ def recall(db: Session = Depends(get_db), user: dict = Depends(current_user)) ->
     return svc.recall_estimate(db)
 
 
+@router.post("/recall/draw")
+def recall_draw(n: int = Query(30, ge=1, le=200), db: Session = Depends(get_db),
+                user: dict = Depends(current_user)) -> dict:
+    """Open blind-QA REVIEW cases from the recall sample (§11 close-the-loop workflow)."""
+    return svc.draw_recall_qa(db, user, n=n)
+
+
 @router.get("/labels")
 def labels(db: Session = Depends(get_db), user: dict = Depends(current_user)) -> list[dict]:
     return svc.labels_export(db)

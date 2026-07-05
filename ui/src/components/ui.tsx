@@ -127,22 +127,42 @@ export function ConvergenceBar({ value }: { value: number }) {
 }
 
 // ── Card shell ───────────────────────────────────────────────────────────────
+// `sub` is a descriptive subtitle under the title (what the card shows and why —
+// often citing the spec); `right` is a header slot for an action (a button,
+// export link, filter). Both optional; a title-only Card renders as before.
 export function Card({
   title,
+  sub,
+  right,
   children,
   className = "",
 }: {
   title?: ReactNode;
+  sub?: ReactNode;
+  right?: ReactNode;
   children: ReactNode;
   className?: string;
 }) {
+  const hasHeader = title != null || right != null || sub != null;
   return (
     <div
       className={`rounded-lg border border-slate-200 bg-white shadow-sm ${className}`}
     >
-      {title != null && (
-        <div className="border-b border-slate-100 px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
-          {title}
+      {hasHeader && (
+        <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-2.5">
+          <div className="min-w-0">
+            {title != null && (
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                {title}
+              </div>
+            )}
+            {sub != null && (
+              <p className="mt-1 text-xs font-normal normal-case leading-relaxed tracking-normal text-slate-400">
+                {sub}
+              </p>
+            )}
+          </div>
+          {right != null && <div className="shrink-0">{right}</div>}
         </div>
       )}
       <div className="p-4">{children}</div>

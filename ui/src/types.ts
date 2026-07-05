@@ -331,12 +331,20 @@ export interface FairnessCohort {
   cohort: string;
   n_claims: number;
   flag_rate: number;
+  // Disparate-impact enrichment (governance view). Older callers ignore these.
+  impact?: number | null; // cohort flag rate ÷ overall
+  small?: boolean; // too few claims to judge
+  review?: boolean; // impact outside the band on either tail
 }
 
 export interface Fairness {
   by_cohort: FairnessCohort[];
   four_fifths_ratio: number;
   pass: boolean;
+  overall_flag_rate?: number;
+  impact_low?: number;
+  impact_high?: number;
+  min_group?: number;
 }
 
 // A flagged party from the risk sweep — the full provider/attorney dict plus a
