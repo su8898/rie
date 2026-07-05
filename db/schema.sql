@@ -64,9 +64,27 @@ CREATE TABLE rails_submission (
 );
 
 CREATE TABLE ref_cap (
-	effective_from DATE NOT NULL, 
-	annual_cap FLOAT NOT NULL, 
+	effective_from DATE NOT NULL,
+	annual_cap FLOAT NOT NULL,
 	PRIMARY KEY (effective_from)
+);
+
+CREATE TABLE ref_comparable_award (
+	id INTEGER NOT NULL,
+	injury_class VARCHAR NOT NULL,
+	severity_tier VARCHAR NOT NULL,
+	award_rand FLOAT NOT NULL,
+	award_date DATE NOT NULL,
+	citation VARCHAR NOT NULL,
+	court VARCHAR NOT NULL,
+	notes VARCHAR NOT NULL,
+	PRIMARY KEY (id)
+);
+
+CREATE TABLE ref_cpi (
+	year INTEGER NOT NULL,
+	"index" FLOAT NOT NULL,
+	PRIMARY KEY (year)
 );
 
 CREATE TABLE ref_edition (

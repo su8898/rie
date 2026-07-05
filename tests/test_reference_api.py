@@ -39,3 +39,16 @@ def test_disciplines_endpoint():
     _login()
     d = client.get("/api/reference/disciplines").json()
     assert "GP" in d and "SPECIALIST" in d                            # demo seed disciplines
+
+
+def test_awards_band_endpoint_computes_band():
+    _login()
+    r = client.get("/api/reference/awards",
+                   params={"injury_class": "PARAPLEGIA", "severity": "SEVERE"}).json()
+    assert r["n"] == 6 and r["robust"] is True and r["band_p25"] < r["band_p75"]
+
+
+def test_awards_classes_endpoint():
+    _login()
+    names = {c["injury_class"] for c in client.get("/api/reference/awards/classes").json()}
+    assert {"TBI", "PARAPLEGIA", "QUADRIPLEGIA"} <= names

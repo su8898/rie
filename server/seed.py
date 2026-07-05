@@ -58,10 +58,59 @@ def seed_demo_pricing(db: Session) -> None:
     ])
 
 
+# Representative SA headline CPI index (annual, arbitrary base 2014=100) — for inflation-adjusting
+# comparable awards to current rand (§5d). A real deployment loads Stats SA figures.
+_CPI = {2008: 72.0, 2009: 77.0, 2010: 80.0, 2011: 84.0, 2012: 89.0, 2013: 94.0, 2014: 100.0,
+        2015: 105.0, 2016: 112.0, 2017: 118.0, 2018: 124.0, 2019: 129.0, 2020: 133.0,
+        2021: 139.0, 2022: 148.0, 2023: 157.0, 2024: 165.0, 2025: 172.0, 2026: 180.0}
+
+# Representative general-damages authorities (injury_class, severity, award-year, award-rand).
+# Illustrative seed only — cited to the standard SA quantum source; a real deployment loads
+# LEGAL-curated authorities. Bands are COMPUTED from these (CPI-adjusted p25–p75), never hand-set.
+# TBI/PARAPLEGIA/QUADRIPLEGIA/ORTHOPAEDIC_FEMUR have >=5 (robust band); AMPUTATION/FACIAL <5 (small-n).
+_AWARDS = [
+    ("TBI", "SEVERE", 2012, 1_400_000), ("TBI", "SEVERE", 2014, 1_600_000),
+    ("TBI", "SEVERE", 2016, 1_800_000), ("TBI", "SEVERE", 2018, 1_900_000),
+    ("TBI", "SEVERE", 2020, 2_000_000), ("TBI", "SEVERE", 2022, 2_200_000),
+    ("TBI", "MODERATE", 2013, 600_000), ("TBI", "MODERATE", 2015, 700_000),
+    ("TBI", "MODERATE", 2017, 800_000), ("TBI", "MODERATE", 2019, 850_000),
+    ("TBI", "MODERATE", 2021, 950_000),
+    ("PARAPLEGIA", "SEVERE", 2011, 2_000_000), ("PARAPLEGIA", "SEVERE", 2014, 2_200_000),
+    ("PARAPLEGIA", "SEVERE", 2016, 2_500_000), ("PARAPLEGIA", "SEVERE", 2018, 2_700_000),
+    ("PARAPLEGIA", "SEVERE", 2020, 2_900_000), ("PARAPLEGIA", "SEVERE", 2023, 3_200_000),
+    ("QUADRIPLEGIA", "SEVERE", 2012, 2_800_000), ("QUADRIPLEGIA", "SEVERE", 2015, 3_200_000),
+    ("QUADRIPLEGIA", "SEVERE", 2018, 3_600_000), ("QUADRIPLEGIA", "SEVERE", 2020, 3_900_000),
+    ("QUADRIPLEGIA", "SEVERE", 2022, 4_200_000),
+    ("ORTHOPAEDIC_FEMUR", "MODERATE", 2014, 350_000), ("ORTHOPAEDIC_FEMUR", "MODERATE", 2016, 400_000),
+    ("ORTHOPAEDIC_FEMUR", "MODERATE", 2018, 450_000), ("ORTHOPAEDIC_FEMUR", "MODERATE", 2020, 500_000),
+    ("ORTHOPAEDIC_FEMUR", "MODERATE", 2022, 580_000),
+    ("AMPUTATION_LOWER_LIMB", "SEVERE", 2015, 900_000),
+    ("AMPUTATION_LOWER_LIMB", "SEVERE", 2018, 1_100_000),
+    ("AMPUTATION_LOWER_LIMB", "SEVERE", 2021, 1_300_000),
+    ("FACIAL_DISFIGUREMENT", "MODERATE", 2016, 280_000),
+    ("FACIAL_DISFIGUREMENT", "MODERATE", 2018, 320_000),
+    ("FACIAL_DISFIGUREMENT", "MODERATE", 2020, 380_000),
+    ("FACIAL_DISFIGUREMENT", "MODERATE", 2022, 450_000),
+]
+
+
+def seed_awards(db: Session) -> None:
+    """CPI index + representative comparable-awards curation (§5d) — only when empty."""
+    if _empty(db, models.RefCpi):
+        db.add_all([models.RefCpi(year=y, index=i) for y, i in _CPI.items()])
+    if _empty(db, models.RefComparableAward):
+        db.add_all([models.RefComparableAward(
+            injury_class=ic, severity_tier=sv, award_rand=float(rand), award_date=date(yr, 6, 30),
+            citation=f"Koch Quantum Yearbook {yr}", court="High Court",
+            notes="representative seed — replace with LEGAL-curated authority")
+            for ic, sv, yr, rand in _AWARDS])
+
+
 def seed(db: Session) -> None:
     seed_users(db)
     seed_statutory(db)
     seed_demo_pricing(db)
+    seed_awards(db)
     db.commit()
 
 

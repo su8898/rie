@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 import engine
 
-from . import adapter, models
+from . import adapter, awards_service, models
 from .reference_data import build_refbook, build_ruleset
 
 
@@ -46,10 +46,15 @@ def compute_offer(db: Session, payload: dict, today: Optional[date] = None) -> d
         heads["loss_of_support"] = {"total": total, "worksheet": worksheet}
 
     if gd := hi.get("general_damages"):
-        amount, gd_reasons = engine.head_general_damages(
-            claim, float(gd.get("band_p25", 0.0)), float(gd.get("band_p75", 0.0)),
-            float(gd["proposed"]))
-        heads["general_damages"] = {"amount": amount, "reasons": gd_reasons}
+        p25, p75 = float(gd.get("band_p25", 0.0)), float(gd.get("band_p75", 0.0))
+        authorities = None
+        if injury_class := gd.get("injury_class"):        # §5d — compute the band from the store
+            authorities = awards_service.award_band(db, injury_class, gd.get("severity_tier"))
+            if authorities["n"]:
+                p25, p75 = awards_service.band_for_offer(authorities)
+        amount, gd_reasons = engine.head_general_damages(claim, p25, p75, float(gd["proposed"]))
+        heads["general_damages"] = {"amount": amount, "reasons": gd_reasons,
+                                    "band_p25": p25, "band_p75": p75, "authorities": authorities}
 
     if fun := hi.get("funeral"):                                              # §5e — deceased claimant
         amount, fun_reasons = engine.head_funeral(

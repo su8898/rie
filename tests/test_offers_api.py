@@ -54,6 +54,18 @@ def test_offer_loss_of_support_and_funeral_heads():
     assert r["gated_by"] == []
 
 
+def test_offer_gd_band_computed_from_awards_store():
+    # §5d — pass an injury class + tier; the band is COMPUTED (CPI-adjusted p25–p75), not hand-fed
+    _login()
+    p = {**BASE, "claim_id": "R_off6", "party_token": "P_off6", "si_accepted": True,
+         "heads_input": {"general_damages": {
+             "proposed": 2800000, "injury_class": "TBI", "severity_tier": "SEVERE"}}}
+    gd = client.post("/api/offer", json=p).json()["heads"]["general_damages"]
+    assert gd["authorities"]["n"] == 6 and gd["authorities"]["robust"] is True
+    assert gd["band_p25"] < 2800000 < gd["band_p75"]    # proposed within the computed band
+    assert gd["amount"] == 2800000.0 and gd["reasons"] == []   # guidance only, fault 0 -> full
+
+
 def test_offer_gd_gated_without_si():
     _login()
     p = {**BASE, "claim_id": "R_off2", "party_token": "P_off2", "si_accepted": False,

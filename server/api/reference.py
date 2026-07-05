@@ -10,6 +10,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from .. import models
+from ..awards_service import award_band, injury_classes
 from ..db import get_db
 from ..reference_data import _norm
 from .deps import current_user
@@ -53,6 +54,19 @@ def nappi(code: str | None = None, q: str | None = None, limit: int = Query(50, 
         stmt = stmt.where(models.RefNappiSep.nappi_code.like(f"{q}%"))
     return [{"nappi_code": r.nappi_code, "sep": r.sep}
             for r in db.scalars(stmt.order_by(models.RefNappiSep.nappi_code).limit(limit))]
+
+
+@router.get("/awards/classes")
+def award_classes(db: Session = Depends(get_db), user: dict = Depends(current_user)) -> list[dict]:
+    """Distinct injury classes + their severity tiers in the comparable-awards store (§5d)."""
+    return injury_classes(db)
+
+
+@router.get("/awards")
+def awards(injury_class: str, severity: str | None = None,
+           db: Session = Depends(get_db), user: dict = Depends(current_user)) -> dict:
+    """Computed general-damages band (CPI-adjusted p25–p75, small-n-guarded) + the authorities."""
+    return award_band(db, injury_class, severity)
 
 
 @router.get("/icd10")

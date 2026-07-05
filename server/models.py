@@ -93,6 +93,27 @@ class RefEdition(Base):
     synced_at: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
 
+class RefCpi(Base):
+    """Headline CPI index (annual), for inflation-adjusting comparable awards to current rand (§5d)."""
+    __tablename__ = "ref_cpi"
+    year: Mapped[int] = mapped_column(Integer, primary_key=True)
+    index: Mapped[float] = mapped_column(Float)
+
+
+class RefComparableAward(Base):
+    """General-damages quantum authorities (§5d) — one row per reported award, LEGAL-curated.
+    Bands are COMPUTED (CPI-adjusted p25–p75), never hand-set; guidance only (ENDOGENOUS-equivalent)."""
+    __tablename__ = "ref_comparable_award"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    injury_class: Mapped[str] = mapped_column(String, index=True)
+    severity_tier: Mapped[str] = mapped_column(String, default="")
+    award_rand: Mapped[float] = mapped_column(Float)              # in the award-year's rand
+    award_date: Mapped[date] = mapped_column(Date)
+    citation: Mapped[str] = mapped_column(String)
+    court: Mapped[str] = mapped_column(String, default="")
+    notes: Mapped[str] = mapped_column(String, default="")
+
+
 # ── corpus + operational ─────────────────────────────────────────────────────
 class AccidentRecord(Base):
     __tablename__ = "accidents"
