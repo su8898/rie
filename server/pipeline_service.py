@@ -32,6 +32,7 @@ def _line_details(claim: engine.Claim, book: engine.RefBook, rs: engine.Ruleset,
         lr = engine.adjudicate_line(claim, line, book, rs, tier, seen, set(dx_regions))
         rate, _src, status = engine.resolve(book, line.kind, line.code, tier)
         out.append({
+            "provider_id": line.provider_id,
             "kind": line.kind, "code": line.code, "billed": line.amount, "payable": lr.payable,
             "reference": round(rate * line.qty, 2) if rate is not None else None,
             "src": lr.src, "legal_status": status.name if status else None,

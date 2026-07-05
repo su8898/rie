@@ -103,6 +103,7 @@ class BillingLineRecord(Base):
     __tablename__ = "billing_lines"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     claim_id: Mapped[str] = mapped_column(ForeignKey("claims.claim_id"), index=True)
+    provider_id: Mapped[str] = mapped_column(String, default="", index=True)
     kind: Mapped[str] = mapped_column(String)
     code: Mapped[str] = mapped_column(String)
     billed: Mapped[float] = mapped_column(Float)

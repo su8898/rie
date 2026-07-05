@@ -111,6 +111,7 @@ CREATE TABLE transition_log (
 CREATE TABLE billing_lines (
 	id SERIAL NOT NULL, 
 	claim_id VARCHAR NOT NULL, 
+	provider_id VARCHAR NOT NULL, 
 	kind VARCHAR NOT NULL, 
 	code VARCHAR NOT NULL, 
 	billed FLOAT NOT NULL, 
