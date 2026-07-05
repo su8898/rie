@@ -16,24 +16,27 @@ def _book(rpl):
     return RefBook(negotiated={}, rpl=rpl, raf2022={}, empirical={}, sep={}, non_benchmarkable=set())
 
 
-def test_default_applies_confirmed_but_not_proposed():
-    # PRODUCTION SEMANTICS: CONFIRMED entries price live via build_refbook; PROPOSED are held back
-    # until an SME promotes them. 0186→2712 and 4805→4804 are confirmed; 0190→10190 is not.
-    book = _book({"2712": {"GP": 580.0},        # target of CONFIRMED 0186
-                  "4804": {"GP": 1048.20},      # target of CONFIRMED 4805
-                  "10190": {"GP": 587.24}})     # target of PROPOSED 0190
-    applied = {e.coida for e, _ in xw.apply_crosswalk(book)}    # default = CONFIRMED only
-    assert {"0186", "4805"} <= applied and "0190" not in applied
-    assert resolve(book, "TARIFF", "0186")[0] == 580.0         # aliased onto RAF 2712, priced
-    assert resolve(book, "TARIFF", "0190")[0] is None          # PROPOSED not applied by default
+def test_default_applies_confirmed_holds_back_proposed(monkeypatch):
+    # MECHANISM (independent of the real confirmed set): default apply = CONFIRMED only; what_if
+    # adds PROPOSED; NEEDS_SME/NO_RAF (raf=None) are never applied.
+    monkeypatch.setattr(xw, "CROSSWALK", [
+        xw.XW("111", "t", "d", "999", xw.CONFIRMED, "e"),
+        xw.XW("222", "t", "d", "999", xw.PROPOSED, "e"),
+        xw.XW("333", "t", "d", None, xw.NEEDS_SME, "e"),
+    ])
+    b = _book({"999": {"GP": 100.0}})
+    assert {e.coida for e, _ in xw.apply_crosswalk(b)} == {"111"}               # CONFIRMED only
+    assert resolve(b, "TARIFF", "111")[0] == 100.0 and resolve(b, "TARIFF", "222")[0] is None
+    b2 = _book({"999": {"GP": 100.0}})
+    assert {e.coida for e, _ in xw.apply_crosswalk(b2, what_if=True)} == {"111", "222"}  # + PROPOSED
 
 
-def test_at_least_the_two_intended_entries_are_confirmed():
+def test_confirmed_mappings_are_the_signed_set():
     confirmed = {e.coida for e in xw.CROSSWALK if e.status == xw.CONFIRMED}
-    assert confirmed == {"0186", "4805"}                       # the SME-signed set
+    assert confirmed == {"0186", "4805", "0190", "0146", "0614"}    # the 5 SME-signed mappings
 
 
-def test_what_if_applies_proposed_and_the_engine_then_prices_it():
+def test_grounded_set_applies_and_the_engine_then_prices_it():
     book = _book({"10190": {"GP": 587.24}, "147": {"GP": 489.16}, "4804": {"GP": 1048.20},
                   "2712": {"GP": 580.0}, "909": {"GP": 5073.29}})
     applied = xw.apply_crosswalk(book, what_if=True)

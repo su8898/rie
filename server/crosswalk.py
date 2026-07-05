@@ -43,10 +43,10 @@ class XW:
 # ── the crosswalk (top uncovered families by exposure; see db/corpus_test.py Part A) ──────────
 CROSSWALK: list[XW] = [
     # ── consultations — the BHF/COIDA visit tariff family (biggest count, differs from RAF) ──
-    XW("0190", "consultation", "New/established patient consultation", "10190", PROPOSED,
-       "RAF 10190 GP consultation R587.24 ≈ billed avg R579 — strong rate match; confirm level"),
-    XW("0146", "consultation", "Unscheduled emergency consultation", "147", PROPOSED,
-       "RAF 147 'after-hours/unscheduled emergency consultation' R489.16 — semantic match"),
+    XW("0190", "consultation", "New/established patient consultation", "10190", CONFIRMED,
+       "CONFIRMED 2026-07-05: RAF 10190 GP consultation R587.24 ≈ billed avg R579 — accepted"),
+    XW("0146", "consultation", "Unscheduled emergency consultation", "147", CONFIRMED,
+       "CONFIRMED 2026-07-05: RAF 147 'after-hours/unscheduled emergency consultation' R489.16 — accepted"),
     XW("0184", "consultation", "Follow-up visit", None, NEEDS_SME,
        "RAF consult family 145/147/464/10190 — SME to pick the follow-up tier"),
     XW("0181", "consultation", "Visit, new problem/patient, 20 min", None, NEEDS_SME,
@@ -87,8 +87,8 @@ CROSSWALK: list[XW] = [
        "equivalent for the final medical report (billed avg R1,078 → repriced to tariff)"),
 
     # ── orthopaedic surgery ──
-    XW("0614", "orthopaedic", "Arthroplasty / debridement, large joint", "909", PROPOSED,
-       "RAF 909 'Excision arthroplasty' R5,073.29; billed avg R1,898 (pays as billed) — confirm joint"),
+    XW("0614", "orthopaedic", "Arthroplasty / debridement, large joint", "909", CONFIRMED,
+       "CONFIRMED 2026-07-05: RAF 909 'Excision arthroplasty' R5,073.29 accepted (billed avg R1,898 → pays as billed)"),
     XW("0465", "orthopaedic", "Fractures involving large joints", None, NEEDS_SME,
        "RAF fracture family 48/49/53 — SME to select reduction type for large joints"),
     XW("0593", "orthopaedic", "Tendon synovectomy", None, NEEDS_SME,

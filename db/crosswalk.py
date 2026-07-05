@@ -91,6 +91,10 @@ def exposure_whatif(claims_db: str) -> None:
     billed, lines = _corpus_tariff_exposure(claims_db)
     base = _uncovered_exposure(book, billed)
     applied = apply_crosswalk(book, what_if=True)
+    if not applied:
+        print(f"\n  All grounded (PROPOSED) mappings are CONFIRMED and priced live; R{base:,.2f} of")
+        print(f"  tariff exposure remains uncovered in NEEDS_SME entries (targets still to be set).\n")
+        return
     after = _uncovered_exposure(book, billed)
 
     print(f"\n{'─' * 82}\n  WHAT-IF EXPOSURE (PROPOSED entries applied)\n{'─' * 82}")
@@ -139,6 +143,13 @@ def _run_corpus(claims, book, rs) -> dict:
 
 
 def activation(claims_db: str) -> None:
+    if not XCODES:
+        print(f"\n{'─' * 82}\n  ACTIVATION IMPACT\n{'─' * 82}")
+        print("  No PROPOSED entries remain — all grounded mappings are CONFIRMED and priced live by")
+        print("  build_refbook. Remaining uncovered exposure sits in NEEDS_SME entries (targets TBD);")
+        print("  run without --activation for the current live coverage.\n")
+        return
+
     import corpus_test as ct                              # heavy import — only for this view
 
     claims, nappi_codes, _ = ct.load_corpus()
