@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 import engine
 
 from . import adapter, awards_service, models
-from .reference_data import build_refbook, build_ruleset
+from .reference_data import build_mode_overrides, build_refbook, build_ruleset
 
 
 def compute_offer(db: Session, payload: dict, today: Optional[date] = None) -> dict:
@@ -30,6 +30,7 @@ def compute_offer(db: Session, payload: dict, today: Optional[date] = None) -> d
     record = engine.process_claim(
         claim, accidents, book, rs, today=today or date.today(),
         accident_dx_regions=set(payload.get("accident_dx_regions", [])),
+        mode_overrides=build_mode_overrides(db),                # §11 — ADMIN signal-mode overrides
     )
 
     hi = payload.get("heads_input", {})

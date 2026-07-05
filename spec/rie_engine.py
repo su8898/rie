@@ -490,10 +490,12 @@ class Assessment:
     band: Band
     engine_version: str = "rie-scorer v1"
 
-def score_and_band(all_reasons: list[str]) -> Assessment:
+def score_and_band(all_reasons: list[str], mode_overrides: Optional[dict] = None) -> Assessment:
+    ov = mode_overrides or {}                         # §11 — ADMIN signal-mode overrides (reference data)
     visible, shadow, pts, endo_pts = [], [], 0, 0
     for code in dict.fromkeys(all_reasons):           # dedupe, keep order
-        meta, mode = R.get(code), MODE.get(code, SignalMode.SCORED)
+        meta = R.get(code)
+        mode = ov.get(code) or MODE.get(code, SignalMode.SCORED)
         if meta is None:
             visible.append(code); continue
         if mode is SignalMode.SHADOW:
@@ -547,7 +549,8 @@ def process_claim(c: Claim, accidents: list[Accident], book: RefBook, rs: Rulese
                   today: date, provider_tier: str = "GP",
                   accident_dx_regions: set[str] = frozenset(),
                   seen_lines: set = None, cohort_is_bus_taxi: bool = False,
-                  conv_floor_p10: float = 20.0, summons_served: Optional[date] = None) -> dict:
+                  conv_floor_p10: float = 20.0, summons_served: Optional[date] = None,
+                  mode_overrides: Optional[dict] = None) -> dict:
     """The brain, invoked once per claim. Deterministic. Returns the determination record."""
     seen_lines = seen_lines if seen_lines is not None else set()
 
@@ -572,7 +575,7 @@ def process_claim(c: Claim, accidents: list[Accident], book: RefBook, rs: Rulese
     medical_payable = head_past_medical(line_results, c.fault_pct)
 
     # E. score, band, disposition                                    (§10, §9)
-    assessment = score_and_band(gate_reasons + line_reasons + graph_reasons)
+    assessment = score_and_band(gate_reasons + line_reasons + graph_reasons, mode_overrides)
     disp = disposition(assessment, merits_pending=(c.merits_accepted is None
                                                    and c.claim_type == "PERSONAL"))
 

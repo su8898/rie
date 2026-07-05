@@ -12,8 +12,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.middleware.sessions import SessionMiddleware
 
+from .admin_service import AdminError
 from .api import (
-    accidents, audit, auth, cases, claims, dashboard, disputes, governance, health, leakage,
+    accidents, admin, audit, auth, cases, claims, dashboard, disputes, governance, health, leakage,
     lifecycle, litigation, merits, offers, parties, payments, rails, reasons, reference,
     serious_injury, undertakings,
 )
@@ -47,12 +48,17 @@ async def _actor(request: Request, exc: WrongActor) -> JSONResponse:
     return JSONResponse(status_code=403, content={"detail": str(exc)})
 
 
+@app.exception_handler(AdminError)
+async def _admin_err(request: Request, exc: AdminError) -> JSONResponse:
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
 app.include_router(health.router)
 for r in (auth.router, claims.router, offers.router, reasons.router, dashboard.router,
           accidents.router, leakage.router, lifecycle.router, merits.router,
           serious_injury.router, undertakings.router, litigation.router, payments.router,
           parties.router, audit.router, cases.router, disputes.router, governance.router,
-          reference.router):
+          admin.router, reference.router):
     app.include_router(r, prefix="/api")
 
 app.include_router(rails.router)          # provider->fund rails: /rails/v1/... (JWS-authenticated)

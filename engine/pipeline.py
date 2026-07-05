@@ -25,7 +25,8 @@ def process_claim(c: Claim, accidents: list[Accident], book: RefBook, rs: Rulese
                   today: date, provider_tier: str = "GP",
                   accident_dx_regions: set[str] = frozenset(),
                   seen_lines: Optional[set] = None, cohort_is_bus_taxi: bool = False,
-                  conv_floor_p10: float = 20.0, summons_served: Optional[date] = None) -> dict:
+                  conv_floor_p10: float = 20.0, summons_served: Optional[date] = None,
+                  mode_overrides: Optional[dict] = None) -> dict:
     """The brain, invoked once per claim. Deterministic. Returns the determination record."""
     seen_lines = seen_lines if seen_lines is not None else set()
 
@@ -50,7 +51,7 @@ def process_claim(c: Claim, accidents: list[Accident], book: RefBook, rs: Rulese
     medical_payable = head_past_medical(line_results, c.fault_pct)
 
     # E. score, band, disposition                                    (§10, §9)
-    assessment = score_and_band(gate_reasons + line_reasons + graph_reasons)
+    assessment = score_and_band(gate_reasons + line_reasons + graph_reasons, mode_overrides)
     disp = disposition(assessment, merits_pending=(c.merits_accepted is None
                                                    and c.claim_type == "PERSONAL"))
 

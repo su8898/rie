@@ -24,6 +24,17 @@ class AppUser(Base):
     active: Mapped[bool] = mapped_column(default=True)
 
 
+class AdminAudit(Base):
+    """Append-only admin action log — CUD logging (SPECIFICATION §9, domain-logic §11)."""
+    __tablename__ = "admin_audit"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    actor: Mapped[str] = mapped_column(String, index=True)
+    action: Mapped[str] = mapped_column(String, index=True)
+    target: Mapped[str] = mapped_column(String, default="")
+    detail: Mapped[dict] = mapped_column(JSON, default=dict)
+    at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 # ── reference (effective-dated, loader-populated) ────────────────────────────
 class RefRpl(Base):
     __tablename__ = "ref_rpl"
@@ -112,6 +123,18 @@ class RefComparableAward(Base):
     citation: Mapped[str] = mapped_column(String)
     court: Mapped[str] = mapped_column(String, default="")
     notes: Mapped[str] = mapped_column(String, default="")
+
+
+class RefSignalMode(Base):
+    """ADMIN override of a signal's scoring mode (§11) — reference data, effective-dated and
+    audit-logged, never a code deploy. An absent code falls back to the engine default (derived
+    from maturity: UNVALIDATED -> SHADOW, else SCORED)."""
+    __tablename__ = "ref_signal_mode"
+    code: Mapped[str] = mapped_column(String, primary_key=True)
+    mode: Mapped[str] = mapped_column(String)          # SHADOW | ADVISORY | SCORED
+    effective_from: Mapped[date] = mapped_column(Date)
+    set_by: Mapped[str] = mapped_column(String)
+    note: Mapped[str] = mapped_column(String, default="")
 
 
 # ── corpus + operational ─────────────────────────────────────────────────────

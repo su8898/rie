@@ -54,3 +54,15 @@ def build_ruleset(db: Session) -> engine.Ruleset:
     caps = [(r.effective_from, r.annual_cap) for r in db.scalars(select(models.RefCap))]
     preauth = {r.code for r in db.scalars(select(models.RefPreauth))}
     return engine.Ruleset(caps=caps, preauth_required=preauth)
+
+
+def build_mode_overrides(db: Session) -> dict:
+    """ADMIN signal-mode overrides (§11) -> {code: engine.SignalMode}. Absent codes fall back to
+    the engine default; an unrecognised stored mode is ignored (fail safe to the default)."""
+    out: dict = {}
+    for r in db.scalars(select(models.RefSignalMode)):
+        try:
+            out[r.code] = engine.SignalMode[r.mode]
+        except KeyError:
+            continue
+    return out

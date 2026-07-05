@@ -19,7 +19,17 @@ CREATE TABLE app_users (
 	username VARCHAR NOT NULL, 
 	password_hash VARCHAR NOT NULL, 
 	role VARCHAR NOT NULL, 
-	active BOOLEAN NOT NULL, 
+	active BOOLEAN NOT NULL,
+	PRIMARY KEY (id)
+);
+
+CREATE TABLE admin_audit (
+	id SERIAL NOT NULL,
+	actor VARCHAR NOT NULL,
+	action VARCHAR NOT NULL,
+	target VARCHAR NOT NULL,
+	detail JSON NOT NULL,
+	at TIMESTAMP WITHOUT TIME ZONE DEFAULT now() NOT NULL,
 	PRIMARY KEY (id)
 );
 
@@ -85,6 +95,15 @@ CREATE TABLE ref_cpi (
 	year INTEGER NOT NULL,
 	"index" FLOAT NOT NULL,
 	PRIMARY KEY (year)
+);
+
+CREATE TABLE ref_signal_mode (
+	code VARCHAR NOT NULL,
+	mode VARCHAR NOT NULL,
+	effective_from DATE NOT NULL,
+	set_by VARCHAR NOT NULL,
+	note VARCHAR NOT NULL,
+	PRIMARY KEY (code)
 );
 
 CREATE TABLE ref_edition (

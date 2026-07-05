@@ -6,6 +6,8 @@ stored but contribute zero points and stay invisible.
 """
 from __future__ import annotations
 
+from typing import Optional
+
 from .models import Assessment
 from .reasons import MODE, R
 from .vocab import (
@@ -13,10 +15,12 @@ from .vocab import (
 )
 
 
-def score_and_band(all_reasons: list[str]) -> Assessment:
+def score_and_band(all_reasons: list[str], mode_overrides: Optional[dict] = None) -> Assessment:
+    ov = mode_overrides or {}                         # §11 — ADMIN signal-mode overrides (reference data)
     visible, shadow, pts, endo_pts = [], [], 0, 0
     for code in dict.fromkeys(all_reasons):           # dedupe, keep order
-        meta, mode = R.get(code), MODE.get(code, SignalMode.SCORED)
+        meta = R.get(code)
+        mode = ov.get(code) or MODE.get(code, SignalMode.SCORED)
         if meta is None:
             visible.append(code); continue
         if mode is SignalMode.SHADOW:

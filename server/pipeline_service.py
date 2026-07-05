@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 import engine
 
 from . import adapter, models
-from .reference_data import build_refbook, build_ruleset
+from .reference_data import build_mode_overrides, build_refbook, build_ruleset
 
 
 def _optdate(s) -> Optional[date]:
@@ -57,6 +57,7 @@ def assess_and_store(db: Session, payload: dict, today: Optional[date] = None) -
         accident_dx_regions=dx_regions, cohort_is_bus_taxi=bool(payload.get("cohort_is_bus_taxi", False)),
         conv_floor_p10=float(payload.get("conv_floor_p10", 20.0)),
         summons_served=_optdate(payload.get("summons_served")),
+        mode_overrides=build_mode_overrides(db),                # §11 — ADMIN signal-mode overrides
     )
     lines = _line_details(claim, book, rs, tier, dx_regions)
     _persist(db, claim, payload, record, rec_by_id, lines)
