@@ -272,7 +272,12 @@ function ComponentBars({
 // ── Attorneys ────────────────────────────────────────────────────────────────
 function AttorneysTab() {
   const { data, error } = useFetch<Attorney[]>(() => api.attorneys());
-  const { page, setPage, pageCount, total, slice } = usePaged(data ?? [], 20);
+  const [q, setQ] = useState("");
+  const filtered = useMemo(
+    () => (data ?? []).filter((a) => matchQ(q, a.attorney, a.cohort, a.rating)),
+    [data, q],
+  );
+  const { page, setPage, pageCount, total, slice } = usePaged(filtered, 20);
   if (error) return <ErrorBox message={error} />;
   if (data === null) return <Loading label="Scoring attorneys…" />;
   if (data.length === 0)
@@ -281,6 +286,15 @@ function AttorneysTab() {
     );
 
   return (
+    <div className="space-y-3">
+      <SearchInput
+        value={q}
+        onChange={setQ}
+        placeholder="Search attorney, cohort, rating…"
+      />
+      {total === 0 ? (
+        <Empty label="No attorneys match your search." />
+      ) : (
     <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
       <div className="overflow-x-auto">
         <table className="min-w-full divide-y divide-slate-200 text-sm">
@@ -347,13 +361,23 @@ function AttorneysTab() {
         unit="attorneys"
       />
     </div>
+      )}
+    </div>
   );
 }
 
 // ── Claimants (recurrence) ───────────────────────────────────────────────────
 function ClaimantsTab() {
   const { data, error } = useFetch<Claimant[]>(() => api.claimants());
-  const { page, setPage, pageCount, total, slice } = usePaged(data ?? [], 25);
+  const [q, setQ] = useState("");
+  const filtered = useMemo(
+    () =>
+      (data ?? []).filter((c) =>
+        matchQ(q, c.party_token, c.accidents.join(" ")),
+      ),
+    [data, q],
+  );
+  const { page, setPage, pageCount, total, slice } = usePaged(filtered, 25);
   if (error) return <ErrorBox message={error} />;
   if (data === null) return <Loading label="Scanning recurrence…" />;
   if (data.length === 0)
@@ -362,6 +386,15 @@ function ClaimantsTab() {
     );
 
   return (
+    <div className="space-y-3">
+      <SearchInput
+        value={q}
+        onChange={setQ}
+        placeholder="Search party token or accident id…"
+      />
+      {total === 0 ? (
+        <Empty label="No claimants match your search." />
+      ) : (
     <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
       <table className="min-w-full divide-y divide-slate-200 text-sm">
         <thead className="bg-slate-50">
@@ -398,6 +431,8 @@ function ClaimantsTab() {
         onPage={setPage}
         unit="claimants"
       />
+    </div>
+      )}
     </div>
   );
 }
