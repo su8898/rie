@@ -1,0 +1,31 @@
+# Production-ish stack: PostgreSQL 16 + the RIE API. For local dev, SQLite is the default and
+# you don't need this — just `./run.sh`.
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: rie
+      POSTGRES_PASSWORD: rie
+      POSTGRES_DB: rie
+    ports: ["5432:5432"]
+    volumes: ["riedata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rie"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: ..
+      dockerfile: db/Dockerfile.api
+    environment:
+      RIE_DATABASE_URL: postgresql+psycopg2://rie:rie@db:5432/rie
+      RIE_SECRET_KEY: change-me-in-production
+    ports: ["8021:8021"]
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  riedata:
