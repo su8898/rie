@@ -33,7 +33,8 @@ def test_default_applies_confirmed_holds_back_proposed(monkeypatch):
 
 def test_confirmed_mappings_are_the_signed_set():
     confirmed = {e.coida for e in xw.CROSSWALK if e.status == xw.CONFIRMED}
-    assert confirmed == {"0186", "4805", "0190", "0146", "0614"}    # the 5 SME-signed mappings
+    assert confirmed == {"0186", "4805", "0190", "0146", "0614",     # first two rounds
+                         "0304", "2802", "1204", "5103"}             # strong-tier round
 
 
 def test_grounded_set_applies_and_the_engine_then_prices_it():

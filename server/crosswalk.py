@@ -107,20 +107,20 @@ CROSSWALK: list[XW] = [
        "contracture', is not equivalent) — SME to source or negotiate a rate"),
     XW("0592", "orthopaedic", "Synovectomy, large joint", None, NEEDS_SME,
        "No genuine synovectomy code in the RAF gazette — SME to source or negotiate a rate"),
-    XW("0304", "orthopaedic", "Major wound debridement", "10304", PROPOSED,
-       "STRONG: RAF 10304 'Major debridement of wound, sloughectomy' R1,747.00 — exact description "
-       "match, adjacent code (billed avg R777 → pays as billed)"),
+    XW("0304", "orthopaedic", "Major wound debridement", "10304", CONFIRMED,
+       "CONFIRMED 2026-07-05: RAF 10304 'Major debridement of wound, sloughectomy' R1,747.00 — exact "
+       "description match, adjacent code (billed avg R777 → pays as billed)"),
 
     # ── other high-exposure procedures ──
-    XW("5103", "imaging", "Ultrasound, soft tissue, any region", "60200", PROPOSED,
-       "RAF 60200 'Ultrasound upper limb — soft tissue, any region' R1,758.80 — strong description "
-       "match; if lower limb, RAF 70200 applies instead — SME to confirm site"),
-    XW("2802", "pain", "Procedures for pain relief (peripheral)", "2801", PROPOSED,
-       "RAF 2801 R1,572.30 — its gazette text explicitly reads 'or 2802 alcohol injection in "
-       "peripheral nerves for pain'; adjacent code, strong match (billed avg R806 → pays as billed)"),
-    XW("1204", "critical-care", "Intensive care, category 1", "1221", PROPOSED,
-       "RAF 1221 'Professional fee for managing a patient' R1,048.20 ≈ billed avg R1,049 (near-exact) "
-       "— plausible ICU daily management fee; SME to confirm RAF's ICU per-diem treatment"),
+    XW("5103", "imaging", "Ultrasound, soft tissue, any region", "60200", CONFIRMED,
+       "CONFIRMED 2026-07-05: RAF 60200 'Ultrasound upper limb — soft tissue, any region' R1,758.80 "
+       "accepted for soft-tissue ultrasound; revisit if lower-limb studies should route to 70200"),
+    XW("2802", "pain", "Procedures for pain relief (peripheral)", "2801", CONFIRMED,
+       "CONFIRMED 2026-07-05: RAF 2801 R1,572.30 — gazette text reads 'or 2802 alcohol injection in "
+       "peripheral nerves for pain'; adjacent code (billed avg R806 → pays as billed)"),
+    XW("1204", "critical-care", "Intensive care, category 1", "1221", CONFIRMED,
+       "CONFIRMED 2026-07-05: RAF 1221 'Professional fee for managing a patient' R1,048.20 ≈ billed "
+       "avg R1,049 accepted as the ICU category-1 daily fee; revisit if RAF gazettes a distinct ICU per-diem"),
 ]
 
 
