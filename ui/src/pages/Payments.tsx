@@ -15,7 +15,7 @@
 // Approve/pay are greyed for non-ADMIN as a courtesy — the backend remains
 // authoritative and its 403 detail is always shown.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiError, api } from "../api";
 import { useAuth } from "../auth";
@@ -27,11 +27,14 @@ import {
   ErrorBox,
   Loading,
   Pagination,
+  SearchInput,
+  Stat,
   Toast,
   YesNo,
+  matchQ,
   usePaged,
 } from "../components/ui";
-import { rand } from "../format";
+import { num, rand } from "../format";
 import type {
   BatchDict,
   BatchStatus,
@@ -50,6 +53,15 @@ const SOURCES: PaymentSource[] = [
 // Which role may fire each batch action (courtesy graying; backend is authoritative).
 // ADMIN is a superuser everywhere.
 const ADMIN_ONLY = new Set(["approve", "pay"]);
+
+// Inbox ordering: batches that still need action (OPEN → being assembled/approved,
+// APPROVED → awaiting payment) surface above terminal ones.
+const STATUS_ORDER: Record<string, number> = {
+  OPEN: 0,
+  APPROVED: 1,
+  PAID: 2,
+  CANCELLED: 3,
+};
 
 // ── Batch status chip (OPEN=sky, APPROVED=amber, PAID=emerald, CANCELLED=slate)
 function BatchStatusChip({ status }: { status: BatchStatus }) {
@@ -204,16 +216,41 @@ export default function PaymentsPage() {
     );
   }
 
-  const canPrefill = batch != null && batch.status === "OPEN";
+  // Pipeline overview.
+  const eligibleTotal = (queue ?? []).reduce((s, r) => s + r.net_payable, 0);
+  const openCount = (batches ?? []).filter((b) => b.status === "OPEN").length;
+  const approvedCount = (batches ?? []).filter(
+    (b) => b.status === "APPROVED",
+  ).length;
+  const paidCount = (batches ?? []).filter((b) => b.status === "PAID").length;
 
-  const queuePg = usePaged(queue ?? [], 8);
-  const batchesPg = usePaged(batches ?? [], 8);
+  // Batch inbox: actionable first, newest first within a status.
+  const sortedBatches = useMemo(
+    () =>
+      [...(batches ?? [])].sort(
+        (a, b) =>
+          (STATUS_ORDER[a.status] ?? 9) - (STATUS_ORDER[b.status] ?? 9) ||
+          b.id - a.id,
+      ),
+    [batches],
+  );
+
+  // Eligible-queue picker (shown inside the assemble step of an OPEN batch).
+  const [queueQ, setQueueQ] = useState("");
+  const filteredQueue = useMemo(
+    () =>
+      (queue ?? []).filter((r) => matchQ(queueQ, r.claim_id, r.disposition, r.band)),
+    [queue, queueQ],
+  );
+
+  const queuePg = usePaged(filteredQueue, 6);
+  const batchesPg = usePaged(sortedBatches, 8);
 
   const labelBtn = (a: string) => a.replace(/_/g, " ");
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-xl font-semibold text-slate-900">Payments</h1>
         <span className="text-xs text-slate-400">
           assemble → approve (different admin) → pay
@@ -222,107 +259,52 @@ export default function PaymentsPage() {
 
       {loadError && <ErrorBox message={loadError} />}
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-5">
-        {/* ── Left column ──────────────────────────────────────────────── */}
-        <div className="space-y-4 lg:col-span-2">
-          {/* Eligible queue */}
-          <Card title="Eligible queue">
-            {queue === null ? (
-              <Loading label="Loading queue…" />
-            ) : queue.length === 0 ? (
-              <div className="text-sm text-slate-400">
-                No claims currently eligible to pay.
-              </div>
-            ) : (
-              <div className="overflow-hidden rounded-md border border-slate-100">
-                <table className="min-w-full divide-y divide-slate-100 text-sm">
-                  <thead className="bg-slate-50">
-                    <tr className="text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                      <th className="px-3 py-2">Claim</th>
-                      <th className="px-3 py-2">Band</th>
-                      <th className="px-3 py-2 text-right">Net payable</th>
-                      {canPrefill && <th className="px-3 py-2" />}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {queuePg.slice.map((r) => (
-                      <tr key={r.claim_id} className="hover:bg-slate-50">
-                        <td className="px-3 py-2">
-                          <Link
-                            to={`/claims/${encodeURIComponent(r.claim_id)}`}
-                            className="font-mono text-[13px] text-slate-900 hover:text-blue-600 hover:underline"
-                          >
-                            {r.claim_id}
-                          </Link>
-                          <div className="mt-0.5">
-                            <DispositionChip disposition={r.disposition} />
-                          </div>
-                        </td>
-                        <td className="px-3 py-2">
-                          <BandChip band={r.band} />
-                        </td>
-                        <td className="tnum px-3 py-2 text-right font-medium text-slate-800">
-                          {rand(r.net_payable)}
-                        </td>
-                        {canPrefill && (
-                          <td className="px-3 py-2 text-right">
-                            <button
-                              onClick={() => pickQueueRow(r)}
-                              className="rounded border border-slate-300 px-2 py-0.5 text-[11px] text-slate-600 transition hover:bg-slate-100"
-                              title="Prefill add-instruction form"
-                            >
-                              use
-                            </button>
-                          </td>
-                        )}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                <Pagination
-                  page={queuePg.page}
-                  pageCount={queuePg.pageCount}
-                  total={queuePg.total}
-                  onPage={queuePg.setPage}
-                  unit="eligible"
-                />
-              </div>
-            )}
-          </Card>
+      {/* Pipeline overview */}
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+        <Stat
+          label="Eligible to pay"
+          value={num(queue?.length ?? 0)}
+          sub={rand(eligibleTotal)}
+        />
+        <Stat label="Open" value={num(openCount)} sub="being assembled" />
+        <Stat
+          label="Approved"
+          value={num(approvedCount)}
+          sub="awaiting payment"
+          accent={approvedCount > 0 ? "text-amber-600" : "text-slate-900"}
+        />
+        <Stat label="Paid" value={num(paidCount)} accent="text-emerald-600" />
+      </div>
 
-          {/* Batches */}
-          <Card
-            title={
-              <div className="flex items-center justify-between">
-                <span>Batches</span>
-              </div>
-            }
-          >
-            <div className="mb-3 flex items-end gap-2">
-              <div className="flex-1">
-                <label className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-slate-400">
-                  New batch note (optional)
-                </label>
-                <input
-                  value={newNote}
-                  onChange={(e) => setNewNote(e.target.value)}
-                  className="w-full rounded-md border border-slate-300 px-2 py-1 text-xs outline-none focus:border-slate-500 focus:ring-1 focus:ring-slate-500"
-                  placeholder="e.g. weekly supplier run"
-                />
-              </div>
+      {/* Batch inbox (master) + workspace (detail) */}
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+        {/* ── Left: batch inbox ─────────────────────────────────────────── */}
+        <div className="md:col-span-1">
+          <Card title="Batches">
+            {/* New batch — the entry action */}
+            <div className="mb-3 space-y-2 rounded-md border border-slate-200 bg-slate-50/60 p-3">
+              <label className={microLabel}>New batch note (optional)</label>
+              <input
+                value={newNote}
+                onChange={(e) => setNewNote(e.target.value)}
+                className={fieldCls}
+                placeholder="e.g. weekly supplier run"
+              />
               <button
                 onClick={createBatch}
                 disabled={busyKey !== null}
-                className="rounded-md bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-slate-800 disabled:opacity-40"
+                className="w-full rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-40"
               >
-                {busyKey === "new-batch" ? "…" : "New batch"}
+                {busyKey === "new-batch" ? "Creating…" : "+ New batch"}
               </button>
             </div>
 
             {batches === null ? (
               <Loading label="Loading batches…" />
             ) : batches.length === 0 ? (
-              <div className="text-sm text-slate-400">No batches yet.</div>
+              <div className="text-sm text-slate-400">
+                No batches yet — create one above to start.
+              </div>
             ) : (
               <ul className="space-y-1.5">
                 {batchesPg.slice.map((b) => {
@@ -331,25 +313,26 @@ export default function PaymentsPage() {
                     <li key={b.id}>
                       <button
                         onClick={() => setSelectedId(b.id)}
-                        className={`flex w-full items-center justify-between rounded-md border px-3 py-2 text-left transition ${
+                        className={`block w-full rounded-md border px-3 py-2 text-left transition ${
                           active
                             ? "border-slate-900 bg-slate-50"
                             : "border-slate-200 hover:bg-slate-50"
                         }`}
                       >
-                        <span className="flex items-center gap-2">
-                          <span className="text-xs font-medium text-slate-500">
-                            #{b.id}
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="flex items-center gap-2">
+                            <span className="text-xs font-medium text-slate-500">
+                              #{b.id}
+                            </span>
+                            <BatchStatusChip status={b.status} />
                           </span>
-                          <BatchStatusChip status={b.status} />
-                          <span className="text-[11px] text-slate-400">
-                            {b.instructions.length} instr ·{" "}
-                            {b.created_by}
+                          <span className="tnum shrink-0 text-sm font-semibold text-slate-800">
+                            {rand(b.total)}
                           </span>
-                        </span>
-                        <span className="tnum text-sm font-semibold text-slate-800">
-                          {rand(b.total)}
-                        </span>
+                        </div>
+                        <div className="mt-0.5 text-[11px] text-slate-400">
+                          {b.instructions.length} instr · {b.created_by}
+                        </div>
                       </button>
                     </li>
                   );
@@ -368,13 +351,15 @@ export default function PaymentsPage() {
           </Card>
         </div>
 
-        {/* ── Right column: selected batch ─────────────────────────────── */}
-        <div className="lg:col-span-3">
+        {/* ── Right: batch workspace ────────────────────────────────────── */}
+        <div className="md:col-span-2">
           {batch === null ? (
-            <Empty label="Select a batch to view its instructions and events." />
+            <Card>
+              <Empty label="Select a batch on the left, or create one to start a payment run." />
+            </Card>
           ) : (
             <div className="space-y-4">
-              {/* Header */}
+              {/* Header + next actions */}
               <Card>
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="flex items-center gap-3">
@@ -400,12 +385,16 @@ export default function PaymentsPage() {
                   )}
                 </dl>
 
-                {/* Action buttons from batch.actions (approve/pay/cancel). */}
-                {batch.actions.length > 0 && (
-                  <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-100 pt-3">
+                {/* Next actions — prominent (approve / pay / cancel). */}
+                {batch.actions.length > 0 ? (
+                  <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
+                    <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                      Next
+                    </span>
                     {batch.actions.map((a) => {
                       const adminGated = ADMIN_ONLY.has(a) && !isAdmin;
                       const danger = a === "cancel";
+                      const advancing = a === "approve" || a === "pay";
                       return (
                         <button
                           key={a}
@@ -422,11 +411,9 @@ export default function PaymentsPage() {
                             )
                           }
                           disabled={busyKey !== null || adminGated}
-                          title={
-                            adminGated ? "Requires role: ADMIN" : undefined
-                          }
-                          className={`rounded-md px-3 py-1.5 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-40 ${
-                            a === "pay"
+                          title={adminGated ? "Requires role: ADMIN" : undefined}
+                          className={`rounded-md px-3.5 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-40 ${
+                            advancing
                               ? "bg-slate-900 text-white hover:bg-slate-800"
                               : danger
                                 ? "border border-rose-300 text-rose-700 hover:bg-rose-50"
@@ -437,15 +424,28 @@ export default function PaymentsPage() {
                         </button>
                       );
                     })}
+                    {!isAdmin && batch.actions.some((a) => ADMIN_ONLY.has(a)) && (
+                      <span className="text-[11px] text-slate-400">
+                        approve / pay require ADMIN
+                      </span>
+                    )}
+                  </div>
+                ) : (
+                  <div className="mt-4 border-t border-slate-100 pt-3 text-xs text-slate-400">
+                    {batch.status === "PAID"
+                      ? "Paid — no further actions."
+                      : "Terminal state — no further actions."}
                   </div>
                 )}
               </Card>
 
               {/* Instructions */}
-              <Card title="Instructions">
+              <Card title={`Instructions (${batch.instructions.length})`}>
                 {batch.instructions.length === 0 ? (
                   <div className="text-sm text-slate-400">
-                    No instructions yet.
+                    {batch.status === "OPEN"
+                      ? "Empty — add instructions from the eligible queue below."
+                      : "No instructions."}
                   </div>
                 ) : (
                   <div className="overflow-x-auto rounded-md border border-slate-100">
@@ -484,65 +484,138 @@ export default function PaymentsPage() {
                     </table>
                   </div>
                 )}
-
-                {/* Add-instruction form (OPEN only). */}
-                {batch.status === "OPEN" && (
-                  <div className="mt-3 space-y-2 rounded-md border border-slate-100 bg-slate-50/60 p-3">
-                    <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                      Add instruction
-                    </div>
-                    <div className="flex flex-wrap items-end gap-2">
-                      <div className="w-40">
-                        <label className={microLabel}>claim id</label>
-                        <input
-                          value={formClaimId}
-                          onChange={(e) => setFormClaimId(e.target.value)}
-                          className={`${fieldCls} font-mono`}
-                          placeholder="pick from queue →"
-                        />
-                      </div>
-                      <div className="w-48">
-                        <label className={microLabel}>source</label>
-                        <select
-                          value={formSource}
-                          onChange={(e) =>
-                            setFormSource(e.target.value as PaymentSource)
-                          }
-                          className={fieldCls}
-                        >
-                          {SOURCES.map((s) => (
-                            <option key={s} value={s}>
-                              {s}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="w-32">
-                        <label className={microLabel}>
-                          amount (optional)
-                        </label>
-                        <input
-                          type="number"
-                          value={formAmount}
-                          onChange={(e) => setFormAmount(e.target.value)}
-                          className={`${fieldCls} tnum`}
-                          placeholder="net_payable"
-                        />
-                      </div>
-                      <button
-                        onClick={addInstruction}
-                        disabled={busyKey !== null || !formClaimId.trim()}
-                        className="rounded-md bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-slate-800 disabled:opacity-40"
-                      >
-                        {busyKey === "add-instruction" ? "…" : "Add"}
-                      </button>
-                    </div>
-                    <p className="text-[11px] text-slate-400">
-                      Amount defaults to the claim's net_payable when left blank.
-                    </p>
-                  </div>
-                )}
               </Card>
+
+              {/* Assemble — add instructions from the eligible queue (OPEN only) */}
+              {batch.status === "OPEN" && (
+                <Card title="Add instructions">
+                  {/* the instruction form (prefilled from the queue picker below) */}
+                  <div className="flex flex-wrap items-end gap-2">
+                    <div className="w-40">
+                      <label className={microLabel}>claim id</label>
+                      <input
+                        value={formClaimId}
+                        onChange={(e) => setFormClaimId(e.target.value)}
+                        className={`${fieldCls} font-mono`}
+                        placeholder="pick from queue ↓"
+                      />
+                    </div>
+                    <div className="w-48">
+                      <label className={microLabel}>source</label>
+                      <select
+                        value={formSource}
+                        onChange={(e) =>
+                          setFormSource(e.target.value as PaymentSource)
+                        }
+                        className={fieldCls}
+                      >
+                        {SOURCES.map((s) => (
+                          <option key={s} value={s}>
+                            {s}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="w-32">
+                      <label className={microLabel}>amount (optional)</label>
+                      <input
+                        type="number"
+                        value={formAmount}
+                        onChange={(e) => setFormAmount(e.target.value)}
+                        className={`${fieldCls} tnum`}
+                        placeholder="net_payable"
+                      />
+                    </div>
+                    <button
+                      onClick={addInstruction}
+                      disabled={busyKey !== null || !formClaimId.trim()}
+                      className="rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-40"
+                    >
+                      {busyKey === "add-instruction" ? "…" : "Add"}
+                    </button>
+                  </div>
+                  <p className="mt-2 text-[11px] text-slate-400">
+                    Pick a claim from the eligible queue below to prefill; amount
+                    defaults to the claim's net_payable.
+                  </p>
+
+                  {/* eligible queue — the picker */}
+                  <div className="mt-4">
+                    <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                        Eligible queue
+                      </span>
+                      <SearchInput
+                        value={queueQ}
+                        onChange={setQueueQ}
+                        placeholder="Search claim…"
+                        className="w-52"
+                      />
+                    </div>
+                    {queue === null ? (
+                      <Loading label="Loading queue…" />
+                    ) : filteredQueue.length === 0 ? (
+                      <div className="text-sm text-slate-400">
+                        {queueQ
+                          ? "No eligible claims match your search."
+                          : "No claims currently eligible to pay."}
+                      </div>
+                    ) : (
+                      <div className="overflow-hidden rounded-md border border-slate-100">
+                        <table className="min-w-full divide-y divide-slate-100 text-sm">
+                          <thead className="bg-slate-50">
+                            <tr className="text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                              <th className="px-3 py-2">Claim</th>
+                              <th className="px-3 py-2">Band</th>
+                              <th className="px-3 py-2 text-right">Net payable</th>
+                              <th className="px-3 py-2" />
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {queuePg.slice.map((r) => (
+                              <tr key={r.claim_id} className="hover:bg-slate-50">
+                                <td className="px-3 py-2">
+                                  <Link
+                                    to={`/claims/${encodeURIComponent(r.claim_id)}`}
+                                    className="font-mono text-[13px] text-slate-900 hover:text-blue-600 hover:underline"
+                                  >
+                                    {r.claim_id}
+                                  </Link>
+                                  <div className="mt-0.5">
+                                    <DispositionChip disposition={r.disposition} />
+                                  </div>
+                                </td>
+                                <td className="px-3 py-2">
+                                  <BandChip band={r.band} />
+                                </td>
+                                <td className="tnum px-3 py-2 text-right font-medium text-slate-800">
+                                  {rand(r.net_payable)}
+                                </td>
+                                <td className="px-3 py-2 text-right">
+                                  <button
+                                    onClick={() => pickQueueRow(r)}
+                                    className="rounded border border-slate-300 px-2 py-0.5 text-[11px] text-slate-600 transition hover:bg-slate-100"
+                                    title="Prefill the add-instruction form"
+                                  >
+                                    use
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                        <Pagination
+                          page={queuePg.page}
+                          pageCount={queuePg.pageCount}
+                          total={queuePg.total}
+                          onPage={queuePg.setPage}
+                          unit="eligible"
+                        />
+                      </div>
+                    )}
+                  </div>
+                </Card>
+              )}
 
               {/* Event timeline */}
               <Card title="Payment events">
