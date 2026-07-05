@@ -27,7 +27,9 @@ import type {
   DisputeItem,
   Fairness,
   Health,
+  Icd10Row,
   LabelRow,
+  NappiRow,
   NegotiatedRate,
   Notification,
   NotifPref,
@@ -40,6 +42,7 @@ import type {
   Reason,
   RecallEstimate,
   RecallSample,
+  RefEdition,
   RiskSweep,
   SignalMode,
   StatutoryCap,
@@ -154,6 +157,21 @@ export const api = {
   tariffRates: (code: string) =>
     request<TariffRate[]>(
       `/api/reference/tariffs?code=${encodeURIComponent(code)}`,
+    ),
+  // The loaded reference datasets + their version / provenance.
+  editions: () => request<RefEdition[]>("/api/reference/editions"),
+  // Prefix search over the datasets (server-limited; empty q returns the first page).
+  tariffSearch: (q: string, limit = 200) =>
+    request<TariffRate[]>(
+      `/api/reference/tariffs?q=${encodeURIComponent(q)}&limit=${limit}`,
+    ),
+  nappiSearch: (q: string, limit = 200) =>
+    request<NappiRow[]>(
+      `/api/reference/nappi?q=${encodeURIComponent(q)}&limit=${limit}`,
+    ),
+  icd10Search: (q: string, limit = 200) =>
+    request<Icd10Row[]>(
+      `/api/reference/icd10?q=${encodeURIComponent(q)}&limit=${limit}`,
     ),
 
   // — dashboard —

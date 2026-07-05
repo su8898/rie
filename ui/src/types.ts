@@ -74,6 +74,25 @@ export interface TariffRate {
   rate: number;
 }
 
+export interface NappiRow {
+  nappi_code: string;
+  sep: number;
+}
+
+export interface Icd10Row {
+  code: string;
+  description: string;
+  chapter: string;
+  valid_primary: boolean;
+}
+
+export interface RefEdition {
+  kind: string;
+  version: string;
+  n: number;
+  synced_at: string | null;
+}
+
 export interface ClaimRaw {
   claim_id: string;
   claim_type: string;

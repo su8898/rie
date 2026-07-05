@@ -21,6 +21,7 @@ const NAV: { to: string; label: string; role?: Role }[] = [
   { to: "/coding", label: "Coding" },
   { to: "/governance", label: "Governance" },
   { to: "/notifications", label: "Notifications" },
+  { to: "/reference", label: "Reference" },
   { to: "/reasons", label: "Reasons" },
   { to: "/admin", label: "Admin", role: "ADMIN" },
 ];

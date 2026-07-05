@@ -19,6 +19,7 @@ import LoginPage from "./pages/Login";
 import NotificationsPage from "./pages/Notifications";
 import PaymentsPage from "./pages/Payments";
 import ReasonsPage from "./pages/Reasons";
+import ReferencePage from "./pages/Reference";
 import SubmitPage from "./pages/Submit";
 
 export default function App() {
@@ -46,6 +47,7 @@ export default function App() {
         <Route path="/coding" element={<CodingPage />} />
         <Route path="/governance" element={<GovernancePage />} />
         <Route path="/notifications" element={<NotificationsPage />} />
+        <Route path="/reference" element={<ReferencePage />} />
         <Route path="/reasons" element={<ReasonsPage />} />
         <Route path="/admin" element={<AdminPage />} />
       </Route>
