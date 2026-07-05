@@ -38,6 +38,22 @@ def test_offer_all_heads():
     assert r["gated_by"] == []
 
 
+def test_offer_loss_of_support_and_funeral_heads():
+    # a deceased-claimant offer: dependants' loss of support (§5c) + funeral (§5e)
+    _login()
+    p = {**BASE, "claim_id": "R_off4", "party_token": "P_off4", "heads_input": {
+        "loss_of_support": {"annual_losses": [200000, 500000]},
+        "funeral": {"necessary_costs": 40000, "non_necessary": 6000}}}
+    r = client.post("/api/offer", json=p).json()
+    # loss of support shares the Sweatman cap engine: cap@accident-date (2026-02-01) = 378581
+    assert r["heads"]["loss_of_support"]["total"] == 578581.0       # 200000 + min(500000,378581)
+    assert len(r["heads"]["loss_of_support"]["worksheet"]) == 2
+    assert r["heads"]["funeral"]["amount"] == 40000.0              # fault 0 -> full necessary costs
+    assert r["heads"]["funeral"]["reasons"] == ["FUNERAL_SCOPE"]   # non-necessary present -> soft flag
+    assert r["offer_total"] == round(500.0 + 578581.0 + 40000.0, 2)
+    assert r["gated_by"] == []
+
+
 def test_offer_gd_gated_without_si():
     _login()
     p = {**BASE, "claim_id": "R_off2", "party_token": "P_off2", "si_accepted": False,

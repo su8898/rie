@@ -9,7 +9,10 @@ from datetime import date
 
 import pytest
 
-from engine.heads import apportion, head_general_damages, head_loss_of_earnings, head_past_medical
+from engine.heads import (
+    apportion, head_funeral, head_general_damages, head_loss_of_earnings,
+    head_loss_of_support, head_past_medical,
+)
 from engine.models import Claim, LineResult, Ruleset
 
 
@@ -137,6 +140,64 @@ def test_gd_within_band_apportioned():
     # within band, fault 50 -> 150000 * 0.5 = 75000
     assert head_general_damages(_claim(si_accepted=True, fault_pct=50.0), 100000.0, 200000.0, 150000.0) == \
         (75000.0, [])
+
+
+# ── head_loss_of_support (§5c — shares the Sweatman cap engine) ───────────────
+def test_loss_of_support_caps_year_by_year_then_apportions():
+    total, ws = head_loss_of_support([200000.0, 100000.0], _claim(fault_pct=25.0), _rs_two_epochs())
+    assert ws == [
+        {"year": 1, "loss": 200000.0, "cap": 160000.0, "capped": 160000.0},  # min(200000,160000)
+        {"year": 2, "loss": 100000.0, "cap": 160000.0, "capped": 100000.0},  # min(100000,160000)
+    ]
+    assert total == 195000.0                              # (160000 + 100000) * 0.75
+
+
+def test_loss_of_support_equals_loss_of_earnings_on_same_inputs():
+    c, rs = _claim(fault_pct=40.0), _rs_two_epochs()      # s17(4)(c) caps income OR support alike
+    assert head_loss_of_support([300000.0, 90000.0], c, rs) == \
+        head_loss_of_earnings([300000.0, 90000.0], c, rs)
+
+
+def test_loss_of_support_empty_zero():
+    assert head_loss_of_support([], _claim(fault_pct=25.0), _rs_two_epochs()) == (0.0, [])
+
+
+# ── head_funeral (§5e) ───────────────────────────────────────────────────────
+def test_funeral_necessary_only_no_flag_full_when_no_fault():
+    assert head_funeral(_claim(fault_pct=0.0), 30000.0) == (30000.0, [])
+
+
+def test_funeral_apportioned():
+    # fault 25 -> 30000 * 0.75 = 22500
+    assert head_funeral(_claim(fault_pct=25.0), 30000.0) == (22500.0, [])
+
+
+def test_funeral_non_necessary_raises_soft_scope_flag_pays_necessary():
+    # non-necessary present -> FUNERAL_SCOPE (soft, review); pays the necessary component only
+    assert head_funeral(_claim(fault_pct=0.0), 30000.0, 5000.0) == (30000.0, ["FUNERAL_SCOPE"])
+
+
+def test_funeral_zero_non_necessary_no_flag():
+    assert head_funeral(_claim(fault_pct=0.0), 30000.0, 0.0) == (30000.0, [])
+
+
+# ── engine ≡ oracle on the new heads (protects the spec mirror) ──────────────
+def test_new_heads_match_the_oracle():
+    import engine as E
+    import spec.rie_engine as O
+
+    def build(M):
+        c = M.Claim(claim_id="R", claim_type="PERSONAL", party_token="P",
+                    accident_date=date(2020, 6, 1), lodged_on=date(2020, 7, 1),
+                    case_number_raw=None, documents={}, lines=[], fault_pct=20.0)
+        rs = M.Ruleset(caps=[(date(2015, 1, 1), 160000.0), (date(2026, 1, 31), 378581.0)])
+        return c, rs
+
+    ce, re = build(E)
+    co, ro = build(O)
+    assert E.head_loss_of_support([250000.0, 90000.0], ce, re) == \
+        O.head_loss_of_support([250000.0, 90000.0], co, ro)
+    assert E.head_funeral(ce, 40000.0, 6000.0) == O.head_funeral(co, 40000.0, 6000.0)
 
 
 def test_gd_boundary_values_are_within_band():

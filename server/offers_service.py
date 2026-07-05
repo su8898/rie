@@ -40,11 +40,21 @@ def compute_offer(db: Session, payload: dict, today: Optional[date] = None) -> d
             [float(x) for x in loe["annual_losses"]], claim, rs)
         heads["loss_of_earnings"] = {"total": total, "worksheet": worksheet}
 
+    if los := hi.get("loss_of_support"):                                      # §5c — dependants (deceased)
+        total, worksheet = engine.head_loss_of_support(
+            [float(x) for x in los["annual_losses"]], claim, rs)
+        heads["loss_of_support"] = {"total": total, "worksheet": worksheet}
+
     if gd := hi.get("general_damages"):
         amount, gd_reasons = engine.head_general_damages(
             claim, float(gd.get("band_p25", 0.0)), float(gd.get("band_p75", 0.0)),
             float(gd["proposed"]))
         heads["general_damages"] = {"amount": amount, "reasons": gd_reasons}
+
+    if fun := hi.get("funeral"):                                              # §5e — deceased claimant
+        amount, fun_reasons = engine.head_funeral(
+            claim, float(fun["necessary_costs"]), float(fun.get("non_necessary", 0.0)))
+        heads["funeral"] = {"amount": amount, "reasons": fun_reasons}
 
     gated_by: list[str] = []
     if claim.merits_accepted is not True:                                     # §4c — no offer without merits
@@ -53,7 +63,9 @@ def compute_offer(db: Session, payload: dict, today: Optional[date] = None) -> d
     else:
         offer_total = (heads["past_medical"]
                        + heads.get("loss_of_earnings", {}).get("total", 0.0)
-                       + heads.get("general_damages", {}).get("amount", 0.0))
+                       + heads.get("loss_of_support", {}).get("total", 0.0)
+                       + heads.get("general_damages", {}).get("amount", 0.0)
+                       + heads.get("funeral", {}).get("amount", 0.0))
 
     return {"claim_id": claim.claim_id, "determination": record, "heads": heads,
             "offer_total": round(offer_total, 2), "gated_by": gated_by}
@@ -93,10 +105,18 @@ def persist_offer(db: Session, claim_id: str, heads_input: dict, user: dict,
         db.add(models.OfferHead(offer_id=offer.id, head="LOSS_OF_EARNINGS",
                                 amount=heads["loss_of_earnings"]["total"],
                                 detail={"worksheet": heads["loss_of_earnings"]["worksheet"]}))
+    if "loss_of_support" in heads:
+        db.add(models.OfferHead(offer_id=offer.id, head="LOSS_OF_SUPPORT",
+                                amount=heads["loss_of_support"]["total"],
+                                detail={"worksheet": heads["loss_of_support"]["worksheet"]}))
     if "general_damages" in heads:
         db.add(models.OfferHead(offer_id=offer.id, head="GENERAL_DAMAGES",
                                 amount=heads["general_damages"]["amount"],
                                 detail={"reasons": heads["general_damages"]["reasons"]}))
+    if "funeral" in heads:
+        db.add(models.OfferHead(offer_id=offer.id, head="FUNERAL",
+                                amount=heads["funeral"]["amount"],
+                                detail={"reasons": heads["funeral"]["reasons"]}))
     db.commit()
     return {"offer_id": offer.id, "status": status, **result}
 

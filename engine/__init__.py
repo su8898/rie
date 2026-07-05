@@ -12,7 +12,8 @@ from .corroboration import convergence, corroboration_signals
 from .disposition import disposition
 from .gates import merits_gate, prescription_gates, s24_gates, standing_gates
 from .heads import (
-    apportion, head_general_damages, head_loss_of_earnings, head_past_medical,
+    apportion, head_funeral, head_general_damages, head_loss_of_earnings,
+    head_loss_of_support, head_past_medical,
 )
 from .models import (
     Accident, Assessment, Authorisation, Claim, Line, LineResult, Ruleset, Undertaking,
@@ -32,7 +33,8 @@ __all__ = [
     "resolve", "dispensing_fee", "RefBook", "adjudicate_line", "find_authorisation",
     "resolve_accident", "normalise_cas", "match_score", "convergence", "corroboration_signals",
     "prescription_gates", "s24_gates", "standing_gates", "merits_gate",
-    "apportion", "head_past_medical", "head_loss_of_earnings", "head_general_damages",
+    "apportion", "head_past_medical", "head_loss_of_earnings", "head_loss_of_support",
+    "head_general_damages", "head_funeral",
     "Claim", "Line", "Accident", "Authorisation", "Undertaking", "Ruleset", "LineResult",
     "Assessment", "R", "MODE",
     "LegalStatus", "Maturity", "SignalMode", "Category", "Band", "ReasonMeta",
