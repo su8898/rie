@@ -19,7 +19,7 @@ from engine.reference import RefBook
 def _book(**over) -> RefBook:
     base = dict(
         negotiated={("TARIFF", "55"): 400.0},
-        rpl={"190": (500.0, 700.0)},
+        rpl={"190": {"GP": 500.0, "SPECIALIST": 700.0}},
         raf2022={"200": 300.0, "300": 50.0},
         empirical={("TARIFF", "300"): 300.0, ("NAPPI", "888"): 90.0},
         sep={}, non_benchmarkable=set(),

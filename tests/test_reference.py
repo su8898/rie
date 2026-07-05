@@ -18,7 +18,7 @@ from engine.vocab import LegalStatus
 def _book(**over) -> RefBook:
     base = dict(
         negotiated={("TARIFF", "55"): 400.0, ("NAPPI", "NEG1"): 12.0},
-        rpl={"190": (500.0, 700.0), "23": (100.0, None)},
+        rpl={"190": {"GP": 500.0, "SPECIALIST": 700.0}, "23": {"GP": 100.0}},
         raf2022={"200": 300.0, "300": 50.0, "400": 5.0},
         empirical={("TARIFF", "999"): 250.0, ("TARIFF", "300"): 300.0, ("NAPPI", "888"): 90.0},
         sep={"700101": 88.40, "700200": 200.0},
@@ -83,6 +83,19 @@ def test_resolve_rpl_specialist_falls_back_to_gp_when_no_spec_rate():
 def test_resolve_rpl_gp_tier_ignores_spec_rate():
     # default tier GP -> gp rate even though a spec rate exists
     assert resolve(_book(), "TARIFF", "0190", "GP")[0] == 500.0
+
+
+def test_resolve_rpl_discipline_specific():
+    # a code priced per discipline -> the billing discipline's rate
+    book = _book(rpl={"190": {"GP": 10.6, "CHIRO": 399.06}})
+    assert resolve(book, "TARIFF", "0190", "CHIRO")[0] == 399.06
+    assert resolve(book, "TARIFF", "0190", "GP")[0] == 10.6
+
+
+def test_resolve_rpl_falls_back_to_cheapest_when_no_gp():
+    # discipline absent AND no GP schedule -> cheapest rate (conservative)
+    book = _book(rpl={"190": {"CHIRO": 399.06, "DENTAL": 120.0}})
+    assert resolve(book, "TARIFF", "0190", "PHYSIO")[0] == 120.0
 
 
 # ── resolve: RAF 2022 interdicted ────────────────────────────────────────────

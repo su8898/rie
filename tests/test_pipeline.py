@@ -18,7 +18,7 @@ TODAY = date(2026, 7, 5)
 def _book(**over) -> RefBook:
     base = dict(
         negotiated={("TARIFF", "55"): 400.0},
-        rpl={"190": (500.0, 700.0)},
+        rpl={"190": {"GP": 500.0, "SPECIALIST": 700.0}},
         raf2022={"200": 300.0, "300": 50.0},
         empirical={("TARIFF", "300"): 300.0},
         sep={"700101": 88.40}, non_benchmarkable=set(),

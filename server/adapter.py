@@ -18,7 +18,7 @@ def json_to_claim(p: dict) -> engine.Claim:
         kind=l["kind"], code=l["code"], qty=float(l["qty"]), amount=float(l["amount"]),
         service_date=date.fromisoformat(l["service_date"]), provider_id=l["provider_id"],
         dx=l.get("dx", ""), emergency=bool(l.get("emergency", False)),
-        scheme_paid=bool(l.get("scheme_paid", False)),
+        scheme_paid=bool(l.get("scheme_paid", False)), discipline=l.get("discipline", ""),
     ) for l in p.get("lines", [])]
 
     u = None

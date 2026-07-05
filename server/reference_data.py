@@ -1,6 +1,8 @@
 """Assemble the engine's RefBook + Ruleset from the reference tables (scheme rules as data)."""
 from __future__ import annotations
 
+from collections import defaultdict
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -26,7 +28,10 @@ def build_refbook(db: Session, nappi_codes=None) -> engine.RefBook:
     # claim would be fatal. When `nappi_codes` is given (the codes on the claim being priced) we
     # fetch only those (indexed lookups); `None` loads all (fine for small/test corpora).
     negotiated = {_kn(r.kind, r.code): r.rate for r in db.scalars(select(models.RefNegotiated))}
-    rpl = {_norm(r.code): (r.gp, r.spec) for r in db.scalars(select(models.RefRpl))}
+    rpl: dict = defaultdict(dict)                     # code -> {discipline -> rate}
+    for r in db.scalars(select(models.RefRpl)):
+        rpl[_norm(r.code)][r.discipline] = r.rate
+    rpl = dict(rpl)
     raf2022 = {_norm(r.code): r.rate for r in db.scalars(select(models.RefRaf2022))}
     empirical = {_kn(r.kind, r.code): r.median for r in db.scalars(select(models.RefEmpirical))}
     non_bench = {r.code for r in db.scalars(select(models.RefNonBench))}

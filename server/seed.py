@@ -40,11 +40,13 @@ def seed_demo_pricing(db: Session) -> None:
     """Small demo reference prices — ONLY when no real reference data (ref_rpl) is loaded."""
     if not _empty(db, models.RefRpl):
         return
-    # TARIFF-family codes stored NORMALISED (zero-stripped), matching db/load_reference.py.
+    # TARIFF-family codes stored NORMALISED (zero-stripped), matching db/load_reference.py;
+    # RPL rates are per-discipline (code 190 differs GP vs SPECIALIST).
     db.add_all([
-        models.RefRpl(code="190", gp=500.0, spec=700.0),
-        models.RefRpl(code="23", gp=100.0, spec=None),
-        models.RefRpl(code="100", gp=200.0, spec=None),
+        models.RefRpl(code="190", discipline="GP", rate=500.0),
+        models.RefRpl(code="190", discipline="SPECIALIST", rate=700.0),
+        models.RefRpl(code="23", discipline="GP", rate=100.0),
+        models.RefRpl(code="100", discipline="GP", rate=200.0),
         models.RefNegotiated(kind="TARIFF", code="55", rate=400.0),
         models.RefRaf2022(code="200", rate=300.0),
         models.RefRaf2022(code="300", rate=50.0),

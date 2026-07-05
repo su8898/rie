@@ -31,7 +31,7 @@ def _book(M):
     # "0190"->"190"); NAPPI codes and the non-benchmarkable set key on the raw code.
     return M.RefBook(
         negotiated={("TARIFF", "55"): 400.0},
-        rpl={"190": (500.0, 700.0), "23": (100.0, None), "100": (200.0, None)},
+        rpl={"190": {"GP": 500.0, "SPECIALIST": 700.0}, "23": {"GP": 100.0}, "100": {"GP": 200.0}},
         raf2022={"200": 300.0, "300": 50.0},
         empirical={("TARIFF", "999"): 250.0, ("TARIFF", "300"): 300.0, ("NAPPI", "888"): 90.0},
         sep={"700101": 88.40},
@@ -47,9 +47,9 @@ def _rs(M):
 
 
 def _line(M, code="0190", amount=500.0, qty=1.0, kind="TARIFF", dx="S72",
-          provider="PR1", svc=date(2026, 3, 1), emergency=False):
+          provider="PR1", svc=date(2026, 3, 1), emergency=False, discipline=""):
     return M.Line(kind=kind, code=code, qty=qty, amount=amount, service_date=svc,
-                  provider_id=provider, dx=dx, emergency=emergency)
+                  provider_id=provider, dx=dx, emergency=emergency, discipline=discipline)
 
 
 def _claim(M, ctype="SUPPLIER", lines=None, docs=None, **kw):
@@ -117,6 +117,18 @@ def negotiated_enforceable_reprice(M):
 def specialist_reprice(M):
     return _std(M, _claim(M, lines=[_line(M, code="0190", amount=800.0)]),
                 provider_tier="SPECIALIST")
+
+
+@scenario
+def line_discipline_specialist(M):
+    # per-line discipline -> SPECIALIST tariff (700); billed 800 -> repriced to 700
+    return _std(M, _claim(M, lines=[_line(M, code="0190", amount=800.0, discipline="SPECIALIST")]))
+
+
+@scenario
+def line_discipline_unknown_falls_back_to_gp(M):
+    # a discipline absent from the code's schedule -> GP fallback (500); billed 800 -> 500
+    return _std(M, _claim(M, lines=[_line(M, code="0190", amount=800.0, discipline="CHIRO")]))
 
 
 @scenario

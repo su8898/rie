@@ -125,9 +125,9 @@ CREATE TABLE ref_raf2022 (
 
 CREATE TABLE ref_rpl (
 	code VARCHAR NOT NULL, 
-	gp FLOAT NOT NULL, 
-	spec FLOAT, 
-	PRIMARY KEY (code)
+	discipline VARCHAR NOT NULL, 
+	rate FLOAT NOT NULL, 
+	PRIMARY KEY (code, discipline)
 );
 
 CREATE TABLE transition_log (

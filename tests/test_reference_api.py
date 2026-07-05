@@ -15,7 +15,8 @@ def _login(user="handler"):
 def test_tariff_lookup_normalises_code():
     _login()
     t = client.get("/api/reference/tariffs", params={"code": "0190"}).json()   # -> normalised "190"
-    assert t and t[0]["code"] == "190" and t[0]["gp"] == 500.0 and t[0]["spec"] == 700.0
+    rates = {r["discipline"]: r["rate"] for r in t}
+    assert t[0]["code"] == "190" and rates["GP"] == 500.0 and rates["SPECIALIST"] == 700.0
 
 
 def test_nappi_lookup():

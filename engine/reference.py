@@ -14,12 +14,13 @@ from .vocab import LegalStatus
 
 GAZETTE_FLOOR, OCR_SUSPECT_RATIO = 10.0, 0.33
 DISP_FEE_THRESHOLD, DISP_FEE_PCT, DISP_FEE_FLAT = 155.0, 0.30, 46.50
+GP_DISCIPLINE = "GP"                                   # fallback discipline for tariff resolution
 
 
 @dataclass
 class RefBook:
     negotiated: dict[tuple[str, str], float]          # (kind, code) -> rate
-    rpl: dict[str, tuple[float, Optional[float]]]     # code -> (gp, specialist)
+    rpl: dict[str, dict[str, float]]                  # code -> {discipline -> rate} (RAF-Δ §3)
     raf2022: dict[str, float]                         # discipline-resolved gazette rate
     empirical: dict[tuple[str, str], float]
     sep: dict[str, float]                             # NAPPI -> single exit price
@@ -30,9 +31,10 @@ def dispensing_fee(sep: float) -> float:
     return round(sep * DISP_FEE_PCT, 2) if sep < DISP_FEE_THRESHOLD else DISP_FEE_FLAT
 
 
-def resolve(book: RefBook, kind: str, code: str, tier: str = "GP"
+def resolve(book: RefBook, kind: str, code: str, discipline: str = GP_DISCIPLINE
             ) -> tuple[Optional[float], str, Optional[LegalStatus]]:
-    """-> (rate, src, legal_status). Only ENFORCEABLE/ACCEPTED drive the payment rule."""
+    """-> (rate, src, legal_status). The tariff rate resolves for the billing provider's
+    discipline (exact -> GP -> cheapest). Only ENFORCEABLE/ACCEPTED drive the payment rule."""
     if code in book.non_benchmarkable:
         return None, "—", None
     nc = code.lstrip("0") or "0" if kind == "TARIFF" else code   # normalisation
@@ -40,8 +42,8 @@ def resolve(book: RefBook, kind: str, code: str, tier: str = "GP"
         return book.negotiated[(kind, nc)], "negotiated", LegalStatus.ENFORCEABLE
     if kind == "TARIFF":
         if nc in book.rpl:
-            gp, spec = book.rpl[nc]
-            rate = spec if (tier == "SPECIALIST" and spec) else gp
+            rates = book.rpl[nc]                                 # {discipline: rate}
+            rate = rates.get(discipline) or rates.get(GP_DISCIPLINE) or min(rates.values())
             return rate, "RPL", LegalStatus.ACCEPTED
         if nc in book.raf2022 and book.raf2022[nc] >= GAZETTE_FLOOR:
             g, emp = book.raf2022[nc], book.empirical.get((kind, nc))

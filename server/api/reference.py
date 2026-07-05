@@ -31,8 +31,9 @@ def tariffs(code: str | None = None, q: str | None = None, limit: int = Query(50
         stmt = stmt.where(models.RefRpl.code == _norm(code))
     elif q:
         stmt = stmt.where(models.RefRpl.code.like(f"{_norm(q)}%"))
-    return [{"code": r.code, "gp": r.gp, "spec": r.spec}
-            for r in db.scalars(stmt.order_by(models.RefRpl.code).limit(limit))]
+    return [{"code": r.code, "discipline": r.discipline, "rate": r.rate}
+            for r in db.scalars(stmt.order_by(models.RefRpl.code, models.RefRpl.discipline)
+                                .limit(limit))]
 
 
 @router.get("/nappi")

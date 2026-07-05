@@ -27,9 +27,9 @@ class AppUser(Base):
 # ── reference (effective-dated, loader-populated) ────────────────────────────
 class RefRpl(Base):
     __tablename__ = "ref_rpl"
-    code: Mapped[str] = mapped_column(String, primary_key=True)
-    gp: Mapped[float] = mapped_column(Float)
-    spec: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    code: Mapped[str] = mapped_column(String, primary_key=True)      # normalised tariff code
+    discipline: Mapped[str] = mapped_column(String, primary_key=True)
+    rate: Mapped[float] = mapped_column(Float)
 
 
 class RefNegotiated(Base):

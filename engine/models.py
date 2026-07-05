@@ -39,6 +39,7 @@ class Line:
     dx: str                        # ICD-10 on the line
     emergency: bool = False
     scheme_paid: bool = False
+    discipline: str = ""           # billing provider's discipline; "" -> claim default (§3)
 
 
 @dataclass

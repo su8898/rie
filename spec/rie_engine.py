@@ -152,6 +152,7 @@ class Line:
     dx: str                       # ICD-10 on the line
     emergency: bool = False
     scheme_paid: bool = False
+    discipline: str = ""          # billing provider's discipline; "" -> claim default (§3)
 
 @dataclass
 class Authorisation:              # §5f — a promise priced in advance
@@ -286,11 +287,12 @@ def corroboration_signals(a: Accident, cohort_is_bus_taxi: bool, conv_floor_p10:
 
 GAZETTE_FLOOR, OCR_SUSPECT_RATIO = 10.0, 0.33
 DISP_FEE_THRESHOLD, DISP_FEE_PCT, DISP_FEE_FLAT = 155.0, 0.30, 46.50
+GP_DISCIPLINE = "GP"                                   # fallback discipline for tariff resolution
 
 @dataclass
 class RefBook:
     negotiated: dict[tuple[str, str], float]          # (kind, code) → rate
-    rpl: dict[str, tuple[float, Optional[float]]]     # code → (gp, specialist)
+    rpl: dict[str, dict[str, float]]                  # code → {discipline → rate} (RAF-Δ §3)
     raf2022: dict[str, float]                         # discipline-resolved gazette rate
     empirical: dict[tuple[str, str], float]
     sep: dict[str, float]                             # NAPPI → single exit price
@@ -299,9 +301,10 @@ class RefBook:
 def dispensing_fee(sep: float) -> float:
     return round(sep * DISP_FEE_PCT, 2) if sep < DISP_FEE_THRESHOLD else DISP_FEE_FLAT
 
-def resolve(book: RefBook, kind: str, code: str, tier: str = "GP"
+def resolve(book: RefBook, kind: str, code: str, discipline: str = GP_DISCIPLINE
             ) -> tuple[Optional[float], str, Optional[LegalStatus]]:
-    """→ (rate, src, legal_status). Only ENFORCEABLE/ACCEPTED drive the payment rule."""
+    """→ (rate, src, legal_status). The tariff rate resolves for the billing provider's
+    discipline (exact → GP → cheapest). Only ENFORCEABLE/ACCEPTED drive the payment rule."""
     if code in book.non_benchmarkable:
         return None, "—", None
     nc = code.lstrip("0") or "0" if kind == "TARIFF" else code   # normalisation
@@ -309,8 +312,8 @@ def resolve(book: RefBook, kind: str, code: str, tier: str = "GP"
         return book.negotiated[(kind, nc)], "negotiated", LegalStatus.ENFORCEABLE
     if kind == "TARIFF":
         if nc in book.rpl:
-            gp, spec = book.rpl[nc]
-            rate = spec if (tier == "SPECIALIST" and spec) else gp
+            rates = book.rpl[nc]                                 # {discipline: rate}
+            rate = rates.get(discipline) or rates.get(GP_DISCIPLINE) or min(rates.values())
             return rate, "RPL", LegalStatus.ACCEPTED
         if nc in book.raf2022 and book.raf2022[nc] >= GAZETTE_FLOOR:
             g, emp = book.raf2022[nc], book.empirical.get((kind, nc))
@@ -418,8 +421,8 @@ def adjudicate_line(c: Claim, line: Line, book: RefBook, rs: Ruleset,
         if line.code in rs.preauth_required and not line.emergency:
             return LineResult(0.0, reasons + ["PREAUTH_MISSING"], "—")
 
-    # 6.3 reference pricing — the payment rule (§3)
-    rate, src, status = resolve(book, line.kind, line.code, tier)
+    # 6.3 reference pricing — the payment rule (§3); resolve for the line's provider discipline
+    rate, src, status = resolve(book, line.kind, line.code, line.discipline or tier)
     if rate is None:
         return LineResult(line.amount, reasons, src, needs_review=True)   # uncovered → R&N review
     expected = round(rate * line.qty, 2)

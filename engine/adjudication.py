@@ -56,8 +56,8 @@ def adjudicate_line(c: Claim, line: Line, book: RefBook, rs: Ruleset,
         if line.code in rs.preauth_required and not line.emergency:
             return LineResult(0.0, reasons + ["PREAUTH_MISSING"], "—")
 
-    # reference pricing — the payment rule (§3)
-    rate, src, status = resolve(book, line.kind, line.code, tier)
+    # reference pricing — the payment rule (§3); resolve for the line's provider discipline
+    rate, src, status = resolve(book, line.kind, line.code, line.discipline or tier)
     if rate is None:
         return LineResult(line.amount, reasons, src, needs_review=True)   # uncovered -> R&N review
     expected = round(rate * line.qty, 2)

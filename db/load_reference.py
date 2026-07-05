@@ -8,9 +8,9 @@ reference.db (a SQLite snapshot) holds:
 
 Mapping into RIE:
   ref_tariffs -> ref_rpl        the operative ACCEPTED tariff reference (pay min(billed, rate)).
-                                Per code we collapse disciplines: gp = the GP-discipline rate
-                                (else the sole rate); spec = a pricier specialist-discipline rate
-                                where one exists, so SPECIALIST-tier resolution uses it.
+                                One (code, discipline) -> rate row per schedule entry — no
+                                collapse; the engine resolves by the billing provider's discipline
+                                (exact -> GP -> cheapest). The GP schedule is stored as "GP".
                                 (To treat the tariff as INTERDICTED comparison-only instead, load
                                  into ref_raf2022 — a one-line change; the legal_status design
                                  supports the flip with no engine change.)
@@ -49,21 +49,18 @@ def _bulk(db, model, rows: list[dict]) -> None:
 
 
 def _load_tariffs(db, src) -> int:
-    by_code: dict = {}
+    # One row per (normalised code, discipline) — no collapse; the engine resolves by discipline.
+    # The GP schedule ("Doctors and General Practitioners") is stored as the canonical "GP" so the
+    # resolver's GP fallback works.
+    rows: dict = {}
     for r in src.execute("SELECT norm_code, discipline, rate FROM ref_tariffs "
                          "WHERE rate IS NOT NULL AND norm_code IS NOT NULL"):
-        by_code.setdefault(r["norm_code"], []).append((r["discipline"], float(r["rate"])))
-    rpl: dict = {}
-    for code, items in by_code.items():
-        gp = next((rate for disc, rate in items if disc == GP_DISCIPLINE), None)
-        rates = [rate for _, rate in items]
-        if gp is None:
-            gp = min(rates)
-        mx = max(rates)
-        rpl[_norm(code)] = {"code": _norm(code), "gp": gp, "spec": (mx if mx > gp else None)}
+        disc = "GP" if r["discipline"] == GP_DISCIPLINE else (r["discipline"] or "GP")
+        rows[(_norm(r["norm_code"]), disc)] = float(r["rate"])
     db.execute(delete(models.RefRpl))
-    _bulk(db, models.RefRpl, list(rpl.values()))
-    return len(rpl)
+    _bulk(db, models.RefRpl, [{"code": c, "discipline": d, "rate": rate}
+                              for (c, d), rate in rows.items()])
+    return len(rows)
 
 
 def _load_nappi(db, src) -> int:
