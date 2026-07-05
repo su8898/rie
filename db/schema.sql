@@ -34,6 +34,17 @@ CREATE TABLE claims (
 	PRIMARY KEY (claim_id)
 );
 
+CREATE TABLE payment_batch (
+	id SERIAL NOT NULL, 
+	status VARCHAR NOT NULL, 
+	created_by VARCHAR NOT NULL, 
+	approved_by VARCHAR, 
+	paid_by VARCHAR, 
+	note VARCHAR, 
+	created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now() NOT NULL, 
+	PRIMARY KEY (id)
+);
+
 CREATE TABLE ref_cap (
 	effective_from DATE NOT NULL, 
 	annual_cap FLOAT NOT NULL, 
@@ -171,6 +182,31 @@ CREATE TABLE offers (
 	gated_by JSON NOT NULL, 
 	created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now() NOT NULL, 
 	PRIMARY KEY (id), 
+	FOREIGN KEY(claim_id) REFERENCES claims (claim_id)
+);
+
+CREATE TABLE payment_event (
+	id SERIAL NOT NULL, 
+	batch_id INTEGER NOT NULL, 
+	event VARCHAR NOT NULL, 
+	actor VARCHAR NOT NULL, 
+	role VARCHAR NOT NULL, 
+	amount FLOAT, 
+	at TIMESTAMP WITHOUT TIME ZONE DEFAULT now() NOT NULL, 
+	detail JSON NOT NULL, 
+	PRIMARY KEY (id), 
+	FOREIGN KEY(batch_id) REFERENCES payment_batch (id)
+);
+
+CREATE TABLE payment_instruction (
+	id SERIAL NOT NULL, 
+	batch_id INTEGER NOT NULL, 
+	claim_id VARCHAR NOT NULL, 
+	source VARCHAR NOT NULL, 
+	amount FLOAT NOT NULL, 
+	paid BOOLEAN NOT NULL, 
+	PRIMARY KEY (id), 
+	FOREIGN KEY(batch_id) REFERENCES payment_batch (id), 
 	FOREIGN KEY(claim_id) REFERENCES claims (claim_id)
 );
 

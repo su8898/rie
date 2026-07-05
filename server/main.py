@@ -14,7 +14,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from .api import (
     accidents, auth, claims, dashboard, health, leakage, lifecycle, litigation, merits, offers,
-    reasons, serious_injury, undertakings,
+    payments, reasons, serious_injury, undertakings,
 )
 from .config import SECRET_KEY
 from .seed import init_db
@@ -49,7 +49,7 @@ async def _actor(request: Request, exc: WrongActor) -> JSONResponse:
 app.include_router(health.router)
 for r in (auth.router, claims.router, offers.router, reasons.router, dashboard.router,
           accidents.router, leakage.router, lifecycle.router, merits.router,
-          serious_injury.router, undertakings.router, litigation.router):
+          serious_injury.router, undertakings.router, litigation.router, payments.router):
     app.include_router(r, prefix="/api")
 
 

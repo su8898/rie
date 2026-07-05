@@ -222,3 +222,38 @@ class OfferHead(Base):
     head: Mapped[str] = mapped_column(String)
     amount: Mapped[float] = mapped_column(Float, default=0.0)
     detail: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+# ── payments (segregation of duties: assembler != approver) ──────────────────
+class PaymentBatch(Base):
+    __tablename__ = "payment_batch"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    status: Mapped[str] = mapped_column(String, default="OPEN", index=True)  # OPEN|APPROVED|PAID|CANCELLED
+    created_by: Mapped[str] = mapped_column(String)
+    approved_by: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    paid_by: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    note: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class PaymentInstruction(Base):
+    __tablename__ = "payment_instruction"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    batch_id: Mapped[int] = mapped_column(ForeignKey("payment_batch.id"), index=True)
+    claim_id: Mapped[str] = mapped_column(ForeignKey("claims.claim_id"), index=True)
+    source: Mapped[str] = mapped_column(String)   # SETTLEMENT|COURT_ORDER|UNDERTAKING_INVOICE|SUPPLIER|INTERIM
+    amount: Mapped[float] = mapped_column(Float, default=0.0)
+    paid: Mapped[bool] = mapped_column(default=False)
+
+
+class PaymentEvent(Base):
+    """Append-only money-audit log (§8e) — one row per created/instruction/approved/paid/cancelled."""
+    __tablename__ = "payment_event"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    batch_id: Mapped[int] = mapped_column(ForeignKey("payment_batch.id"), index=True)
+    event: Mapped[str] = mapped_column(String)
+    actor: Mapped[str] = mapped_column(String)
+    role: Mapped[str] = mapped_column(String)
+    amount: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    detail: Mapped[dict] = mapped_column(JSON, default=dict)
