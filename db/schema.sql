@@ -45,6 +45,24 @@ CREATE TABLE payment_batch (
 	PRIMARY KEY (id)
 );
 
+CREATE TABLE rails_seen_jti (
+	jti VARCHAR NOT NULL, 
+	at TIMESTAMP WITHOUT TIME ZONE DEFAULT now() NOT NULL, 
+	PRIMARY KEY (jti)
+);
+
+CREATE TABLE rails_submission (
+	submission_id VARCHAR NOT NULL, 
+	idempotency_key VARCHAR NOT NULL, 
+	body_hash VARCHAR NOT NULL, 
+	claim_id VARCHAR NOT NULL, 
+	outcome VARCHAR NOT NULL, 
+	verdict JSON NOT NULL, 
+	receipt JSON NOT NULL, 
+	created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now() NOT NULL, 
+	PRIMARY KEY (submission_id)
+);
+
 CREATE TABLE ref_cap (
 	effective_from DATE NOT NULL, 
 	annual_cap FLOAT NOT NULL, 

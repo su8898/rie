@@ -247,6 +247,26 @@ class PaymentInstruction(Base):
     paid: Mapped[bool] = mapped_column(default=False)
 
 
+class RailsSubmission(Base):
+    """A provider->fund rails submission: the signed verdict + receipt, idempotency-keyed."""
+    __tablename__ = "rails_submission"
+    submission_id: Mapped[str] = mapped_column(String, primary_key=True)
+    idempotency_key: Mapped[str] = mapped_column(String, index=True)
+    body_hash: Mapped[str] = mapped_column(String)
+    claim_id: Mapped[str] = mapped_column(String, index=True)
+    outcome: Mapped[str] = mapped_column(String)
+    verdict: Mapped[dict] = mapped_column(JSON)
+    receipt: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class RailsSeenJti(Base):
+    """Replay guard — each request's one-time JWS nonce is recorded once."""
+    __tablename__ = "rails_seen_jti"
+    jti: Mapped[str] = mapped_column(String, primary_key=True)
+    at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 class AuditQueue(Base):
     """Post-payment clawback recovery queue (§8e): OPEN -> UNDER_REVIEW -> RECOVERED / CLEARED."""
     __tablename__ = "audit_queue"

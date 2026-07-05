@@ -14,7 +14,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from .api import (
     accidents, audit, auth, claims, dashboard, health, leakage, lifecycle, litigation, merits,
-    offers, parties, payments, reasons, serious_injury, undertakings,
+    offers, parties, payments, rails, reasons, serious_injury, undertakings,
 )
 from .config import SECRET_KEY
 from .seed import init_db
@@ -53,6 +53,8 @@ for r in (auth.router, claims.router, offers.router, reasons.router, dashboard.r
           parties.router, audit.router):
     app.include_router(r, prefix="/api")
 
+app.include_router(rails.router)          # provider->fund rails: /rails/v1/... (JWS-authenticated)
+
 
 # Optionally serve the built React SPA (ui/dist) from this same service so the whole app runs on
 # one port — real files are served directly, unknown paths fall back to index.html for the SPA's
@@ -61,7 +63,7 @@ _UI_DIST = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 if os.path.isdir(_UI_DIST):
     @app.get("/{full_path:path}", include_in_schema=False)
     async def spa(full_path: str):
-        if full_path.startswith("api/"):
+        if full_path.startswith("api/") or full_path.startswith("rails/"):
             return JSONResponse(status_code=404, content={"detail": "not found"})
         candidate = os.path.normpath(os.path.join(_UI_DIST, full_path))
         if full_path and candidate.startswith(_UI_DIST) and os.path.isfile(candidate):

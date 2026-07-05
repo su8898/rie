@@ -8,3 +8,5 @@ DATABASE_URL = os.environ.get("RIE_DATABASE_URL", "sqlite:///./rie.db")
 SECRET_KEY = os.environ.get("RIE_SECRET_KEY", "dev-insecure-change-me")
 PAGE_SIZE = int(os.environ.get("RIE_PAGE_SIZE", "25"))
 APP_ENV = os.environ.get("RIE_APP_ENV", "dev")
+# Shared HS256 secret for the provider->fund submission rails (per-switch ES256 keys in prod).
+RAILS_SECRET = os.environ.get("RIE_RAILS_SECRET", "rie-rails-dev-secret")
