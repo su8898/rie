@@ -9,7 +9,9 @@ const NAV = [
   { to: "/claims", label: "Claims" },
   { to: "/submit", label: "Submit" },
   { to: "/payments", label: "Payments" },
+  { to: "/audit", label: "Audit" },
   { to: "/accidents", label: "Accidents" },
+  { to: "/intelligence", label: "Intelligence" },
   { to: "/reasons", label: "Reasons" },
 ];
 

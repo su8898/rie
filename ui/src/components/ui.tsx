@@ -287,3 +287,70 @@ export function Toast({
     </div>
   );
 }
+
+// ── Party-risk rating chip ───────────────────────────────────────────────────
+// CRITICAL=rose, HIGH=orange, ELEVATED=amber, WATCH=sky, LOW=slate.
+export function RatingChip({ rating }: { rating: string }) {
+  const cls =
+    rating === "CRITICAL"
+      ? "bg-rose-100 text-rose-800 ring-rose-600/20"
+      : rating === "HIGH"
+        ? "bg-orange-100 text-orange-800 ring-orange-600/20"
+        : rating === "ELEVATED"
+          ? "bg-amber-100 text-amber-800 ring-amber-600/20"
+          : rating === "WATCH"
+            ? "bg-sky-100 text-sky-800 ring-sky-600/20"
+            : "bg-slate-200 text-slate-600 ring-slate-500/20";
+  return (
+    <span
+      className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-semibold ring-1 ring-inset ${cls}`}
+    >
+      {rating}
+    </span>
+  );
+}
+
+// ── Horizontal 0–100 bar with a right-aligned numeric read-out ───────────────
+// `tone` picks the fill colour scheme: "score" ramps rose→amber→emerald by
+// magnitude (higher = worse for risk), "neutral" is a flat slate fill.
+export function Bar({
+  value,
+  tone = "neutral",
+  width = "w-24",
+}: {
+  value: number;
+  tone?: "score" | "neutral";
+  width?: string;
+}) {
+  const v = Math.max(0, Math.min(100, value));
+  const fill =
+    tone === "score"
+      ? v >= 55
+        ? "bg-rose-500"
+        : v >= 35
+          ? "bg-amber-500"
+          : "bg-emerald-500"
+      : "bg-slate-400";
+  return (
+    <div className="flex items-center gap-2">
+      <div className={`h-2 ${width} overflow-hidden rounded-full bg-slate-200`}>
+        <div className={`h-full rounded-full ${fill}`} style={{ width: `${v}%` }} />
+      </div>
+      <span className="tnum w-9 text-right text-xs text-slate-500">
+        {Math.round(v)}
+      </span>
+    </div>
+  );
+}
+
+// ── Muted "low-n" tag (too few claims to score robustly) ─────────────────────
+export function LowNTag() {
+  return (
+    <span
+      title="too few claims to score robustly"
+      className="inline-flex items-center rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-400"
+    >
+      low-n
+    </span>
+  );
+}

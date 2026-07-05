@@ -265,3 +265,118 @@ export interface BatchDict {
   instructions: PaymentInstruction[];
   events: PaymentEvent[];
 }
+
+// ── Party intelligence (/api/parties) ────────────────────────────────────────
+export type Rating = "CRITICAL" | "HIGH" | "ELEVATED" | "WATCH" | "LOW";
+export type Confidence = "OK" | "LOW_N";
+
+export interface RiskComponents {
+  behavioural: number;
+  cohort_outlier: number;
+  over_servicing: number;
+  history: number;
+}
+
+export interface Provider {
+  provider_id: string;
+  archetype: string;
+  cohort: string;
+  n_claims: number;
+  n_lines: number;
+  billed: number;
+  avg_value: number;
+  value_percentile: number;
+  red_rate: number;
+  flag_rate: number;
+  score: number;
+  rating: Rating;
+  confidence: Confidence;
+  components: RiskComponents;
+}
+
+export interface Attorney {
+  attorney: string;
+  cohort: string;
+  n_claims: number;
+  claim_type_mix: Record<string, number>;
+  late_lodgement_share: number;
+  score: number;
+  rating: Rating;
+  confidence: Confidence;
+  components: RiskComponents;
+}
+
+export interface Claimant {
+  party_token: string;
+  n_accidents: number;
+  accidents: string[];
+}
+
+export interface FairnessCohort {
+  cohort: string;
+  n_claims: number;
+  flag_rate: number;
+}
+
+export interface Fairness {
+  by_cohort: FairnessCohort[];
+  four_fifths_ratio: number;
+  pass: boolean;
+}
+
+// A flagged party from the risk sweep — the full provider/attorney dict plus a
+// discriminating `type` and `id`. We keep the shared fields typed and allow the
+// rest through.
+export interface RiskSweepHit {
+  type: "provider" | "attorney";
+  id: string;
+  score: number;
+  rating: Rating;
+  confidence: Confidence;
+  n_claims: number;
+  [k: string]: unknown;
+}
+
+export interface RiskSweep {
+  threshold: number;
+  n: number;
+  flagged: RiskSweepHit[];
+}
+
+// ── Audit / clawback recovery (/api/audit) ───────────────────────────────────
+export type AuditStatus = "OPEN" | "UNDER_REVIEW" | "RECOVERED" | "CLEARED";
+
+export type RecoveryOutcome =
+  | "RECOVERED_FULL"
+  | "RECOVERED_PARTIAL"
+  | "WRITTEN_OFF"
+  | "NOT_PURSUED";
+
+export interface AuditItem {
+  id: number;
+  claim_id: string;
+  status: AuditStatus;
+  reason: string;
+  amount_at_stake: number;
+  amount_recovered: number;
+  recovery_outcome: string | null;
+  assigned_to: string | null;
+  opened_by: string;
+  actions: string[];
+  opened_at: string | null;
+}
+
+export interface AuditRoi {
+  n_items: number;
+  amount_at_stake: number;
+  amount_recovered: number;
+  recovery_rate: number;
+  by_status: Record<string, number>;
+  by_outcome: Record<string, number>;
+}
+
+export interface SweepResult {
+  opened: number[];
+  n: number;
+  threshold: number;
+}

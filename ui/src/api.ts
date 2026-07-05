@@ -4,17 +4,25 @@
 
 import type {
   Accident,
+  Attorney,
+  AuditItem,
+  AuditRoi,
   AuthUser,
   BatchDict,
   ClaimDetail,
+  Claimant,
   Dashboard,
   Determination,
+  Fairness,
   Health,
   Offer,
   OfferHeadsInput,
   PaymentSource,
+  Provider,
   QueueRow,
   Reason,
+  RiskSweep,
+  SweepResult,
   Workflow,
 } from "./types";
 
@@ -216,6 +224,37 @@ export const api = {
     request<BatchDict>(`/api/payments/batches/${id}/cancel`, {
       method: "POST",
       body: "{}",
+    }),
+
+  // — party intelligence —
+  providers: () => request<Provider[]>("/api/parties/providers"),
+  attorneys: () => request<Attorney[]>("/api/parties/attorneys"),
+  claimants: () => request<Claimant[]>("/api/parties/claimants"),
+  fairness: () => request<Fairness>("/api/parties/fairness"),
+  riskSweep: (threshold: number) =>
+    request<RiskSweep>(`/api/parties/risk-sweep?threshold=${threshold}`),
+
+  // — audit / clawback recovery —
+  auditItems: (status?: string) =>
+    request<AuditItem[]>(
+      `/api/audit${status ? `?status=${encodeURIComponent(status)}` : ""}`,
+    ),
+  auditRoi: () => request<AuditRoi>("/api/audit/roi"),
+  auditSweep: (threshold: number) =>
+    request<SweepResult>(`/api/audit/sweep?threshold=${threshold}`, {
+      method: "POST",
+      body: "{}",
+    }),
+  getAuditItem: (id: number) =>
+    request<AuditItem>(`/api/audit/${id}`),
+  auditAction: (
+    id: number,
+    action: string,
+    body: { amount?: number; outcome?: string } = {},
+  ) =>
+    request<AuditItem>(`/api/audit/${id}/${action}`, {
+      method: "POST",
+      body: JSON.stringify(body),
     }),
 };
 
