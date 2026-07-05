@@ -1,7 +1,17 @@
-// Build and POST a claim payload. On success, navigate to the new
-// determination's detail page. Three prefilled example buttons make the
-// happy paths easy to demo. Requires role HANDLER / MEDICAL_OFFICER / ADMIN;
-// other roles get a 403 which we surface inline.
+// Submit — the front door where a claim is scored (domain-logic §3–§9).
+//
+// Build a claim payload and POST it to the engine. The engine validates the
+// documents / gates (§4), prices each line against the reference —
+// payable = min(billed, reference), per-discipline for TARIFF, SEP for NAPPI
+// (§3) — assembles the six heads of damage (§5), and returns a banded,
+// dispositioned determination: deterministic, provenance-stamped, the same
+// numbers here as in the payment path. On success we navigate to that new
+// determination's detail page (the full result, holds and reasons live there).
+//
+// Everything the form captures is an assessment input, mirrored live in the
+// payload preview so what the engine reads is never hidden. Three prefilled
+// example buttons walk the happy paths. Submitting requires role HANDLER /
+// MEDICAL_OFFICER / ADMIN; other roles get a 403 we surface inline.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -273,8 +283,25 @@ export default function SubmitPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-xl font-semibold text-slate-900">Submit claim</h1>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <header>
+          <h1 className="text-xl font-semibold text-slate-900">Submit claim</h1>
+          <p className="mt-0.5 max-w-3xl text-sm text-slate-500">
+            The front door where a claim is scored. The engine validates the
+            documents and gates, prices each line —{" "}
+            <span className="font-medium text-slate-600">
+              payable = min(billed, reference)
+            </span>{" "}
+            — assembles the six heads of damage, and returns a{" "}
+            <span className="font-medium text-slate-600">band</span> (the risk
+            read), a worst-wins{" "}
+            <span className="font-medium text-slate-600">disposition</span>{" "}
+            (where it routes) and a settled rand figure. Deterministic and
+            provenance-stamped: same inputs, same determination, stamped with the
+            engine version and reference edition that produced it (domain-logic
+            §3–§9). The payload below is exactly what it reads.
+          </p>
+        </header>
         <div className="flex flex-wrap gap-2">
           <ExampleBtn label="Clean supplier" onClick={() => setDraft(exampleClean())} />
           <ExampleBtn label="Billed-over" onClick={() => setDraft(exampleBilledOver())} />
@@ -287,14 +314,19 @@ export default function SubmitPage() {
 
       {!canSubmit && (
         <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-800">
-          You are signed in as <b>{user?.role}</b>. Submitting requires HANDLER,
-          MEDICAL_OFFICER, or ADMIN — the request will be rejected with 403.
+          You are signed in as <b>{user?.role}</b>. Scoring a claim is an
+          adjudication action, reserved for HANDLER, MEDICAL_OFFICER, or ADMIN —
+          the engine will reject this submission with 403. You can still build a
+          payload and watch the preview.
         </div>
       )}
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="space-y-6 lg:col-span-2">
-          <Card title="Claim">
+          <Card
+            title="Claim"
+            sub="The claim's identity, timeline and eligibility inputs — each one an assessment parameter, not just metadata. Type selects which merits and document rules apply (RAF1 heads a PERSONAL claim, RAF2 a SUPPLIER one); accident + lodged dates drive the prescription clocks (3y identified / 2y unidentified, §4a); the case number is the OAR — the universal hard gate every claim needs (§4b). merits_accepted is the payment gate: no head pays without it, and fault % apportions every head by (1 − fault) (§4c)."
+          >
             <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
               <div>
                 <label className={labelCls}>Claim ID</label>
@@ -394,6 +426,12 @@ export default function SubmitPage() {
 
             <div className="mt-4">
               <label className={labelCls}>Documents</label>
+              <p className="mb-1.5 -mt-0.5 text-xs text-slate-400">
+                Substantial-compliance checklist (§4b): a missing required form is
+                a hard COMPLIANCE gate before pricing runs. RAF1 = PERSONAL claim
+                form + medical report, RAF2 = SUPPLIER form, RAF4 = serious-injury
+                (unlocks general damages, §5d).
+              </p>
               <div className="flex flex-wrap gap-3">
                 {DOC_KEYS.map((k) => (
                   <label
@@ -423,11 +461,18 @@ export default function SubmitPage() {
                   className="h-4 w-4 rounded border-slate-300"
                 />
                 payee_verified
+                <span className="text-xs text-slate-400">
+                  — payment gate; unverified holds the payout (PAYEE_UNVERIFIED,
+                  §8e)
+                </span>
               </label>
             </div>
           </Card>
 
-          <Card title="Lines">
+          <Card
+            title="Lines"
+            sub="The billed items — what gets priced. Each line is set against the reference: a TARIFF code at its per-discipline RPL rate, a NAPPI item at its Single Exit Price, and payable = min(billed, reference) (§3) — bill above and the line is repriced, not rejected. The dx (ICD-10) must corroborate the accident's injury regions or DX_ACCIDENT_MISMATCH flags for review; a service date before the accident is a hard causation gate (§4d). Priced lines sum into the past-medical head (§5a)."
+          >
             <div className="space-y-3">
               {draft.lines.map((l, i) => (
                 <LineRow
@@ -450,23 +495,35 @@ export default function SubmitPage() {
 
           {error && <ErrorBox message={error} />}
 
-          <div className="flex items-center gap-3">
-            <button
-              onClick={onSubmit}
-              disabled={busy}
-              className="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-50"
-            >
-              {busy ? "Submitting…" : "Submit claim"}
-            </button>
-            <span className="text-xs text-slate-400">
-              Seeded refs to try: TARIFF 0190, 0055, 0200 · NAPPI 700101
-            </span>
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-3">
+              <button
+                onClick={onSubmit}
+                disabled={busy}
+                className="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-50"
+              >
+                {busy ? "Submitting…" : "Submit claim"}
+              </button>
+              <span className="text-xs text-slate-400">
+                Scores the claim and opens its determination — band, disposition,
+                heads, holds and reasons.
+              </span>
+            </div>
+            <p className="text-xs text-slate-400">
+              Seeded refs to try: TARIFF 0190, 0055, 0200 · NAPPI 700101 — enter a
+              known code and the line shows its reference rate (ref: R…) for the
+              selected discipline, so you can see the min(billed, reference)
+              repricing before you submit.
+            </p>
           </div>
         </div>
 
         {/* Live payload preview */}
         <div>
-          <Card title="Payload preview">
+          <Card
+            title="Payload preview"
+            sub="The exact JSON POSTed to the engine, rebuilt live as you edit — nothing the engine reads is hidden. merits_accepted resolves to true / false / null (pending), each line carries its discipline for per-discipline pricing, and an empty discipline defers to the claim default."
+          >
             <pre className="max-h-[36rem] overflow-auto rounded bg-slate-900 p-3 text-[11px] leading-relaxed text-slate-100">
               {JSON.stringify(payload, null, 2)}
             </pre>

@@ -7,9 +7,11 @@
 //   Fairness   — disparate-impact by cohort + the four-fifths ratio + pass/fail.
 //   Risk sweep — threshold input -> flagged parties across providers/attorneys.
 //
-// Scores are cohort-relative and n-guarded: confidence "LOW_N" means too few
-// claims to score (shown as a muted "low-n" tag, score suppressed). A mostly
-// clean corpus scoring LOW everywhere is expected, not an error.
+// Scores are cohort-relative (a party is ranked within its own archetype, and
+// value percentiles are within-cohort — the false-positive control) and
+// n-guarded: confidence "LOW_N" means too few claims to score (shown as a muted
+// "low-n" tag, score suppressed). A mostly clean corpus scoring LOW everywhere
+// is the expected read, not an error. Domain-logic §7.
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { ApiError, api } from "../api";
@@ -51,12 +53,21 @@ export default function IntelligencePage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <header>
         <h1 className="text-xl font-semibold text-slate-900">Intelligence</h1>
-        <span className="text-xs text-slate-400">
-          party fraud analytics · cohort-relative, n-guarded
-        </span>
-      </div>
+        <p className="mt-0.5 max-w-3xl text-sm text-slate-500">
+          Party fraud analytics over the accident graph (§7). Scores are{" "}
+          <span className="font-medium text-slate-600">cohort-relative</span>: a
+          party is ranked against its own archetype — a neurosurgeon is not held
+          to a GP's numbers — and value percentiles are read{" "}
+          <span className="font-medium text-slate-600">within cohort</span>, the
+          false-positive control that keeps a legitimate specialty from looking
+          anomalous. Scores are <span className="font-medium text-slate-600">n-guarded</span>:{" "}
+          <span className="font-medium text-slate-600">LOW_N</span> means too few
+          claims to score, so the score is suppressed, not assumed clean. A mostly
+          clean corpus scoring LOW everywhere is the expected read, not a bug.
+        </p>
+      </header>
 
       {/* Section tabs */}
       <div className="flex gap-1 border-b border-slate-200">
@@ -145,18 +156,24 @@ function ProvidersTab() {
   );
 
   return (
-    <div className="space-y-3">
-      <SearchInput
-        value={q}
-        onChange={setQ}
-        placeholder="Search provider, cohort, rating…"
-      />
+    <Card
+      title="Providers — cohort-relative risk"
+      sub="Each provider is scored against its archetype (ER/trauma · hospital-based · rooms GP · allied/rehab · medico-legal expert · EMS), never the whole book — a specialty is its own cohort, not an anomaly. Value pct is the midrank percentile of average claim value within that cohort (the false-positive control). Score is a 0–100 composite of four components — behavioural, cohort-outlier, over-servicing and history (pricing and duplicate billing excluded as innocent, resolved at adjudication); expand a row to see the breakdown. Rows sort by any right-aligned column."
+      right={
+        <SearchInput
+          value={q}
+          onChange={setQ}
+          placeholder="Search provider, cohort, rating…"
+          className="w-64"
+        />
+      }
+    >
       {total === 0 ? (
         <Empty label="No providers match your search." />
       ) : (
-    <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+    <div className="overflow-hidden rounded-md border border-slate-100">
       <div className="overflow-x-auto">
-        <table className="min-w-full divide-y divide-slate-200 text-sm">
+        <table className="min-w-full divide-y divide-slate-100 text-sm">
           <thead className="bg-slate-50">
             <tr>
               <th className={th} />
@@ -240,7 +257,7 @@ function ProvidersTab() {
       />
     </div>
       )}
-    </div>
+    </Card>
   );
 }
 
@@ -286,18 +303,24 @@ function AttorneysTab() {
     );
 
   return (
-    <div className="space-y-3">
-      <SearchInput
-        value={q}
-        onChange={setQ}
-        placeholder="Search attorney, cohort, rating…"
-      />
+    <Card
+      title="Attorneys — practice-level tells"
+      sub="Firms cohorted by practice type (personal-injury boutique · high-volume RAF practice · general practice) and scored within cohort. Two tells lead: the claim-type mix (a book skewed to one head is a concentration signal) and the late-lodgement share (claims filed near the s23 prescription window — a chaser's tell). Per §7, attorney scoring ships with the fairness report (POPIA); read it alongside the Fairness tab."
+      right={
+        <SearchInput
+          value={q}
+          onChange={setQ}
+          placeholder="Search attorney, cohort, rating…"
+          className="w-64"
+        />
+      }
+    >
       {total === 0 ? (
         <Empty label="No attorneys match your search." />
       ) : (
-    <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+    <div className="overflow-hidden rounded-md border border-slate-100">
       <div className="overflow-x-auto">
-        <table className="min-w-full divide-y divide-slate-200 text-sm">
+        <table className="min-w-full divide-y divide-slate-100 text-sm">
           <thead className="bg-slate-50">
             <tr>
               <th className={`${th} text-left`}>Attorney</th>
@@ -362,7 +385,7 @@ function AttorneysTab() {
       />
     </div>
       )}
-    </div>
+    </Card>
   );
 }
 
@@ -386,17 +409,23 @@ function ClaimantsTab() {
     );
 
   return (
-    <div className="space-y-3">
-      <SearchInput
-        value={q}
-        onChange={setQ}
-        placeholder="Search party token or accident id…"
-      />
+    <Card
+      title="Claimants — recurrence across accidents"
+      sub="Claimants are not profiled — the only signal is recurrence: one party token (a resolved P_* identity) appearing across two or more accidents on the graph. Most recurrence is innocent (a person can be in two crashes), so this is a ring-detection input, a thread to pull, not a verdict — weighed with the OAR and party combinations behind it (§7). Only tokens spanning ≥2 accidents appear."
+      right={
+        <SearchInput
+          value={q}
+          onChange={setQ}
+          placeholder="Search party token or accident id…"
+          className="w-64"
+        />
+      }
+    >
       {total === 0 ? (
         <Empty label="No claimants match your search." />
       ) : (
-    <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-      <table className="min-w-full divide-y divide-slate-200 text-sm">
+    <div className="overflow-hidden rounded-md border border-slate-100">
+      <table className="min-w-full divide-y divide-slate-100 text-sm">
         <thead className="bg-slate-50">
           <tr>
             <th className={`${th} text-left`}>Party token</th>
@@ -433,7 +462,7 @@ function ClaimantsTab() {
       />
     </div>
       )}
-    </div>
+    </Card>
   );
 }
 
@@ -446,7 +475,10 @@ function FairnessTab() {
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
       <div className="lg:col-span-2">
-        <Card title="Flag rate by cohort">
+        <Card
+          title="Disparate impact — provider cohort"
+          sub="The share of each cohort's claims the engine flags. Fairness asks whether that rate is even across cohorts — a question, not a verdict, and BOTH tails matter: a cohort flagged far above the book may signal bias, one far below may be where bad actors hide under-scrutiny. Provider archetype ships as the fairness axis from day one (§7, §11)."
+        >
           {data.by_cohort.length === 0 ? (
             <div className="text-sm text-slate-400">No cohorts yet.</div>
           ) : (
@@ -480,7 +512,10 @@ function FairnessTab() {
         </Card>
       </div>
 
-      <Card title="Four-fifths ratio">
+      <Card
+        title="Four-fifths ratio"
+        sub="min ÷ max cohort flag rate; the 4/5ths rule flags disparate impact below 0.80."
+      >
         <div className="flex flex-col items-center py-4">
           <div className="tnum text-5xl font-bold text-slate-900">
             {data.four_fifths_ratio.toFixed(2)}
@@ -497,8 +532,8 @@ function FairnessTab() {
             )}
           </div>
           <p className="mt-3 text-center text-[11px] leading-relaxed text-slate-400">
-            Min ÷ max cohort flag rate. The 4/5ths rule flags disparate impact
-            below 0.80.
+            A headline gauge only — the cohort table beside it is the finer,
+            two-tailed instrument.
           </p>
         </div>
       </Card>
@@ -535,39 +570,43 @@ function SweepTab() {
   }, [runSweep]);
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-end gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="w-32">
-          <label className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-slate-400">
-            Score threshold
-          </label>
-          <input
-            type="number"
-            min={0}
-            max={100}
-            value={threshold}
-            onChange={(e) => setThreshold(Number(e.target.value))}
-            className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-slate-500 focus:ring-1 focus:ring-slate-500"
-          />
+    <Card
+      title="Risk sweep — one threshold across every party"
+      sub="Sweeps providers and attorneys together and returns every party whose composite score sits at or above the threshold, worst-first. This is the operator's dial on where the review line falls: raise it for the shortest, highest-conviction worklist; lower it to widen the net. In production a sweep auto-opens a REVIEW case per party over the line, anchored to its worst claim and idempotent (§7). LOW_N parties are excluded — an unscored party never crosses a threshold."
+      right={
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="w-28">
+            <label className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-slate-400">
+              Score threshold
+            </label>
+            <input
+              type="number"
+              min={0}
+              max={100}
+              value={threshold}
+              onChange={(e) => setThreshold(Number(e.target.value))}
+              className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-slate-500 focus:ring-1 focus:ring-slate-500"
+            />
+          </div>
+          <button
+            onClick={() => runSweep(threshold)}
+            disabled={busy}
+            className="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-40"
+          >
+            {busy ? "Sweeping…" : "Run sweep"}
+          </button>
+          {result && (
+            <span className="pb-1.5 text-sm text-slate-500">
+              <span className="tnum font-semibold text-slate-800">
+                {result.n}
+              </span>{" "}
+              part{result.n === 1 ? "y" : "ies"} at/above{" "}
+              {result.threshold}
+            </span>
+          )}
         </div>
-        <button
-          onClick={() => runSweep(threshold)}
-          disabled={busy}
-          className="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-40"
-        >
-          {busy ? "Sweeping…" : "Run sweep"}
-        </button>
-        {result && (
-          <span className="text-sm text-slate-500">
-            <span className="tnum font-semibold text-slate-800">
-              {result.n}
-            </span>{" "}
-            part{result.n === 1 ? "y" : "ies"} at/above{" "}
-            {result.threshold}
-          </span>
-        )}
-      </div>
-
+      }
+    >
       {error ? (
         <ErrorBox message={error} />
       ) : !result ? (
@@ -575,8 +614,8 @@ function SweepTab() {
       ) : result.flagged.length === 0 ? (
         <Empty label="No parties at or above the threshold — a clean sweep." />
       ) : (
-        <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-          <table className="min-w-full divide-y divide-slate-200 text-sm">
+        <div className="overflow-hidden rounded-md border border-slate-100">
+          <table className="min-w-full divide-y divide-slate-100 text-sm">
             <thead className="bg-slate-50">
               <tr>
                 <th className={`${th} text-left`}>Type</th>
@@ -619,6 +658,6 @@ function SweepTab() {
           />
         </div>
       )}
-    </div>
+    </Card>
   );
 }
