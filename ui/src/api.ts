@@ -9,7 +9,10 @@ import type {
   Dashboard,
   Determination,
   Health,
+  Offer,
+  OfferHeadsInput,
   Reason,
+  Workflow,
 } from "./types";
 
 export class ApiError extends Error {
@@ -118,4 +121,73 @@ export const api = {
   accidents: () => request<Accident[]>("/api/accidents"),
   getAccident: (id: string) =>
     request<Accident>(`/api/accidents/${encodeURIComponent(id)}`),
+
+  // — operational workflow —
+  // The one aggregation call for a claim's every state machine + offer.
+  workflow: (claimId: string) =>
+    request<Workflow>(
+      `/api/claims/${encodeURIComponent(claimId)}/workflow`,
+    ),
+
+  // Lifecycle: POST /api/lifecycle/{claim_id}/{action}
+  lifecycleAction: (claimId: string, action: string) =>
+    post(`/api/lifecycle/${encodeURIComponent(claimId)}/${action}`),
+
+  // Merits: POST /api/merits/{claim_id}/{action}
+  //   accept -> {fault_pct}; reject|dismiss -> {ground}; appeal -> {}
+  meritsAction: (
+    claimId: string,
+    action: string,
+    body: { fault_pct?: number; ground?: string } = {},
+  ) => post(`/api/merits/${encodeURIComponent(claimId)}/${action}`, body),
+
+  // Offer: POST /api/offer/{claim_id} {heads_input}; GET latest.
+  buildOffer: (claimId: string, headsInput: OfferHeadsInput) =>
+    request<Offer>(`/api/offer/${encodeURIComponent(claimId)}`, {
+      method: "POST",
+      body: JSON.stringify({ heads_input: headsInput }),
+    }),
+  getOffer: (claimId: string) =>
+    request<Offer>(`/api/offer/${encodeURIComponent(claimId)}`),
+
+  // Serious injury (RAF 4): create (MEDICAL_OFFICER) + transition.
+  createSeriousInjury: (body: {
+    claim_id: string;
+    list_match?: boolean;
+    wpi?: number | null;
+    narrative?: boolean;
+  }) => post("/api/serious-injury", body),
+  seriousInjuryAction: (siId: number, action: string) =>
+    post(`/api/serious-injury/${siId}/${action}`),
+
+  // Undertaking: create + state transition + invoice submit/adjudicate/transition.
+  createUndertaking: (body: {
+    claim_id: string;
+    origin: "SETTLEMENT" | "EMERGENCY";
+    scope_dx: string[];
+  }) => post("/api/undertakings", body),
+  undertakingAction: (uId: number, action: string) =>
+    post(`/api/undertakings/${uId}/state/${action}`),
+  submitInvoice: (uId: number, body: { billed: number; dx: string }) =>
+    post(`/api/undertakings/${uId}/invoices`, body),
+  adjudicateInvoice: (invId: number, approved: number) =>
+    post(`/api/undertakings/invoices/${invId}/adjudicate`, { approved }),
+  invoiceAction: (invId: number, action: string) =>
+    post(`/api/undertakings/invoices/${invId}/state/${action}`),
+
+  // Litigation: create (LEGAL) + transition.
+  createLitigation: (claimId: string) =>
+    post("/api/litigation", { claim_id: claimId }),
+  litigationAction: (litId: number, action: string) =>
+    post(`/api/litigation/${litId}/${action}`),
 };
+
+// Thin POST helper for transition/create endpoints whose exact response body
+// we don't consume (we always re-fetch /workflow on success). Errors still
+// carry the 409/403 {detail} via ApiError.
+function post(path: string, body?: unknown): Promise<unknown> {
+  return request<unknown>(path, {
+    method: "POST",
+    body: JSON.stringify(body ?? {}),
+  });
+}

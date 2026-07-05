@@ -2,10 +2,10 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "rie-api",
+      "name": "rie",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "uvicorn", "server.main:app", "--port", "8021"],
-      "port": 8021
+      "runtimeArgs": ["-m", "uvicorn", "server.main:app", "--port", "8077"],
+      "port": 8077
     }
   ]
 }

@@ -5,9 +5,11 @@ Run:  uvicorn server.main:app --reload --port 8020   (from the repo root)
 """
 from __future__ import annotations
 
+import os
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from starlette.middleware.sessions import SessionMiddleware
 
 from .api import (
@@ -49,3 +51,18 @@ for r in (auth.router, claims.router, offers.router, reasons.router, dashboard.r
           accidents.router, leakage.router, lifecycle.router, merits.router,
           serious_injury.router, undertakings.router, litigation.router):
     app.include_router(r, prefix="/api")
+
+
+# Optionally serve the built React SPA (ui/dist) from this same service so the whole app runs on
+# one port — real files are served directly, unknown paths fall back to index.html for the SPA's
+# client-side router. Registered last so /api and /healthz always win.
+_UI_DIST = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ui", "dist")
+if os.path.isdir(_UI_DIST):
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa(full_path: str):
+        if full_path.startswith("api/"):
+            return JSONResponse(status_code=404, content={"detail": "not found"})
+        candidate = os.path.normpath(os.path.join(_UI_DIST, full_path))
+        if full_path and candidate.startswith(_UI_DIST) and os.path.isfile(candidate):
+            return FileResponse(candidate)
+        return FileResponse(os.path.join(_UI_DIST, "index.html"))

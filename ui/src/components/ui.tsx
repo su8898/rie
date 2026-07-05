@@ -202,3 +202,88 @@ export function CodePill({ children }: { children: ReactNode }) {
     </span>
   );
 }
+
+// ── Generic state-machine chip ───────────────────────────────────────────────
+// Colours states by intent (terminal-good = emerald, terminal-bad = rose,
+// in-flight = sky/amber). Falls back to a neutral slate chip for anything else.
+const GOOD_STATES = new Set([
+  "ACCEPTED",
+  "RAF_ACCEPTED",
+  "UPHELD",
+  "PAYABLE",
+  "PAID",
+  "SETTLED",
+  "FINALIZED",
+  "ORDER_PAID",
+  "ACTIVE",
+  "ASSEMBLED",
+  "CLOSED",
+]);
+const BAD_STATES = new Set([
+  "REJECTED",
+  "RAF_REJECTED",
+  "DISMISSED",
+  "REPUDIATED",
+  "REJECTED_COMPLIANCE",
+  "TERMINATED",
+  "LAPSED",
+  "SUSPENDED",
+]);
+const WARN_STATES = new Set([
+  "PENDING",
+  "APPEALED",
+  "HPCSA_APPEAL",
+  "HELD",
+  "SUBMITTED",
+  "ISSUED",
+  "RECEIVED",
+]);
+
+export function StateChip({ state }: { state: string }) {
+  const cls = GOOD_STATES.has(state)
+    ? "bg-emerald-100 text-emerald-800 ring-emerald-600/20"
+    : BAD_STATES.has(state)
+      ? "bg-rose-100 text-rose-800 ring-rose-600/20"
+      : WARN_STATES.has(state)
+        ? "bg-amber-100 text-amber-800 ring-amber-600/20"
+        : "bg-sky-100 text-sky-800 ring-sky-600/20";
+  return (
+    <span
+      className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-semibold ring-1 ring-inset ${cls}`}
+    >
+      {state}
+    </span>
+  );
+}
+
+// ── Toast (fixed, dismissible) ───────────────────────────────────────────────
+export function Toast({
+  message,
+  tone = "error",
+  onClose,
+}: {
+  message: string;
+  tone?: "error" | "success";
+  onClose: () => void;
+}) {
+  const cls =
+    tone === "success"
+      ? "border-emerald-300 bg-emerald-50 text-emerald-800"
+      : "border-rose-300 bg-rose-50 text-rose-800";
+  return (
+    <div className="pointer-events-none fixed inset-x-0 bottom-4 z-50 flex justify-center px-4">
+      <div
+        className={`pointer-events-auto flex max-w-xl items-start gap-3 rounded-lg border px-4 py-3 text-sm shadow-lg ${cls}`}
+      >
+        <span className="flex-1">{message}</span>
+        <button
+          onClick={onClose}
+          className="shrink-0 rounded px-1 text-current opacity-60 transition hover:opacity-100"
+          aria-label="Dismiss"
+        >
+          ✕
+        </button>
+      </div>
+    </div>
+  );
+}

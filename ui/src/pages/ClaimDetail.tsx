@@ -16,6 +16,7 @@ import {
   MaturityChip,
   ModeChip,
 } from "../components/ui";
+import WorkflowPanel from "../components/Workflow";
 import { num, pct, rand } from "../format";
 import type { ClaimDetail, Reason } from "../types";
 
@@ -208,6 +209,9 @@ export default function ClaimDetailPage() {
           </Card>
         </div>
       </div>
+
+      {/* Operational workflow — five state machines + offer */}
+      <WorkflowPanel claimId={d.claim_id} />
 
       {/* Raw claim */}
       <Card title="Claim">

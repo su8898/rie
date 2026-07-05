@@ -127,3 +127,93 @@ export interface Accident {
   n_claims: number;
   convergence: number;
 }
+
+// ── Operational workflow layer (GET /api/claims/{id}/workflow) ───────────────
+// Each `actions` array is exactly the set of transitions currently allowed
+// from that entity's state — we render one button per entry.
+
+export interface LifecycleState {
+  stage: string;
+  actions: string[];
+}
+
+export interface MeritsState {
+  status: string;
+  fault_pct: number | null;
+  ground: string | null;
+  actions: string[];
+}
+
+export interface OfferHead {
+  head: string;
+  amount: number;
+  detail: Record<string, unknown>;
+}
+
+export type OfferStatus = "ASSEMBLED" | "HELD";
+
+export interface Offer {
+  offer_id: number;
+  claim_id: string;
+  status: OfferStatus;
+  total: number;
+  gated_by: string[];
+  heads: OfferHead[];
+}
+
+export interface SeriousInjuryRecord {
+  id: number;
+  status: string;
+  list_match: boolean;
+  wpi: number | null;
+  narrative: boolean;
+  actions: string[];
+}
+
+export interface UndertakingInvoice {
+  id: number;
+  status: string;
+  billed: number;
+  payable: number;
+  reasons: string[];
+  actions: string[];
+}
+
+export interface UndertakingRecord {
+  id: number;
+  origin: string;
+  status: string;
+  scope_dx: string[];
+  actions: string[];
+  invoices: UndertakingInvoice[];
+}
+
+export interface LitigationRecord {
+  id: number;
+  status: string;
+  default_judgment: boolean;
+  actions: string[];
+}
+
+export interface Workflow {
+  claim_id: string;
+  lifecycle: LifecycleState | null;
+  merits: MeritsState | null;
+  offer: Offer | null;
+  serious_injury: SeriousInjuryRecord[];
+  undertakings: UndertakingRecord[];
+  litigation: LitigationRecord[];
+}
+
+// Ground options for a merits reject / dismiss (s19 exclusion grounds).
+export type MeritsGround = "S19_EXCLUSION" | "SOLE_NEGLIGENCE" | "NO_MVA_NEXUS";
+
+// Payload for POST /api/offer/{claim_id}.
+export interface OfferHeadsInput {
+  loss_of_earnings?: { annual_losses: number[] };
+  general_damages?: {
+    proposed: number;
+    band_p25: number;
+    band_p75: number;
+  };
+}
