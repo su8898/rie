@@ -10,7 +10,7 @@ from __future__ import annotations
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
-from . import models, statemachine as sm
+from . import models, notifications_service, statemachine as sm
 
 LIFECYCLE = sm.Machine(
     name="claim_lifecycle", state_attr="stage", initial="LODGED",
@@ -79,6 +79,7 @@ def transition(db: Session, claim_id: str, action: str, user: dict) -> "models.C
     g = _GATES.get(action)
     gate = (lambda: g(db, claim_id)) if g else None
     sm.fire(db, LIFECYCLE, lc, claim_id, action, user, gate=gate)
+    notifications_service.emit(db, lc.stage, claim_id)   # §12.8 — POPIA-minimal claimant notice
     db.commit()
     return lc
 

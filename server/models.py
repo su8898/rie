@@ -400,6 +400,31 @@ class Dispute(Base):
     closed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
 
+class Notification(Base):
+    """POPIA-minimal outbound notification outbox (§12.8) — claim reference + what's outstanding
+    only, never medical or quantum detail. The recipient is the pseudonymous party token; the
+    actual contact (phone/email, PII) is resolved externally at delivery. This is the per-claim log."""
+    __tablename__ = "notifications"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    claim_id: Mapped[str] = mapped_column(ForeignKey("claims.claim_id"), index=True)
+    party_token: Mapped[Optional[str]] = mapped_column(String, nullable=True, index=True)
+    channel: Mapped[str] = mapped_column(String)          # SMS | EMAIL | NONE
+    event: Mapped[str] = mapped_column(String, index=True)
+    body: Mapped[str] = mapped_column(String)
+    status: Mapped[str] = mapped_column(String, default="PENDING", index=True)  # PENDING|SENT|FAILED|SUPPRESSED
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class NotificationPref(Base):
+    """Opt-in channel preference on the (pseudonymous) party record (§12.8) — POPIA opt-in;
+    notifications are SUPPRESSED unless the party has opted in to a channel."""
+    __tablename__ = "notification_pref"
+    party_token: Mapped[str] = mapped_column(String, primary_key=True)
+    channel: Mapped[str] = mapped_column(String, default="NONE")   # SMS | EMAIL | NONE
+    opted_in: Mapped[bool] = mapped_column(default=False)
+
+
 class PaymentEvent(Base):
     """Append-only money-audit log (§8e) — one row per created/instruction/approved/paid/cancelled."""
     __tablename__ = "payment_event"

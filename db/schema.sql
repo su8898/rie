@@ -246,6 +246,27 @@ CREATE TABLE disputes (
 	FOREIGN KEY(claim_id) REFERENCES claims (claim_id)
 );
 
+CREATE TABLE notifications (
+	id SERIAL NOT NULL,
+	claim_id VARCHAR NOT NULL,
+	party_token VARCHAR,
+	channel VARCHAR NOT NULL,
+	event VARCHAR NOT NULL,
+	body VARCHAR NOT NULL,
+	status VARCHAR NOT NULL,
+	created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now() NOT NULL,
+	sent_at TIMESTAMP WITHOUT TIME ZONE,
+	PRIMARY KEY (id),
+	FOREIGN KEY(claim_id) REFERENCES claims (claim_id)
+);
+
+CREATE TABLE notification_pref (
+	party_token VARCHAR NOT NULL,
+	channel VARCHAR NOT NULL,
+	opted_in BOOLEAN NOT NULL,
+	PRIMARY KEY (party_token)
+);
+
 CREATE TABLE billing_lines (
 	id SERIAL NOT NULL, 
 	claim_id VARCHAR NOT NULL, 
