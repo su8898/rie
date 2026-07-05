@@ -71,9 +71,10 @@ CROSSWALK: list[XW] = [
        "66xxx scheme — duration/level tier"),
 
     # ── hyperbaric-oxygen therapy (high unit cost, ~R9.4M exposure) ──
-    XW("4805", "hyperbaric", "Monitoring at the hyperbaric unit", "4804", PROPOSED,
-       "RAF 4804 'Monitoring of a patient at the hyperbaric' R1,048.20 — near-identical desc + "
-       "adjacent code; RAF tiers 4804/4806/4809 by duration, billed avg R2,115 suggests a higher tier"),
+    XW("4805", "hyperbaric", "Monitoring at the hyperbaric unit", "4804", CONFIRMED,
+       "CONFIRMED 2026-07-05: RAF 4804 'Monitoring of a patient at the hyperbaric' R1,048.20 accepted "
+       "as the base-tier equivalent (billed avg R2,115 → repriced); revisit if a longer-duration "
+       "tier 4806/4809 should apply"),
     XW("4821", "hyperbaric", "Routine HBO table (2–2.5 ATA)", None, NEEDS_SME,
        "RAF 41 'hyperbaric pressurisation' R489.81 exists but a 'table' is a bundled multi-session "
        "course; SME must define the session/basis (billed avg R4,625)"),
@@ -81,8 +82,9 @@ CROSSWALK: list[XW] = [
        "As 4821 — emergency course; SME to define basis vs RAF 41/4806/4809"),
 
     # ── medico-legal report ──
-    XW("0186", "report", "Final medical report", "2712", PROPOSED,
-       "RAF 2712 'Clinical interpretation and report' R580; billed avg R1,078 — confirm report scope"),
+    XW("0186", "report", "Final medical report", "2712", CONFIRMED,
+       "CONFIRMED 2026-07-05: RAF 2712 'Clinical interpretation and report' R580 accepted as the "
+       "equivalent for the final medical report (billed avg R1,078 → repriced to tariff)"),
 
     # ── orthopaedic surgery ──
     XW("0614", "orthopaedic", "Arthroplasty / debridement, large joint", "909", PROPOSED,

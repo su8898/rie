@@ -16,12 +16,21 @@ def _book(rpl):
     return RefBook(negotiated={}, rpl=rpl, raf2022={}, empirical={}, sep={}, non_benchmarkable=set())
 
 
-def test_confirmed_only_default_is_a_noop():
-    # PRODUCTION SAFETY: no entry is CONFIRMED yet, so the default apply must not touch pricing.
-    book = _book({"10190": {"GP": 587.24}})
-    before = {k: dict(v) for k, v in book.rpl.items()}
-    assert xw.apply_crosswalk(book) == []
-    assert book.rpl == before
+def test_default_applies_confirmed_but_not_proposed():
+    # PRODUCTION SEMANTICS: CONFIRMED entries price live via build_refbook; PROPOSED are held back
+    # until an SME promotes them. 0186→2712 and 4805→4804 are confirmed; 0190→10190 is not.
+    book = _book({"2712": {"GP": 580.0},        # target of CONFIRMED 0186
+                  "4804": {"GP": 1048.20},      # target of CONFIRMED 4805
+                  "10190": {"GP": 587.24}})     # target of PROPOSED 0190
+    applied = {e.coida for e, _ in xw.apply_crosswalk(book)}    # default = CONFIRMED only
+    assert {"0186", "4805"} <= applied and "0190" not in applied
+    assert resolve(book, "TARIFF", "0186")[0] == 580.0         # aliased onto RAF 2712, priced
+    assert resolve(book, "TARIFF", "0190")[0] is None          # PROPOSED not applied by default
+
+
+def test_at_least_the_two_intended_entries_are_confirmed():
+    confirmed = {e.coida for e in xw.CROSSWALK if e.status == xw.CONFIRMED}
+    assert confirmed == {"0186", "4805"}                       # the SME-signed set
 
 
 def test_what_if_applies_proposed_and_the_engine_then_prices_it():
