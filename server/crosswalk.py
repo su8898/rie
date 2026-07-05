@@ -47,23 +47,24 @@ CROSSWALK: list[XW] = [
        "CONFIRMED 2026-07-05: RAF 10190 GP consultation R587.24 ≈ billed avg R579 — accepted"),
     XW("0146", "consultation", "Unscheduled emergency consultation", "147", CONFIRMED,
        "CONFIRMED 2026-07-05: RAF 147 'after-hours/unscheduled emergency consultation' R489.16 — accepted"),
-    XW("0184", "consultation", "Follow-up visit", "10190", PROPOSED,
-       "RAF 10190 GP consultation R587.24 — RAF prices a single GP consult tariff (no duration / "
-       "follow-up sub-tiers), so all COIDA visit variants benchmark against it"),
-    XW("0181", "consultation", "Visit, new problem/patient, 20 min", "10190", PROPOSED,
-       "RAF 10190 GP consultation R587.24 (RAF does not tier the GP consult by duration)"),
-    XW("0182", "consultation", "Visit, new problem, ≤30 min", "10190", PROPOSED,
-       "RAF 10190 GP consultation R587.24 (no duration tier in the RAF GP schedule)"),
-    XW("0183", "consultation", "Visit, new problem, 45 min", "10190", PROPOSED,
-       "RAF 10190 GP consultation R587.24 (no duration tier in the RAF GP schedule)"),
-    XW("0191", "consultation", "Consultation (higher complexity)", "10190", PROPOSED,
-       "RAF 10190 GP consultation R587.24; billed avg R1,103 would reprice down — confirm whether a "
-       "specialist/complex consult (e.g. RAF 464 R960.85) applies instead"),
-    XW("0192", "consultation", "Consultation (higher complexity)", "10190", PROPOSED,
-       "RAF 10190 GP consultation R587.24; billed avg R1,175 would reprice down — see 0191 note"),
-    XW("0109", "consultation", "Hospital follow-up visit", "10190", PROPOSED,
-       "RAF 10190 GP consultation R587.24 ≈ billed avg R544; if billed as inpatient management, RAF "
-       "1221 'professional fee for managing a patient' R1,048.20 may apply — SME to confirm setting"),
+    XW("0184", "consultation", "Follow-up visit", "10190", CONFIRMED,
+       "CONFIRMED 2026-07-05: RAF 10190 GP consultation R587.24 — RAF prices a single GP consult "
+       "tariff (no duration/follow-up sub-tiers), so all COIDA visit variants benchmark against it"),
+    XW("0181", "consultation", "Visit, new problem/patient, 20 min", "10190", CONFIRMED,
+       "CONFIRMED 2026-07-05: RAF 10190 GP consultation R587.24 (RAF does not tier the GP consult by duration)"),
+    XW("0182", "consultation", "Visit, new problem, ≤30 min", "10190", CONFIRMED,
+       "CONFIRMED 2026-07-05: RAF 10190 GP consultation R587.24 (no duration tier in the RAF GP schedule)"),
+    XW("0183", "consultation", "Visit, new problem, 45 min", "10190", CONFIRMED,
+       "CONFIRMED 2026-07-05: RAF 10190 GP consultation R587.24 (no duration tier in the RAF GP schedule)"),
+    XW("0191", "consultation", "Consultation (higher complexity)", "10190", CONFIRMED,
+       "CONFIRMED 2026-07-05: RAF 10190 GP consultation R587.24 (single GP consult tariff); billed avg "
+       "R1,103 reprices down — RAF has no general complex-consult code (464 is psychiatry-specific)"),
+    XW("0192", "consultation", "Consultation (higher complexity)", "10190", CONFIRMED,
+       "CONFIRMED 2026-07-05: RAF 10190 GP consultation R587.24 (single GP consult tariff); billed avg "
+       "R1,175 reprices down — see 0191"),
+    XW("0109", "consultation", "Hospital follow-up visit", "10190", CONFIRMED,
+       "CONFIRMED 2026-07-05: RAF 10190 GP consultation R587.24 ≈ billed avg R544; revisit if "
+       "inpatient-management billings should route to RAF 1221 R1,048.20"),
     XW("66201", "occupational-therapy", "Observation and screening", "66207", PROPOSED,
        "66xxx = Occupational Therapist schedule; RAF 66207 'specific evaluation for dysfunction' "
        "R670.08. LOW CONFIDENCE: billed avg R156 is far lower, suggesting a screening/measurement "
