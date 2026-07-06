@@ -18,6 +18,64 @@
 
 The two are connected: **party risk is emergent from claim risk.** Almost every input to a party's score is an aggregate of the per-claim determinations its claims produced — how often they banded `RED`, their mean engine score, how often a genuine fraud reason fired. Claim-level risk scores *invoices*; party-level risk scores the *hand behind them*.
 
+### The pipeline at a glance — claim axis → party aggregate
+
+Read left to right. Each **claim-level output** (band, engine score, fraud reasons) is aggregated across *all* of a party's claims into a **party statistic**, which feeds one of the **four components**, which weight into the **composite score** and its **rating**. The arrows are the exact data dependencies in `party_scoring.py`.
+
+```mermaid
+flowchart LR
+  classDef axis fill:#eff6ff,stroke:#3b82f6,color:#1e3a8a;
+  classDef stat fill:#f8fafc,stroke:#94a3b8,color:#0f172a;
+  classDef comp fill:#f0fdf4,stroke:#22c55e,color:#14532d;
+  classDef dormant fill:#f8fafc,stroke:#cbd5e1,color:#94a3b8,stroke-dasharray:4 3;
+  classDef out fill:#0f172a,stroke:#0f172a,color:#ffffff;
+
+  subgraph A["① Claim-level determinations — one per invoice, many per party"]
+    direction TB
+    b["band<br/>GREEN / AMBER / RED"]:::axis
+    s["engine score"]:::axis
+    r["reasons<br/>FRAUD-category only<br/>(pricing / duplicates excluded)"]:::axis
+    shape["billing shape + cohort<br/>avg line value · NAPPI share<br/>→ archetype"]:::axis
+  end
+
+  subgraph B["② PartyStats — aggregated across ALL the party's claims"]
+    direction TB
+    rr["red_rate / amber_rate"]:::stat
+    as["avg_score"]:::stat
+    ur["util_rate<br/>% claims w/ non-pricing fraud"]:::stat
+    vp["value_p<br/>within-cohort percentile"]:::stat
+  end
+
+  b --> rr
+  s --> as
+  r --> ur
+  shape --> vp
+
+  subgraph C["③ Four components — 0–100 each"]
+    direction TB
+    beh["behavioural ×0.40"]:::comp
+    coh["cohort_outlier ×0.20"]:::comp
+    ovs["over_servicing ×0.20"]:::comp
+    his["history ×0.20<br/>clawback · open cases<br/>(dormant)"]:::dormant
+  end
+
+  rr --> beh
+  as --> beh
+  vp --> coh
+  ur --> ovs
+
+  beh --> sum["④ weighted sum"]:::stat
+  coh --> sum
+  ovs --> sum
+  his -.-> sum
+  sum --> g{"n_claims ≥ 5?"}
+  g -- "no" --> ln["LOW_N<br/>score suppressed"]:::stat
+  g -- "yes" --> sc["composite<br/>0–100"]:::out
+  sc --> rt["rating<br/>CRITICAL ≥75 · HIGH ≥55<br/>ELEVATED ≥35 · WATCH ≥18 · LOW"]:::out
+```
+
+*Dashed = dormant: `history` is carried at weight 0.20 but contributes 0 until the recovery and case feeds land (principle 4). Everything else is live.*
+
 ---
 
 ## 2. Four principles that shape the whole design
