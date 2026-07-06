@@ -2,7 +2,7 @@
 
 *A precise, self-contained description of how the RAF Integrity Engine turns one submitted claim into a risk verdict. Written from the engine itself (`engine/` — mirrored byte-for-byte by the oracle `spec/rie_engine.py`), not from intent. Every number and rule below is the one the code applies.*
 
-> **Scope — claim-level risk only.** This document covers how **one submitted claim** becomes a band, a disposition, and an eligibility verdict. It deliberately does **not** cover RIE's **party-level** risk surface — the provider / attorney composite 0–100 scores, cohort-relative outlier ranking, and the risk sweep that auto-opens investigation cases. That is a separate determination made over *parties across many claims*, not over a single invoice, and is documented on its own. Wherever this document says "risk," it means the per-claim verdict.
+> **Scope — claim-level risk only.** This document covers how **one submitted claim** becomes a band, a disposition, and an eligibility verdict. It deliberately does **not** cover RIE's **party-level** risk surface — the provider / attorney composite 0–100 scores, cohort-relative outlier ranking, and the risk sweep that ranks parties for review. That is a separate determination made over *parties across many claims*, not over a single invoice — see the companion, [how-party-risk-is-determined.md](how-party-risk-is-determined.md). Wherever this document says "risk," it means the per-claim verdict.
 
 ---
 
