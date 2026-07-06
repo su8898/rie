@@ -183,6 +183,17 @@ def fairness(db: Session) -> dict:
 
 
 def risk_sweep(db: Session, threshold: float = 55.0) -> dict:
+    """Read-only risk sweep (domain-logic §7 / SPECIFICATION §10.5): return every provider AND
+    attorney whose composite score is at/above `threshold`, ranked worst-first.
+
+    This is a LENS, NOT AN ACTUATOR. It opens no cases and initiates no action. Acting on a
+    flagged party — opening a REVIEW / BLOCK / CLAWBACK case — is a deliberate, role-gated
+    operator step in the Cases module. A composite score on an identifiable actor must never, by
+    itself, initiate action against them: the stronger POPIA and fairness posture, and it keeps
+    scorer precision measurable against human-confirmed openings. **Do not add auto-open here**
+    (this deliberately supersedes the CIE auto-open behaviour). The only sweeps that create work
+    automatically are the audit recovery sweep and the recall-QA draw, both post-payment/post-hoc.
+    """
     flagged = ([{"type": "provider", "id": p["provider_id"], **p} for p in providers(db)
                 if p["score"] >= threshold]
                + [{"type": "attorney", "id": a["attorney"], **a} for a in attorneys(db)

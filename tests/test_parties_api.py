@@ -103,3 +103,22 @@ def test_risk_sweep():
     assert sweep["n"] >= 1
     assert any(x["type"] == "provider" and x["id"] == "PR_HI" for x in sweep["flagged"])
     assert sweep["flagged"] == sorted(sweep["flagged"], key=lambda r: r["score"], reverse=True)
+
+
+def test_risk_sweep_is_read_only_opens_no_cases():
+    """§7 — the sweep is a lens, not an actuator: it opens no cases at any threshold. Guards the
+    read-only posture against a future 'helpful' auto-open regression."""
+    from sqlalchemy import func, select
+
+    from server import models
+    from server.db import SessionLocal
+
+    _seed()
+    _login("investigator")
+    with SessionLocal() as db:
+        before = db.scalar(select(func.count()).select_from(models.Case))
+    r = client.get("/api/parties/risk-sweep", params={"threshold": 0}).json()  # widest sweep
+    assert r["n"] >= 1                                                          # it flags parties
+    with SessionLocal() as db:
+        after = db.scalar(select(func.count()).select_from(models.Case))
+    assert after == before                                                     # …but opens nothing
