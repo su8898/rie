@@ -187,6 +187,16 @@ A provider's cohort is inferred from its own billing shape — no manual classif
 | **SPECIALIST** | average line value **≥ R800** (`_SPECIALIST_VALUE`) and not materials-dominated |
 | **GENERAL** | everything else (e.g. rooms GPs) |
 
+> **Planned cohort enrichment (dormant, like `afterhours_p`).** These three billing-shape
+> archetypes are the V1. The target set (domain-logic §7) adds setting- and discipline-derived
+> cohorts — ER/trauma unit · hospital-based · rooms GP · allied/rehab · **medico-legal expert
+> practice** · ambulance/EMS — activating as discipline and place-of-service data land.
+> Priority is the **medico-legal expert** cohort: an assessment-dominated practice currently
+> pools into `SPECIALIST` (avg line ≥ R800) and can climb `value_p` against treating
+> specialists — exactly the false positive the cohort design exists to prevent. Until that
+> cohort exists, treat a high `value_p` on an assessment-heavy practice with suspicion of the
+> *score*, not the provider.
+
 ### 5.2 Attorney cohorts (by volume)
 
 | Cohort | Assigned when |
@@ -227,7 +237,16 @@ Aggregated from claim records carrying an `attorney`:
 - **Late-lodgement share** — the % of the attorney's claims lodged **more than 2.5 years** after the accident (a near-prescription chaser's fingerprint).
 - Band stats over the attorney's claims + a **volume-percentile** cohort-outlier proxy → `PartyStats` → `party_risk`. Sorted worst-first.
 
-### 6.3 Claimants (`claimants`) — recurrence only
+### 6.3 A fourth party type — medico-legal experts (designed, pending)
+
+The design (domain-logic §7) defines a fourth scored party type that is not yet implemented:
+**medico-legal experts**, scored on their **WPI distribution vs their specialty cohort**
+(an expert whose serious-injury rate sits P95+ within specialty), narrative-test share, and
+RAF 4 reject/overturn rate — feeding the designed-pending signals `WPI_INFLATION` and
+`EXPERT_MILL`. It requires the RAF 4 register data and the expert-discipline feed; when it
+lands, it follows the same `PartyStats → party_risk` shape and the same n-guard.
+
+### 6.4 Claimants (`claimants`) — recurrence only
 
 Claimants are **not** given a composite score. The only party-level claimant signal is **recurrence**: a pseudonymous claimant token (`P_*`) appearing across **two or more accidents** on the accident graph. The output lists each recurring token, its accident count, and the accident ids — a **thread to pull** (a possible ring or serial claimant), not a verdict. Whether recurrence is coincidence or collusion is a human call; the system surfaces it, ranked by accident count.
 
@@ -237,7 +256,7 @@ Claimants are **not** given a composite score. The only party-level claimant sig
 
 `risk_sweep` (`GET /api/parties/risk-sweep`) is the operator's single control over where the review line falls. It takes **one threshold** (default `55`) and returns **every provider *and* attorney whose composite score ≥ threshold**, merged and sorted worst-first, each tagged `type: provider | attorney`. Lower the threshold to cast a wider net; raise it to see only the worst.
 
-**It is read-only.** The sweep produces a **shortlist**; it opens nothing. Acting on a flagged party — opening a `BLOCK` or `CLAWBACK` investigation case — is a **deliberate operator step** in the Cases module, subject to that module's role gating. (Contrast the two sweeps that *do* create work automatically: the **Audit recovery sweep**, which opens post-payment clawback items, and the **Governance QA draw**, which opens blind-review cases. The party risk sweep is a *lens*, not an *actuator* — by design, so that scoring an actor high never, by itself, initiates action against them.)
+**It is read-only.** The sweep produces a **shortlist**; it opens nothing. Acting on a flagged party — opening a `BLOCK` or `CLAWBACK` investigation case — is a **deliberate operator step** in the Cases module, subject to that module's role gating. (Contrast the two sweeps that *do* create work automatically: the **Audit recovery sweep**, which opens post-payment clawback items, and the **Governance QA draw**, which opens blind-review cases. The party risk sweep is a *lens*, not an *actuator* — by design, so that scoring an actor high never, by itself, initiates action against them.) *This deliberately supersedes the CIE auto-open behaviour; the spec has been reconciled to it (domain-logic §7, resolution log #10).*
 
 ---
 

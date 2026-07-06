@@ -2,7 +2,11 @@
 
 *A precise, self-contained description of how the RAF Integrity Engine turns one submitted claim into a risk verdict. Written from the engine itself (`engine/` — mirrored byte-for-byte by the oracle `spec/rie_engine.py`), not from intent. Every number and rule below is the one the code applies.*
 
-> **Scope — claim-level risk only.** This document covers how **one submitted claim** becomes a band, a disposition, and an eligibility verdict. It deliberately does **not** cover RIE's **party-level** risk surface — the provider / attorney composite 0–100 scores, cohort-relative outlier ranking, and the risk sweep that ranks parties for review. That is a separate determination made over *parties across many claims*, not over a single invoice — see the companion, [how-party-risk-is-determined.md](how-party-risk-is-determined.md). Wherever this document says "risk," it means the per-claim verdict.
+> **Scope.** This is **claim-level** risk — one invoice, one determination. The other half of
+> risk in RIE — the standing 0–100 score on an *actor* (provider / attorney / claimant),
+> aggregated across everything they touch — is the companion:
+> [how-party-risk-is-determined.md](how-party-risk-is-determined.md). Party risk is emergent
+> from the determinations described here; it prioritises attention and never gates a payment.
 
 ---
 
@@ -58,12 +62,13 @@ Risk is expressed entirely through **reasons** (also called signals). A reason i
    - *Merits:* if merits are explicitly rejected, the specific ground fires — `SOLE_NEGLIGENCE`, `S19_EXCLUSION`, or `NO_MVA_NEXUS`.
 2. **Per-line adjudication (`engine/adjudication.py`, §3/§5f)** — evaluated for every billing line:
    - Hard causation/date gates: `SERVICE_BEFORE_ACCIDENT`, `DUPLICATE_LINE` (pay-once across claim types).
-   - Undertaking / pre-authorisation: `UNDERTAKING_NOT_ACTIVE`; `UNDERTAKING_SCOPE` (**dual behaviour** — a *hard* reject when the undertaking's scope is coded, but a *soft* route-to-review on legacy *uncoded* scope, which feeds the §8c scope-capture worklist rather than auto-rejecting a legacy invoice); `PREAUTH_MISSING` (**emergency lines are exempt** — an emergency code skips the pre-auth gate); `PREAUTH_EXCEEDED` (repriced to the authorised ceiling).
-   - *Emergency leniency (§3):* beyond the pre-auth exemption, an emergency encounter also carries a **wider margin before the utilisation signals** (the line-count / minutes-per-day outliers) flag it — so legitimately heavy trauma billing isn't mistaken for padding. (Those utilisation detectors are among the emission-pending set; the leniency applies wherever they run.)
+   - Undertaking / pre-authorisation: `UNDERTAKING_NOT_ACTIVE`, `UNDERTAKING_SCOPE`, `PREAUTH_MISSING`, `PREAUTH_EXCEEDED`.
    - Reference pricing: `DX_ACCIDENT_MISMATCH` (diagnosis doesn't corroborate the accident's injury regions), `BILLED_OVER_REFERENCE` (billed above the reference rate).
-3. **Accident-graph corroboration (`engine/corroboration.py`, §6.0)** — computed once the claim is anchored to its accident: `CLAIMANT_SURGE` (more claimants than the accident report's occupant count, cohort-aware — but that count is **OAR-sourced and low-confidence, so it is never a sole ground**) and `CONVERGENCE_THIN` (too little independent evidence — see §7).
+3. **Accident-graph corroboration (`engine/corroboration.py`, §6.0)** — computed once the claim is anchored to its accident: `CLAIMANT_SURGE` (more claimants than the accident report's occupants — a **low-confidence** input, since the occupant count is OAR-sourced; cohort-aware, so bus/taxi accidents are exempt; never a sole ground) and `CONVERGENCE_THIN` (too little independent evidence — see §7).
 
-A **fourth family fires later, not on this per-invoice pass**: the **heads of damage** are computed when their inputs arrive (offer assembly, §5/§8b), and the general-damages head emits `GENERAL_DAMAGES_NO_SI` when serious injury (RAF 4 / WPI ≥ 30% / the narrative test) has not been accepted. The per-claim pass documented here computes only the **medical** head, so that gate belongs to the later invocation.
+Two adjudication nuances that live in family 2: **emergency lines** (per the regulations' definition) are exempt from pre-authorisation and carry a leniency margin on utilisation-type signals — they are authorised retrospectively; and **`UNDERTAKING_SCOPE` has dual behaviour** — on an undertaking whose scope is ICD-coded it is a hard out-of-scope reject, but on a legacy free-text (uncoded) scope it fires soft and routes to medical review, where the reviewer codes the scope for next time (the scope-capture worklist).
+
+**Register entries without a live emission point in this per-invoice pass.** One fires **later**, at head computation / offer assembly (a subsequent invocation of the same scorer): `GENERAL_DAMAGES_NO_SI`, emitted by the general-damages head when serious injury isn't accepted (§5d). Three more are **defined but emitted by no path today** — the accident graph and s17(5) make the checks *buildable*, but no detector fires them yet: `DUPLICATE_CLAIM` (a claim-level duplicate — same claimant, same accident, lodged twice, including cross-office — distinct from the per-line `DUPLICATE_LINE`), `SUPPLIER_PRECLUSION` (whose s17(5) pay-once role is served today by `DUPLICATE_LINE`), and `EARNINGS_UNPROVEN` (the loss-of-earnings proof gate). Each scores and routes exactly as registered the day its detector lands.
 
 ### 3.2 The reason register — one place that fixes every signal's meaning
 
@@ -81,8 +86,6 @@ Every reason is declared once, with fixed attributes, in the **reason register**
 Because weight, category, maturity, and mode are **register data, not logic**, changing how much a signal counts (or whether it counts at all) is a reference-data edit, never a code change. The full register is in the Appendix.
 
 > **A note on breadth.** The register catalogues more signals than the live per-claim pipeline currently emits — behavioural and party-graph detectors (`MATERIAL_PADDING`, `VALUE_OUTLIER`, `IMPOSSIBLE_DAY`, `RING_PARTIES`, `CLAIMANT_RECURRENCE`, …) are **defined with calibrated weights and launched in `SHADOW`** (§4.1) so that promoting a detector from invisible to scoring is a governed reference-data change, not a scoring rewrite. Wherever a detector supplies one of these reasons, it scores exactly as its register entry says.
->
-> Three further register entries are **defined but emitted by no path today** and are marked *(emission pending)* in the Appendix so the register does not overstate the live pipeline: **`DUPLICATE_CLAIM`** (a *claim-level* duplicate — same claimant, same accident, lodged twice — distinct from the line-level `DUPLICATE_LINE`, and checked at claim scope rather than in the per-line loop); **`SUPPLIER_PRECLUSION`** (whose s17(5) pay-once role is served today by `DUPLICATE_LINE`, which the cross-claim-type dedupe emits instead); and **`EARNINGS_UNPROVEN`** (the loss-of-earnings proof gate, which belongs to the earnings head, computed at offer assembly).
 
 ---
 
@@ -221,9 +224,7 @@ with independence weights:
 
 *(`MAX_CONVERGENCE = 12.0`, the sum of all eight weights.)*
 
-The crucial move: **sources that share one party-cluster** (the same attorney/provider network) **collapse to a single vote**. Ten documents produced by one colluding network count once, not ten — you cannot manufacture convergence by generating more paperwork from the same hand. If convergence falls below a calibrated floor (default `20.0`, taken from the genuine-accident band), `CONVERGENCE_THIN` fires.
-
-**Why one floor catches both tails.** A *thin* evidence trail scores low and trips the floor — the obvious case. But a *manufactured* trail trips it too, and this is the clever part: because same-cluster sources collapse to one vote, a fraudster who assembles a thick stack of documents all originating from a single attorney/provider network still scores that entire stack as **one** source. A genuine accident with one independent ambulance record and one independent hospital record out-scores a fabricated file of ten coordinated documents. So the single `CONVERGENCE_THIN` floor detects *both* under-evidenced accidents **and** suspiciously dense single-cluster ones — density bought with volume doesn't move the number, only genuine independence does. That is why convergence is effectively two-tailed despite being a single threshold.
+The crucial move: **sources that share one party-cluster** (the same attorney/provider network) **collapse to a single vote**. Ten documents produced by one colluding network count once, not ten — you cannot manufacture convergence by generating more paperwork from the same hand. If convergence falls below a calibrated floor (default `20.0`, taken from the genuine-accident band), `CONVERGENCE_THIN` fires. Convergence is *both-tailed* by this one mechanism: a thin evidence trail scores low directly, and a suspiciously **dense but single-cluster** trail *also* scores low — the collapse reduces its many documents to one vote — so manufactured density fires the same `CONVERGENCE_THIN` flag as thinness. Density only raises convergence when it comes from hands that don't know each other.
 
 ---
 
@@ -252,8 +253,9 @@ Only `CLEAN` and `ADJUSTED` claims can pay without human sign-off; every other d
 ## 9. Putting it together — one claim, end to end (`process_claim`)
 
 ```
-A. Anchor the claim to the accident graph (match on normalised case number +
-   fuzzy date/place/vehicle/party); compute convergence + corroboration signals.   → CONVERGENCE_THIN, CLAIMANT_SURGE
+A. Anchor the claim to the accident graph: normalised case number (exact) else a
+   fuzzy date/place/vehicle/party score — auto-join ≥ 0.85, human match-worklist ≥ 0.50,
+   else a new accident record; compute convergence + corroboration signals.        → CONVERGENCE_THIN, CLAIMANT_SURGE
 B. Run the grounded gates against the ruleset effective on the accident date.       → gate reasons; sets `validated`
 C. Adjudicate every line: causation/date gates, undertaking/pre-auth, then price
    payable = min(billed, reference) on ENFORCEABLE/ACCEPTED sources (signal-only
@@ -264,8 +266,6 @@ E. SCORE + BAND  = score_and_band(gate + line + graph reasons, overrides).      
 F. ELIGIBILITY   = eligible_to_pay(...).                                            → eligible_to_pay, net_payable, holds
 → return the provenance-stamped determination record.
 ```
-
-**Accident resolution (step A), precisely.** The claim joins an existing accident outright on an exact normalised case-number match (action `JOINED`). Otherwise a fuzzy match on date (±1 day), place, vehicles and parties scores `0–1`: **≥ 0.85 auto-joins** (`AUTO_JOINED`), **≥ 0.50 routes to a human worklist** (`WORKLIST`), and below that a **new accident is materialised** on first touch (`CREATED`). The action taken is recorded on the determination as `accident_action`, and it is at this step that `convergence`, `CLAIMANT_SURGE`, and `CONVERGENCE_THIN` are computed.
 
 The reference-pricing rule in step C is the money rule that underlies the whole payment path: **`payable = min(billed, reference)`**. A line billed above an *enforceable or accepted* reference is **repriced** (paid at reference, the difference captured), not rejected; a line billed above a *signal-only* source (interdicted tariff / empirical median) is flagged for review but not auto-cut.
 
@@ -306,7 +306,7 @@ Every signal the system can express, with its fixed attributes (`engine/reasons.
 | `PRESCRIBED_SUMMONS` | COMPLIANCE | s23(3) |
 | `S24_INCOMPLETE` | COMPLIANCE | s24 |
 | `OAR_MISSING` | COMPLIANCE | s24 + reg |
-| `DUPLICATE_CLAIM` | COMPLIANCE | one claim per claimant per accident — *emission pending* (claim-level check) |
+| `DUPLICATE_CLAIM` | COMPLIANCE | one claim per claimant per accident |
 | `PROVIDER_UNREGISTERED` | COMPLIANCE | HPCSA/BHF register |
 | `ATTORNEY_NOT_IN_STANDING` | COMPLIANCE | LPC register (payment hold) |
 | `PAYEE_UNVERIFIED` | COMPLIANCE | AVS |
@@ -315,14 +315,14 @@ Every signal the system can express, with its fixed attributes (`engine/reasons.
 | `S19_EXCLUSION` | MERITS | s19 |
 | `NO_MVA_NEXUS` | MERITS | s17(1) driving nexus |
 | `SERVICE_BEFORE_ACCIDENT` | COMPLIANCE | date check |
-| `SUPPLIER_PRECLUSION` | ADJUSTED | s17(5) — pay once — *emission pending* (served today by `DUPLICATE_LINE`) |
+| `SUPPLIER_PRECLUSION` | ADJUSTED | s17(5) — pay once |
 | `DUPLICATE_LINE` | ADJUSTED | pay first occurrence |
 | `PREAUTH_MISSING` | PREAUTH | §5f ruleset |
 | `PREAUTH_EXCEEDED` | ADJUSTED | §5f — reprice to ceiling |
 | `UNDERTAKING_NOT_ACTIVE` | COMPLIANCE | s17(4)(a) |
-| `UNDERTAKING_SCOPE` | COMPLIANCE | undertaking terms — **hard** if the undertaking scope is coded; **soft → review** on uncoded legacy scope (§8c) |
-| `GENERAL_DAMAGES_NO_SI` | SI_GATE | reg 3 / RAF 4 — fires at the **general-damages head** (§5d), not the per-invoice pass |
-| `EARNINGS_UNPROVEN` | COMPLIANCE | proof requirement — *emission pending* (loss-of-earnings head gate) |
+| `UNDERTAKING_SCOPE` | COMPLIANCE | undertaking terms — hard on a coded scope; fires **soft → review** on legacy uncoded scopes (§3.1) |
+| `GENERAL_DAMAGES_NO_SI` | SI_GATE | reg 3 / RAF 4 |
+| `EARNINGS_UNPROVEN` | COMPLIANCE | proof requirement |
 
 ### Soft features (contribute `points` when `SCORED`)
 
@@ -351,6 +351,8 @@ Every signal the system can express, with its fixed attributes (`engine/reasons.
 | `CONVERGENCE_THIN` | FRAUD | 20 | evidence density/timing (§6.0) |
 | `RING_PARTIES` | FRAUD | 25 | party-graph recurrence |
 
+**Designed, not yet in the register** (domain-logic §10): `TOUT_PATTERN`, `WPI_INFLATION`, `EXPERT_MILL`, `ATTORNEY_CONCENTRATION` — their detectors need data feeds (and, for the first two, the medico-legal-expert party type) that aren't live. Per the promotion doctrine, each enters the register **in `SHADOW`** when its detector lands — never directly at `SCORED`.
+
 ### Constants
 
 | Constant | Value | Meaning |
@@ -360,10 +362,10 @@ Every signal the system can express, with its fixed attributes (`engine/reasons.
 | `ENDOGENOUS_POINT_CAP` | 45 | ceiling on total endogenous points (one short of `RED`) |
 | `MAX_CONVERGENCE` | 12.0 | sum of source-class weights (convergence denominator) |
 | convergence floor | 20.0 | below which `CONVERGENCE_THIN` fires (default) |
+| accident auto-join | ≥ 0.85 | fuzzy match score at which a claim joins an accident without a human |
+| accident match-worklist | ≥ 0.50 | fuzzy match score routed to a human to confirm/create |
 | promotion floor | Wilson-lower ≥ 60% | measured-precision bar to promote a signal to `SCORED` |
 | prescription | 3 yr identified / 2 yr hit-and-run | lodgement window (`PRESCRIBED_LODGEMENT`) |
-| `AUTO_JOIN` | 0.85 | accident match score at/above which a claim auto-joins |
-| `WORKLIST` | 0.50 | accident match score routing to a human resolution worklist |
 
 ---
 
