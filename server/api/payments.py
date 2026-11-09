@@ -5,7 +5,10 @@ money event is logged; paying a settlement instruction advances that claim's lif
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from typing import Literal, Optional
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
@@ -14,6 +17,16 @@ from ..db import get_db
 from .deps import current_user, require_role
 
 router = APIRouter(prefix="/payments")
+
+
+class BatchIn(BaseModel):
+    note: Optional[str] = Field(default=None, max_length=500)
+
+
+class InstructionIn(BaseModel):
+    claim_id: str = Field(min_length=1, max_length=64)
+    source: Literal["SETTLEMENT", "COURT_ORDER", "UNDERTAKING_INVOICE", "SUPPLIER", "INTERIM"]
+    amount: Optional[float] = Field(default=None, gt=0, le=1_000_000_000)
 
 
 @router.get("/queue")
@@ -28,9 +41,9 @@ def list_batches(db: Session = Depends(get_db), user: dict = Depends(current_use
 
 
 @router.post("/batches")
-def create_batch(body: dict = Body(default={}), db: Session = Depends(get_db),
+def create_batch(body: BatchIn = BatchIn(), db: Session = Depends(get_db),
                  user: dict = Depends(require_role("HANDLER", "ADMIN"))) -> dict:
-    return svc.batch_dict(db, svc.create_batch(db, user, note=body.get("note")))
+    return svc.batch_dict(db, svc.create_batch(db, user, note=body.note))
 
 
 @router.get("/batches/{batch_id}")
@@ -43,11 +56,9 @@ def get_batch(batch_id: int, db: Session = Depends(get_db),
 
 
 @router.post("/batches/{batch_id}/instructions")
-def add_instruction(batch_id: int, body: dict = Body(...), db: Session = Depends(get_db),
+def add_instruction(batch_id: int, body: InstructionIn, db: Session = Depends(get_db),
                     user: dict = Depends(require_role("HANDLER", "ADMIN"))) -> dict:
-    if "claim_id" not in body or "source" not in body:
-        raise HTTPException(status_code=422, detail="claim_id and source are required")
-    svc.add_instruction(db, batch_id, body["claim_id"], body["source"], body.get("amount"), user)
+    svc.add_instruction(db, batch_id, body.claim_id, body.source, body.amount, user)
     return svc.batch_dict(db, db.get(models.PaymentBatch, batch_id))
 
 

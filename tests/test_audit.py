@@ -17,6 +17,7 @@ from server.seed import seed
 
 H = {"username": "handler", "role": "HANDLER"}
 A = {"username": "admin", "role": "ADMIN"}
+T = {"username": "treasury", "role": "ADMIN"}      # second ADMIN — the payer (3-way SoD)
 I = {"username": "inv", "role": "INVESTIGATOR"}
 
 
@@ -53,7 +54,7 @@ def _seed_bad_provider(db):
     for cid in clean:
         pay.add_instruction(db, b.id, cid, "SUPPLIER", None, H)
     pay.approve(db, b.id, A)
-    pay.pay(db, b.id, A)
+    pay.pay(db, b.id, T)
     return clean
 
 

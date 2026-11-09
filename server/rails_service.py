@@ -17,11 +17,25 @@ from sqlalchemy.orm import Session
 
 from . import jws, models
 from .config import RAILS_SECRET
-from .pipeline_service import assess_and_store
+from .pipeline_service import DuplicateClaim, assess_and_store
 from .pseudonymise import pseudonymise_ingest
+from .validation import SubmissionError, validate_submission
 
 _NS = uuid.UUID("1b671a64-40d5-491e-99b0-da01ff1f3341")   # idempotency-key -> submission_id
-_REQUIRED = ("claim_id", "claim_type", "party_token", "accident_date", "lodged_on")
+
+# Facts only the FUND may assert. A provider's submission never carries them: payee verification,
+# standing, merits, serious-injury, prescription suspension, fault, life status, undertakings and
+# the assessment clock are fund-side determinations (SPECIFICATION §4/§8e). Anything here is
+# dropped before scoring, so a provider cannot self-attest its way past a payment gate.
+FUND_ONLY_FIELDS = (
+    "payee_verified", "provider_registered", "attorney_in_standing", "merits_accepted",
+    "merits_ground", "si_accepted", "prescription_suspended", "fault_pct", "claimant_deceased_on",
+    "undertaking", "summons_served", "today", "provider_tier", "cohort_is_bus_taxi", "conv_floor_p10",
+)
+
+
+def strip_fund_fields(body: dict) -> dict:
+    return {k: v for k, v in body.items() if k not in FUND_ONLY_FIELDS}
 
 
 class RailsError(Exception):
@@ -82,12 +96,20 @@ def submit(db: Session, body: dict, idempotency_key: Optional[str], signature: O
 
     if db.get(models.RailsSeenJti, jti) is not None:          # replay guard
         raise RailsError(409, "replay detected: jti already used")
-    body = pseudonymise_ingest(body)                          # POPIA — after JWS verify, before persist (§2)
-    if [k for k in _REQUIRED if k not in body]:
-        raise RailsError(422, "missing required claim fields")
+    body = strip_fund_fields(pseudonymise_ingest(body))       # POPIA + fund-only facts dropped (§2, §8e)
+    try:
+        body = validate_submission(body)
+    except SubmissionError as e:
+        raise RailsError(422, f"invalid claim: {e}")
+    if db.get(models.ClaimRecord, body["claim_id"]) is not None:
+        raise RailsError(409, f"claim {body['claim_id']} already submitted")
 
     db.add(models.RailsSeenJti(jti=jti))
-    record = assess_and_store(db, body, today=today)          # score + persist to the corpus
+    try:
+        record = assess_and_store(db, body, today=today)      # score + persist to the corpus
+    except DuplicateClaim as e:
+        db.rollback()
+        raise RailsError(409, str(e))
     verdict = _verdict(body, record)
     receipt = _receipt(submission_id, verdict, secret)
     db.add(models.RailsSubmission(

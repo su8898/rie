@@ -43,12 +43,15 @@ def test_full_batch_happy_path():
     assert client.post(f"/api/payments/batches/{bid}/approve").status_code == 403  # handler role
     _login("admin")
     assert client.post(f"/api/payments/batches/{bid}/approve").json()["status"] == "APPROVED"
+    # the approver may not pay (three-way SoD) — a second ADMIN (treasury) pays
+    assert client.post(f"/api/payments/batches/{bid}/pay").status_code == 403
+    _login("treasury")
     b = client.post(f"/api/payments/batches/{bid}/pay").json()
     assert b["status"] == "PAID"
     assert b["instructions"][0]["paid"] is True
     events = [e["event"] for e in b["events"]]
     assert events == ["CREATED", "INSTRUCTION_ADDED", "APPROVED", "PAID"]
-    assert b["paid_by"] == "admin"
+    assert b["paid_by"] == "treasury"
 
 
 def test_segregation_of_duties_same_actor():
@@ -113,6 +116,7 @@ def test_settlement_payment_advances_lifecycle_to_paid():
                 json={"claim_id": "R_pay6", "source": "SETTLEMENT", "amount": 500.0})
     _login("admin")
     client.post(f"/api/payments/batches/{bid}/approve")
+    _login("treasury")
     assert client.post(f"/api/payments/batches/{bid}/pay").json()["status"] == "PAID"
     _login("handler")
     assert client.get("/api/lifecycle/R_pay6").json()["stage"] == "PAID"   # advanced by the payment

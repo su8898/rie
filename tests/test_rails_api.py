@@ -43,7 +43,13 @@ def test_clean_submission_signed_verdict_and_readback():
     receipt = dict(j["receipt"])
     sig = receipt.pop("signature")
     assert jws.verify_detached(sig, receipt, SECRET) is not None       # fund-signed receipt verifies
-    assert client.get(f"/rails/v1/claims/{j['submissionId']}").json()["outcome"] == "CLEAN_PASS"
+    sid = j["submissionId"]
+    assert client.get(f"/rails/v1/claims/{sid}").status_code == 401          # verdicts are not public
+    read_sig = jws.sign_detached({"alg": "HS256", "jti": str(uuid.uuid4())}, {"submissionId": sid}, SECRET)
+    assert client.get(f"/rails/v1/claims/{sid}",
+                      headers={"X-JWS-Signature": read_sig}).json()["outcome"] == "CLEAN_PASS"
+    # the provider asserted payee_verified; the fund dropped it -> the hold is on until the fund verifies
+    assert "PAYEE_UNVERIFIED" in j["verdict"]["holds"]
 
 
 def test_repriced_outcome():

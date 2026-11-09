@@ -11,11 +11,21 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from server import audit_service as aud, payments_service as pay  # noqa: E402
 from server.db import SessionLocal  # noqa: E402
-from server.pipeline_service import assess_and_store  # noqa: E402
+from server.pipeline_service import DuplicateClaim, assess_and_store as _assess  # noqa: E402
+
+
+def assess_and_store(db, payload, **kw):
+    """Re-run tolerant: a claim already in the corpus is skipped (the API would answer 409)."""
+    try:
+        return _assess(db, payload, **kw)
+    except DuplicateClaim:
+        db.rollback()
+        return None
 from server.seed import init_db  # noqa: E402
 
 H = {"username": "handler", "role": "HANDLER"}
 A = {"username": "admin", "role": "ADMIN"}
+T = {"username": "treasury", "role": "ADMIN"}      # payer — must differ from assembler + approver
 I = {"username": "investigator", "role": "INVESTIGATOR"}
 
 
@@ -61,7 +71,7 @@ def main() -> None:
         for cid in clean:
             pay.add_instruction(db, b.id, cid, "SUPPLIER", None, H)
         pay.approve(db, b.id, A)
-        pay.pay(db, b.id, A)
+        pay.pay(db, b.id, T)
         opened = aud.recovery_sweep(db, I, threshold=20)          # -> clawback items on PR_BAD
 
         print(f"intel seeded: PR_BAD (flagged) / PR_GOOD / PR_SPEC providers, "

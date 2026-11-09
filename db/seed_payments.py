@@ -13,6 +13,7 @@ from server.seed import init_db  # noqa: E402
 
 H = {"username": "handler", "role": "HANDLER"}
 A = {"username": "admin", "role": "ADMIN"}
+T = {"username": "treasury", "role": "ADMIN"}      # payer — must differ from assembler + approver
 
 
 def main() -> None:
@@ -28,7 +29,7 @@ def main() -> None:
         b2 = pay.create_batch(db, H, note="EMS run")                      # assembled -> approved -> paid
         pay.add_instruction(db, b2.id, q[2]["claim_id"], "SUPPLIER", None, H)
         pay.approve(db, b2.id, A)
-        pay.pay(db, b2.id, A)
+        pay.pay(db, b2.id, T)
         print(f"payments seeded: batch {b1.id} OPEN (2 instr, "
               f"R{pay._total(db, b1.id):,.2f}), batch {b2.id} PAID (R{pay._total(db, b2.id):,.2f})")
 

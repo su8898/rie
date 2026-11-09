@@ -18,14 +18,16 @@ from .api import (
     leakage, lifecycle, litigation, merits, notifications, offers, parties, payments, rails,
     reasons, reference, serious_injury, undertakings,
 )
-from .config import SECRET_KEY
+from .config import IS_DEV, SECRET_KEY, check_secrets
 from .seed import init_db
 from .statemachine import GateNotMet, IllegalTransition, WrongActor
 
+check_secrets()                           # refuse default secrets outside dev/test (§9)
 init_db()
 
 app = FastAPI(title="RIE — RAF Integrity Engine API", version="0.1.0")
-app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, max_age=8 * 3600, same_site="lax")
+app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, max_age=8 * 3600, same_site="lax",
+                   https_only=not IS_DEV)          # Secure cookie outside dev/test
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],

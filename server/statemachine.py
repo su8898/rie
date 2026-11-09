@@ -11,6 +11,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Optional
 
+from sqlalchemy import inspect as sa_inspect, update
 from sqlalchemy.orm import Session
 
 from . import models
@@ -61,6 +62,24 @@ class Machine:
         return s
 
 
+def _compare_and_set(db: Session, machine: Machine, entity, cur: str, dst: str) -> None:
+    """Concurrency guard: move the row from `cur` to `dst` with a conditional UPDATE. If another
+    transaction already moved it (two operators paying the same batch), zero rows match and the
+    transition is refused instead of being applied twice. Works on SQLite and Postgres alike."""
+    state = sa_inspect(entity)
+    if state.identity is None:            # not yet persisted (created in this unit of work) — nothing to race
+        return
+    cls = type(entity)
+    pk = sa_inspect(cls).primary_key[0]
+    col = getattr(cls, machine.state_attr)
+    res = db.execute(update(cls).where(pk == state.identity[0], col == cur)
+                     .values({machine.state_attr: dst})
+                     .execution_options(synchronize_session=False))
+    if res.rowcount != 1:
+        raise IllegalTransition(
+            f"{machine.name}: state changed concurrently (expected '{cur}') — reload and retry")
+
+
 def fire(db: Session, machine: Machine, entity, entity_id, action: str, user: dict,
          gate: Optional[Callable[[], None]] = None, detail: Optional[dict] = None) -> str:
     cur = getattr(entity, machine.state_attr)
@@ -72,6 +91,7 @@ def fire(db: Session, machine: Machine, entity, entity_id, action: str, user: di
         raise WrongActor(f"{machine.name}.{action} requires one of {t.roles}, not {role}")
     if gate is not None:
         gate()                            # raises GateNotMet on failure
+    _compare_and_set(db, machine, entity, cur, t.dst)
     setattr(entity, machine.state_attr, t.dst)
     db.add(models.TransitionLog(
         entity_type=machine.name, entity_id=str(entity_id), from_state=cur, to_state=t.dst,

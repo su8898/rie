@@ -11,7 +11,16 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from server.db import SessionLocal          # noqa: E402
-from server.pipeline_service import assess_and_store  # noqa: E402
+from server.pipeline_service import DuplicateClaim, assess_and_store as _assess  # noqa: E402
+
+
+def assess_and_store(db, payload, **kw):
+    """Re-run tolerant: a claim already in the corpus is skipped (the API would answer 409)."""
+    try:
+        return _assess(db, payload, **kw)
+    except DuplicateClaim:
+        db.rollback()
+        return None
 from server.seed import init_db             # noqa: E402
 
 TODAY = "2026-07-05"
@@ -82,6 +91,9 @@ def main() -> None:
         print(f"{'claim':10} {'band':6} {'disp':11} {'act':10} {'pay':>9}  holds")
         for p in DEMO:
             r = assess_and_store(db, p)
+            if r is None:
+                print(f"{p['claim_id']:10} (already seeded — skipped)")
+                continue
             print(f"{r['claim_id']:10} {r['band']:6} {r['disposition']:11} "
                   f"{r['accident_action']:10} {r['net_payable']:>9.2f}  {','.join(r['holds'])}")
 

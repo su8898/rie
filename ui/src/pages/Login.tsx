@@ -1,12 +1,14 @@
 // Login page. On success, stores {username,role} in the auth context and
 // redirects to /dashboard (or the page the user was bounced from).
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
-import { ApiError } from "../api";
+import { ApiError, api } from "../api";
 import { useAuth } from "../auth";
 
-const DEV_LOGINS = ["admin", "handler", "medical", "investigator", "legal"];
+// Seeded only when the backend runs as dev/test (username == password). The list is shown only
+// after /healthz reports env dev|test, so a production deploy never advertises credentials.
+const DEV_LOGINS = ["admin", "treasury", "handler", "medical", "investigator", "legal"];
 
 export default function LoginPage() {
   const { user, loading, login } = useAuth();
@@ -16,6 +18,22 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [devEnv, setDevEnv] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    api
+      .health()
+      .then((h) => {
+        if (alive) setDevEnv(h.env === "dev" || h.env === "test");
+      })
+      .catch(() => {
+        /* unknown env -> keep the hints hidden */
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const from =
     (location.state as { from?: { pathname?: string } } | null)?.from
@@ -110,6 +128,7 @@ export default function LoginPage() {
           </button>
         </form>
 
+        {devEnv && (
         <div className="mt-4 rounded-lg border border-slate-200 bg-white p-3">
           <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-slate-400">
             Dev logins (username == password)
@@ -127,6 +146,7 @@ export default function LoginPage() {
             ))}
           </div>
         </div>
+        )}
       </div>
     </div>
   );

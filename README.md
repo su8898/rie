@@ -47,7 +47,13 @@ python3 -m pytest -q                     # engine unit tests + conformance + API
 cd ui && npm install && npm run dev
 ```
 
-Dev logins (username == password): `admin`, `handler`, `medical`, `investigator`, `legal`.
+Dev logins (username == password, **dev/test only** — never seeded when `RIE_APP_ENV=prod`):
+`admin`, `treasury` (second ADMIN — the payer), `handler`, `medical`, `investigator`, `legal`.
+Payments need three different people: a HANDLER assembles, one ADMIN approves, another pays.
+
+**Secrets.** `RIE_SECRET_KEY`, `RIE_RAILS_SECRET`, `RIE_PSEUDONYM_SECRET` have dev defaults; with
+`RIE_APP_ENV=prod` the API refuses to start unless each is set to ≥32 random characters, and the
+first ADMIN is bootstrapped from `RIE_BOOTSTRAP_ADMIN_PASSWORD`. See `db/.env.example`.
 
 ## Deployment (Docker + PostgreSQL + real reference data)
 

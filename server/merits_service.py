@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from . import models, statemachine as sm
+from .validation import MERITS_GROUNDS
 
 MERITS = sm.Machine(
     name="merits", state_attr="status", initial="PENDING",
@@ -39,6 +40,12 @@ def get_or_create(db: Session, claim_id: str) -> "models.MeritsDetermination":
 def decide(db: Session, claim_id: str, action: str, user: dict,
            fault_pct: Optional[float] = None, ground: Optional[str] = None
            ) -> "models.MeritsDetermination":
+    if action == "accept" and fault_pct is not None:
+        fault_pct = float(fault_pct)
+        if not (0.0 <= fault_pct <= 100.0):
+            raise sm.GateNotMet(f"fault_pct must be within 0..100, got {fault_pct}")
+    if action in _REJECT_ACTIONS and ground is not None and ground not in MERITS_GROUNDS:
+        raise sm.GateNotMet(f"ground must be one of {sorted(MERITS_GROUNDS)}")
     m = get_or_create(db, claim_id)
     sm.fire(db, MERITS, m, claim_id, action, user, detail={"fault_pct": fault_pct, "ground": ground})
     if action == "accept":

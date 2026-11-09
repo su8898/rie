@@ -46,6 +46,9 @@ def verify_detached(token: str, body_obj, secret: str) -> Optional[dict]:
     try:
         if not hmac.compare_digest(_b64u_dec(m), expected):
             return None
-        return json.loads(_b64u_dec(h))
+        header = json.loads(_b64u_dec(h))
+        if not isinstance(header, dict) or header.get("alg") != "HS256":   # alg pinned — no 'none'
+            return None
+        return header
     except Exception:
         return None

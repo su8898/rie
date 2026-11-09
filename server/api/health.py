@@ -1,10 +1,11 @@
-"""Liveness + DB check."""
+"""Liveness + DB check (+ the environment name, so the SPA can hide dev-only affordances)."""
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from ..config import APP_ENV
 from ..db import get_db
 
 router = APIRouter()
@@ -17,4 +18,4 @@ def healthz(db: Session = Depends(get_db)) -> dict:
         db_status = "up"
     except Exception:
         db_status = "down"
-    return {"status": "ok", "db": db_status}
+    return {"status": "ok", "db": db_status, "env": APP_ENV}

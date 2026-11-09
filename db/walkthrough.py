@@ -124,7 +124,7 @@ def main():
     line("settle", c.post(f"/api/lifecycle/{CID}/settle").json()["stage"])
 
     # ── 7. payment batch with segregation of duties ─────────────────────────
-    stage(7, "Payment batch — segregation of duties (handler assembles, admin approves+pays)")
+    stage(7, "Payment batch — segregation of duties (handler assembles, admin approves, treasury pays)")
     login("handler")
     b = c.post("/api/payments/batches", json={"note": "walkthrough settlement"}).json()
     c.post(f"/api/payments/batches/{b['id']}/instructions",
@@ -134,7 +134,10 @@ def main():
     line("handler self-approve", f"HTTP {sod.status_code} (blocked — role/SoD)")
     login("admin")
     line("admin approve", c.post(f"/api/payments/batches/{b['id']}/approve").json()["status"])
-    line("admin pay", c.post(f"/api/payments/batches/{b['id']}/pay").json()["status"])
+    same = c.post(f"/api/payments/batches/{b['id']}/pay")
+    line("admin self-pay", f"HTTP {same.status_code} (blocked — approver may not pay)")
+    login("treasury")
+    line("treasury pay", c.post(f"/api/payments/batches/{b['id']}/pay").json()["status"])
     login("handler")
     line("lifecycle after pay", c.get(f"/api/claims/{CID}/workflow").json()["lifecycle"]["stage"])
     line("finalize", c.post(f"/api/lifecycle/{CID}/finalize").json()["stage"])
@@ -167,6 +170,7 @@ def main():
         c.post(f"/api/payments/batches/{bb['id']}/instructions", json={"claim_id": cid, "source": "SUPPLIER"})
     login("admin")
     c.post(f"/api/payments/batches/{bb['id']}/approve")
+    login("treasury")
     c.post(f"/api/payments/batches/{bb['id']}/pay")
     login("investigator")
     swept = c.post("/api/audit/sweep", params={"threshold": 20}).json()
