@@ -6,8 +6,10 @@ alive. Net payable nets off any interim payment (s17(6)).
 """
 from __future__ import annotations
 
+from decimal import Decimal
+
 from .models import Claim
-from .vocab import Category
+from .vocab import Category, D, money
 
 
 def eligible_to_pay(c: Claim, disp: Category, validated: bool,
@@ -20,4 +22,4 @@ def eligible_to_pay(c: Claim, disp: Category, validated: bool,
     if not c.payee_verified:                            holds.append("PAYEE_UNVERIFIED")
     if not c.attorney_in_standing:                      holds.append("ATTORNEY_NOT_IN_STANDING")
     if c.claimant_deceased_on:                          holds.append("LIFE_STATUS_MISMATCH")
-    return (not holds), round(max(payable - interim_paid, 0.0), 2), holds
+    return (not holds), money(max(D(payable) - D(interim_paid), Decimal(0))), holds

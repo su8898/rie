@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 import engine
 
 from . import adapter, awards_service, models
+from .pipeline_service import load_graph, prior_lines
 from .pseudonymise import pseudonymise_ingest
 from .reference_data import build_mode_overrides, build_refbook, build_ruleset
 
@@ -27,12 +28,13 @@ def compute_offer(db: Session, payload: dict, today: Optional[date] = None) -> d
     claim = adapter.json_to_claim(payload)
     nappi_codes = {l.code for l in claim.lines if l.kind == "NAPPI"}
     book, rs = build_refbook(db, nappi_codes), build_ruleset(db)
-    accidents = [adapter.accident_to_engine(r) for r in db.scalars(select(models.AccidentRecord))]
+    accidents, _ = load_graph(db, claim)
 
     record = engine.process_claim(
         claim, accidents, book, rs, today=today or date.today(),
         accident_dx_regions=set(payload.get("accident_dx_regions", [])),
         mode_overrides=build_mode_overrides(db),                # §11 — ADMIN signal-mode overrides
+        seen_lines=set(prior_lines(db, claim)),                 # §4e — pay once across claims
     )
 
     hi = payload.get("heads_input", {})

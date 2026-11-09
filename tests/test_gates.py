@@ -171,3 +171,30 @@ def test_merits_accepted_no_reason():
 def test_merits_pending_no_reason():
     # None = pending -> not a reason here (handled as held_for_merits downstream)
     assert merits_gate(_claim(merits_accepted=None)) == []
+
+
+# ── H1: calendar years, not 365-day blocks ───────────────────────────────────
+def test_add_years_plain_anniversary():
+    from engine.gates import add_years
+    assert add_years(date(2024, 3, 1), 3) == date(2027, 3, 1)
+
+
+def test_add_years_leap_day_falls_to_first_of_march():
+    from engine.gates import add_years
+    assert add_years(date(2024, 2, 29), 3) == date(2027, 3, 1)
+    assert add_years(date(2024, 2, 29), 4) == date(2028, 2, 29)
+
+
+def test_prescription_three_calendar_years_spanning_a_leap_day():
+    # 365*3 = 1095 days would expire on 2027-02-28; the statute counts years -> 2027-03-01 is in time
+    c = _claim(accident_date=date(2024, 3, 1), lodged_on=date(2027, 3, 1))
+    assert prescription_gates(c, RS, TODAY, None) == []
+    c = _claim(accident_date=date(2024, 3, 1), lodged_on=date(2027, 3, 2))
+    assert prescription_gates(c, RS, TODAY, None) == ["PRESCRIBED_LODGEMENT"]
+
+
+def test_prescription_summons_five_calendar_years():
+    # lodged 2026-03-01: 365*5 = 1825 days -> 2031-02-28 (two leap days short); statute -> 2031-03-01
+    c = _claim(accident_date=date(2026, 2, 1), lodged_on=date(2026, 3, 1))
+    assert prescription_gates(c, RS, TODAY, date(2031, 3, 1)) == []
+    assert prescription_gates(c, RS, TODAY, date(2031, 3, 2)) == ["PRESCRIBED_SUMMONS"]

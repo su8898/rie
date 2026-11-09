@@ -88,7 +88,10 @@ def test_signal_mode_override_changes_live_scoring_and_is_audited():
         client.post("/api/admin/signal-modes",
                     json={"code": "DX_ACCIDENT_MISMATCH", "mode": "SHADOW", "note": "low precision"})
         _login("handler")
-        r2 = client.post("/api/claims", json={**_DXM, "claim_id": "R_ovrB"}).json()
+        # a different service date: the identical line on a second claim for the same party would
+        # now be SUPPLIER_PRECLUSION (pay once across claims, H2) before the DX check runs
+        line_b = {**_DXM["lines"][0], "service_date": "2026-03-02"}
+        r2 = client.post("/api/claims", json={**_DXM, "claim_id": "R_ovrB", "lines": [line_b]}).json()
         assert "DX_ACCIDENT_MISMATCH" not in r2["reasons"]                 # now suppressed from scoring
         assert "DX_ACCIDENT_MISMATCH" in r2["shadow_signals"]              # computed, invisible, 0 points
         _login("admin")

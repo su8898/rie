@@ -115,3 +115,29 @@ def test_hard_fraud_reason_adds_50_and_bands_red(monkeypatch):
 
 def test_band_thresholds_constants():
     assert (AMBER_AT, RED_AT) == (25, 50)
+
+
+# ── H5 / H8: ADVISORY tracked, Grounded never overridable, bogus overrides ignored ──
+def test_advisory_override_is_visible_zero_points_and_listed():
+    a = score_and_band(["DX_ACCIDENT_MISMATCH"], {"DX_ACCIDENT_MISMATCH": SignalMode.ADVISORY})
+    assert a.reasons == ["DX_ACCIDENT_MISMATCH"] and a.advisory == ["DX_ACCIDENT_MISMATCH"]
+    assert a.score == 0 and a.band is Band.GREEN
+
+
+def test_grounded_gate_cannot_be_shadowed_or_made_advisory():
+    for mode in (SignalMode.SHADOW, SignalMode.ADVISORY):
+        a = score_and_band(["PRESCRIBED_LODGEMENT"], {"PRESCRIBED_LODGEMENT": mode})
+        assert a.reasons == ["PRESCRIBED_LODGEMENT"] and a.shadow == [] and a.advisory == []
+
+
+def test_non_enum_override_value_is_ignored():
+    a = score_and_band(["DX_ACCIDENT_MISMATCH"], {"DX_ACCIDENT_MISMATCH": "SHADOW"})
+    assert a.reasons == ["DX_ACCIDENT_MISMATCH"] and a.score == 15 and a.advisory == []
+
+
+def test_effective_mode_without_meta_falls_back_to_default():
+    from engine.scoring import effective_mode
+    assert effective_mode("NOT_A_CODE", None, {"NOT_A_CODE": SignalMode.SHADOW}) is SignalMode.SCORED
+    assert effective_mode("RING_PARTIES", reasons.R["RING_PARTIES"], {}) is SignalMode.SHADOW
+    assert effective_mode("RING_PARTIES", reasons.R["RING_PARTIES"],
+                          {"RING_PARTIES": SignalMode.SCORED}) is SignalMode.SCORED

@@ -109,4 +109,10 @@ def test_no_hard_fraud_codes_in_catalogue():
 
 
 def test_catalogue_size():
-    assert len(R) == 38
+    assert len(R) == 39
+
+
+def test_reference_unresolved_is_a_hard_grounded_review_gate():
+    m = R["REFERENCE_UNRESOLVED"]
+    assert m.category is Category.REVIEW and m.hard is True and m.points == 0
+    assert m.maturity is Maturity.GROUNDED and MODE["REFERENCE_UNRESOLVED"] is SignalMode.SCORED

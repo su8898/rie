@@ -67,10 +67,12 @@ def json_to_claim(p: dict) -> engine.Claim:
     )
 
 
-def accident_to_engine(rec: "models.AccidentRecord") -> engine.Accident:
+def accident_to_engine(rec: "models.AccidentRecord", claimants=None) -> engine.Accident:
+    """`claimants` — party tokens with a PERSONAL claim already on this accident (derived from
+    the claim corpus by the caller); the engine's one-claim-per-claimant-per-accident gate."""
     return engine.Accident(
         accident_id=rec.accident_id, case_number=rec.case_number, when=rec.when_,
         where=rec.where_ or "", vehicles=set(rec.vehicles or []), parties=set(rec.parties or []),
         oar_occupants=rec.oar_occupants, sources=dict(rec.sources or {}),
-        claims=list(rec.claims or []),
+        claims=list(rec.claims or []), claimants=set(claimants or []),
     )

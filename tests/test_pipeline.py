@@ -11,6 +11,7 @@ from datetime import date
 from engine.models import Accident, Claim, Line, Ruleset
 from engine.pipeline import process_claim
 from engine.reference import RefBook
+from engine.vocab import SignalMode
 
 TODAY = date(2026, 7, 5)
 
@@ -67,7 +68,7 @@ def _personal(**over) -> Claim:
 def test_clean_supplier_full_record():
     d = process_claim(_supplier(), [], _book(), _rs(), TODAY)
     assert d["claim_id"] == "R_1"
-    assert d["accident_id"] == "A_1"          # no accident passed -> minted
+    assert d["accident_id"] == "A_R_1"        # no accident passed -> minted from the claim id (H7)
     assert d["accident_action"] == "CREATED"
     assert d["band"] == "GREEN"
     assert d["score"] == 0
@@ -164,3 +165,75 @@ def test_shadow_signal_surfaces_in_shadow_not_reasons():
     assert "CONVERGENCE_THIN" not in d["reasons"]
     assert d["score"] == 0                     # shadow contributes zero
     assert d["convergence"] == 4.2             # 0.5/12*100
+
+
+# ── 2026-11-09 High findings threaded through the pipeline ───────────────────
+def test_h2_prior_lines_preclude_and_ledger_accumulates():
+    from engine.adjudication import line_key
+    ledger = {line_key("P_1", _line())}
+    d = process_claim(_supplier(lines=[_line(), _line(amount=300.0)]), [], _book(), _rs(), TODAY,
+                      seen_lines=ledger)
+    assert d["reasons"] == ["SUPPLIER_PRECLUSION"] and d["disposition"] == "ADJUSTED"
+    assert d["medical_payable"] == 300.0
+    assert line_key("P_1", _line(amount=300.0)) in ledger       # this claim's line now in the ledger
+
+
+def test_h2_duplicate_personal_claim_on_same_accident():
+    acc = Accident(accident_id="A_pre", case_number="CAS100/02/2026", when=date(2026, 2, 1),
+                   where="", vehicles=set(), parties={"P_1"}, oar_occupants=5,
+                   sources={"EMS": "c1", "HOSPITAL": "c2", "SAPS": "c3"}, claimants={"P_1"})
+    d = process_claim(_personal(merits_accepted=True), [acc], _book(), _rs(), TODAY)
+    assert "DUPLICATE_CLAIM" in d["reasons"] and d["disposition"] == "COMPLIANCE"
+    assert d["eligible_to_pay"] is False and "held_compliance" in d["holds"]
+
+
+def test_h2_first_personal_claim_registers_claimant():
+    acc = Accident(accident_id="A_pre", case_number="CAS100/02/2026", when=date(2026, 2, 1),
+                   where="", vehicles=set(), parties={"P_1"}, oar_occupants=5,
+                   sources={"EMS": "c1", "HOSPITAL": "c2", "SAPS": "c3"})
+    d = process_claim(_personal(merits_accepted=True), [acc], _book(), _rs(), TODAY)
+    assert "DUPLICATE_CLAIM" not in d["reasons"] and acc.claimants == {"P_1"}
+
+
+def test_h5_advisory_signal_in_record_and_not_dispositive():
+    d = process_claim(_supplier(lines=[_line(dx="K35")]), [], _book(), _rs(), TODAY,
+                      accident_dx_regions={"S72"},
+                      mode_overrides={"DX_ACCIDENT_MISMATCH": SignalMode.ADVISORY})
+    assert d["reasons"] == ["DX_ACCIDENT_MISMATCH"] and d["advisory_signals"] == ["DX_ACCIDENT_MISMATCH"]
+    assert d["disposition"] == "CLEAN" and d["eligible_to_pay"] is True
+
+
+def test_h5_single_green_heuristic_is_not_fraud():
+    d = process_claim(_supplier(lines=[_line(dx="K35")]), [], _book(), _rs(), TODAY,
+                      accident_dx_regions={"S72"})
+    assert d["score"] == 15 and d["band"] == "GREEN"
+    assert d["disposition"] == "CLEAN" and d["eligible_to_pay"] is True
+
+
+def test_h6_uncovered_code_is_held_for_review_with_flag():
+    d = process_claim(_supplier(lines=[_line(code="7777", amount=1e12)]), [], _book(), _rs(), TODAY)
+    assert d["needs_review"] is True and d["reasons"] == ["REFERENCE_UNRESOLVED"]
+    assert d["disposition"] == "REVIEW" and d["eligible_to_pay"] is False
+    assert d["holds"] == ["held_review"]
+
+
+def test_h7_worklist_match_creates_own_accident_and_names_candidate():
+    acc = Accident(accident_id="A_pre", case_number="CAS999/01/2020", when=date(2026, 2, 1),
+                   where="", vehicles=set(), parties={"P_1"}, oar_occupants=None,
+                   sources={"EMS": "c1", "HOSPITAL": "c2"})
+    d = process_claim(_supplier(case_number_raw=None), [acc], _book(), _rs(), TODAY)
+    assert d["accident_action"] == "WORKLIST" and d["accident_id"] == "A_R_1"
+    assert d["accident_candidate"] == "A_pre" and "R_1" not in acc.claims
+
+
+def test_h8_grounded_gate_shadow_override_ignored():
+    d = process_claim(_personal(merits_accepted=True, accident_date=date(2020, 1, 1),
+                                lodged_on=date(2024, 1, 1)), [], _book(), _rs(), TODAY,
+                      mode_overrides={"PRESCRIBED_LODGEMENT": SignalMode.SHADOW})
+    assert "PRESCRIBED_LODGEMENT" in d["reasons"] and d["disposition"] == "COMPLIANCE"
+
+
+def test_h12_apportioned_medical_rounds_half_up():
+    d = process_claim(_personal(merits_accepted=True, fault_pct=30.0, lines=[_line(amount=100.05)]),
+                      [], _book(), _rs(), TODAY)
+    assert d["medical_payable"] == 70.04 and d["net_payable"] == 70.04

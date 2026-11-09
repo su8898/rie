@@ -12,6 +12,12 @@ from typing import Optional
 from .vocab import Band
 
 
+def normalise_code(kind: str, code: str) -> str:
+    """One code identity everywhere (§3): TARIFF codes compare without leading zeros
+    ('0190' == '190'); NAPPI codes compare raw. Every code comparison in the engine uses this."""
+    return (code.lstrip("0") or "0") if kind == "TARIFF" else code
+
+
 @dataclass
 class Ruleset:                     # effective at accident date (§1)
     lodgement_years_identified: int = 3
@@ -22,6 +28,9 @@ class Ruleset:                     # effective at accident date (§1)
     caps: list[tuple[date, float]] = field(default_factory=list)   # (effective_from, annual_cap)
     preauth_required: set[str] = field(default_factory=set)        # code classes needing pre-auth
     s19_grounds: set[str] = field(default_factory=set)
+
+    def __post_init__(self) -> None:                               # codes compare normalised (§3)
+        self.preauth_required = {normalise_code("TARIFF", x) for x in self.preauth_required}
 
     def cap_at(self, accident_date: date) -> float:                # §5c — Sweatman/s17(4A)(b)
         rows = [c for eff, c in sorted(self.caps) if eff <= accident_date]
@@ -45,11 +54,14 @@ class Line:
 @dataclass
 class Authorisation:               # §5f — a promise priced in advance
     codes: set[str]
-    qty_limit: float
-    ceiling: float                 # rand
+    qty_limit: float               # units authorised across the invoice (0 = unlimited units)
+    ceiling: float                 # rand, consumed across every line the authorisation covers
     valid_from: date
     valid_to: date
     status: str = "APPROVED"
+
+    def __post_init__(self) -> None:                               # codes compare normalised (§3)
+        self.codes = {normalise_code("TARIFF", x) for x in self.codes}
 
 
 @dataclass
@@ -95,6 +107,8 @@ class Accident:                    # §6.0
     oar_occupants: Optional[int]
     sources: dict[str, str] = field(default_factory=dict)  # source_class -> cluster_id
     claims: list[str] = field(default_factory=list)
+    claimants: set[str] = field(default_factory=set)       # P_* with a PERSONAL claim here (§4e)
+    worklist_candidate: Optional[str] = None               # fuzzy match awaiting a human (§6.0)
 
 
 @dataclass
@@ -112,3 +126,4 @@ class Assessment:
     score: int
     band: Band
     engine_version: str = "rie-scorer v1"
+    advisory: list[str] = field(default_factory=list)   # the ADVISORY subset of reasons: visible, never dispositive

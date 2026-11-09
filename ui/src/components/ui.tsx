@@ -42,6 +42,7 @@ const DISP_STYLE: Record<Disposition, string> = {
   COMPLIANCE: "bg-amber-100 text-amber-800 ring-amber-600/20",
   PREAUTH: "bg-violet-100 text-violet-800 ring-violet-600/20",
   SI_GATE: "bg-sky-100 text-sky-800 ring-sky-600/20",
+  REVIEW: "bg-fuchsia-100 text-fuchsia-800 ring-fuchsia-600/20",
   ADJUSTED: "bg-blue-100 text-blue-800 ring-blue-600/20",
   CLEAN: "bg-emerald-100 text-emerald-800 ring-emerald-600/20",
 };

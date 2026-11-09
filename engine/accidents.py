@@ -36,7 +36,10 @@ def match_score(c: Claim, a: Accident, place: str, vehicles: set[str]) -> float:
 
 def resolve_accident(c: Claim, accidents: list[Accident],
                      place: str = "", vehicles: set[str] = frozenset()) -> tuple[Accident, str]:
-    """Returns (accident, action) — action in JOINED | AUTO_JOINED | WORKLIST | CREATED."""
+    """Returns (accident, action) — action in JOINED | AUTO_JOINED | WORKLIST | CREATED.
+    A WORKLIST match is NOT a join: the claim anchors to its own new accident, which names the
+    candidate (`worklist_candidate`) for a human to confirm or dismiss. New accident ids derive
+    from the first-touch claim id — unique by construction, never a position in the graph."""
     cas = normalise_cas(c.case_number_raw)
     if cas:
         for a in accidents:
@@ -50,8 +53,9 @@ def resolve_accident(c: Claim, accidents: list[Accident],
                 best, score = a, s
     if best and score >= AUTO_JOIN:
         return best, "AUTO_JOINED"
-    if best and score >= WORKLIST:
-        return best, "WORKLIST"                      # human confirms/creates
-    a = Accident(f"A_{len(accidents)+1}", cas, c.accident_date, place, set(vehicles),
+    a = Accident(f"A_{c.claim_id}", cas, c.accident_date, place, set(vehicles),
                  {c.party_token}, None)              # materialised on first touch
+    if best and score >= WORKLIST:
+        a.worklist_candidate = best.accident_id      # human confirms the join (or not)
+        return a, "WORKLIST"
     return a, "CREATED"

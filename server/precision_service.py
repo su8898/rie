@@ -67,8 +67,9 @@ def _recommend(current: str, meta, w: dict) -> str:
 def precision_by_signal(db: Session) -> list[dict]:
     labels = _claim_labels(db)
     agg: dict = defaultdict(lambda: {"fired": 0, "labeled": 0, "adverse": 0})
-    for det in db.scalars(select(models.Determination)):
-        signals = set(det.reasons or []) | set(det.shadow_signals or [])
+    for det in db.scalars(select(models.Determination)
+                          .where(models.Determination.id.in_(models.latest_determination_ids()))):
+        signals = set(det.reasons or []) | set(det.shadow_signals or [])   # one firing per claim, latest verdict
         lab = labels.get(det.claim_id)
         for code in signals:
             agg[code]["fired"] += 1
@@ -106,6 +107,7 @@ def promotions(db: Session) -> list[dict]:
 def _green_claims(db: Session) -> list[str]:
     return [d.claim_id for d in
             db.scalars(select(models.Determination).where(models.Determination.band == "GREEN")
+                       .where(models.Determination.id.in_(models.latest_determination_ids()))
                        .order_by(models.Determination.claim_id))]
 
 

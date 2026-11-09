@@ -27,24 +27,33 @@ def process_claim(c: Claim, accidents: list[Accident], book: RefBook, rs: Rulese
                   seen_lines: Optional[set] = None, cohort_is_bus_taxi: bool = False,
                   conv_floor_p10: float = 20.0, summons_served: Optional[date] = None,
                   mode_overrides: Optional[dict] = None) -> dict:
-    """The brain, invoked once per claim. Deterministic. Returns the determination record."""
+    """The brain, invoked once per claim. Deterministic. Returns the determination record.
+    `seen_lines` is the pay-once ledger across claims (§4e, s17(5)): the caller threads the
+    party's lines already paid elsewhere; this claim's lines are added to it on return."""
     seen_lines = seen_lines if seen_lines is not None else set()
+    prior_lines = frozenset(seen_lines)
 
     # A. anchor to the accident graph and refresh corroboration          (§6.0)
     accident, action = resolve_accident(c, accidents)
     accident.claims.append(c.claim_id)
     graph_reasons = corroboration_signals(accident, cohort_is_bus_taxi, conv_floor_p10)
+    dup_claim = (["DUPLICATE_CLAIM"] if c.claim_type == "PERSONAL"
+                 and c.party_token in accident.claimants else [])   # one claim per claimant per accident
+    if c.claim_type == "PERSONAL":
+        accident.claimants.add(c.party_token)
 
     # B. grounded gates                                                   (§4)
     deceased_pre = bool(c.claimant_deceased_on and
                         any(l.service_date > c.claimant_deceased_on for l in c.lines))
     gate_reasons = (prescription_gates(c, rs, today, summons_served)
-                    + s24_gates(c) + standing_gates(c, deceased_pre) + merits_gate(c))
+                    + s24_gates(c) + standing_gates(c, deceased_pre) + merits_gate(c) + dup_claim)
     validated = not any(r in ("S24_INCOMPLETE", "OAR_MISSING") for r in gate_reasons)
 
     # C. per-line adjudication                                        (§3, §5f)
-    line_results = [adjudicate_line(c, l, book, rs, provider_tier, seen_lines,
-                                    set(accident_dx_regions)) for l in c.lines]
+    seen, auth_usage = set(), {}
+    line_results = [adjudicate_line(c, l, book, rs, provider_tier, seen, set(accident_dx_regions),
+                                    prior_lines, auth_usage) for l in c.lines]
+    seen_lines |= seen
     line_reasons = [r for lr in line_results for r in lr.reasons]
 
     # D. heads (medical here; earnings/GD computed when their inputs arrive) (§5)
@@ -66,6 +75,8 @@ def process_claim(c: Claim, accidents: list[Accident], book: RefBook, rs: Rulese
         "reasons": assessment.reasons, "shadow_signals": assessment.shadow,
         "disposition": disp.name, "medical_payable": medical_payable,
         "eligible_to_pay": ok, "net_payable": net_payable, "holds": holds,
+        "needs_review": any(lr.needs_review for lr in line_results),
+        "advisory_signals": assessment.advisory, "accident_candidate": accident.worklist_candidate,
         "engine_version": assessment.engine_version,
         "ruleset_effective": c.accident_date.isoformat(), "reference_edition": "RPL-2026",
     }

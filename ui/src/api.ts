@@ -23,6 +23,7 @@ import type {
   CostEstimate,
   Dashboard,
   Determination,
+  DeterminationPage,
   DisputeAnalytics,
   DisputeItem,
   Fairness,
@@ -51,6 +52,14 @@ import type {
   Workflow,
 } from "./types";
 
+/**
+ * Fired on `window` when any API call (other than the login/me probes) answers 401: the
+ * session expired or was revoked server-side. The AuthProvider listens and drops the user,
+ * which routes every protected page back to /login (H10).
+ */
+export const UNAUTHORIZED_EVENT = "rie:unauthorized";
+const AUTH_PROBES = new Set(["/api/auth/login", "/api/auth/me"]);
+
 export class ApiError extends Error {
   status: number;
   detail: unknown;
@@ -63,6 +72,14 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const { data } = await requestWithHeaders<T>(path, init);
+  return data;
+}
+
+async function requestWithHeaders<T>(
+  path: string,
+  init?: RequestInit,
+): Promise<{ data: T; headers: Headers }> {
   let res: Response;
   try {
     res = await fetch(path, {
@@ -93,9 +110,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       data && typeof data === "object" && "detail" in data
         ? (data as { detail: unknown }).detail
         : data;
+    if (res.status === 401 && !AUTH_PROBES.has(path.split("?")[0])) {
+      window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT));
+    }
     throw new ApiError(res.status, detailToMessage(detail, res.status), detail);
   }
-  return data as T;
+  return { data: data as T, headers: res.headers };
 }
 
 function detailToMessage(detail: unknown, status: number): string {
@@ -145,6 +165,30 @@ export const api = {
     if (params.offset != null) q.set("offset", String(params.offset));
     const qs = q.toString();
     return request<Determination[]>(`/api/claims${qs ? `?${qs}` : ""}`);
+  },
+  // Server-side page: one row per claim (its latest determination) + the full filtered
+  // count from X-Total-Count, so the Claims page can page through the whole corpus.
+  listClaimsPage: async (params: {
+    band?: string;
+    disposition?: string;
+    q?: string;
+    needsReview?: boolean;
+    limit?: number;
+    offset?: number;
+  } = {}): Promise<DeterminationPage> => {
+    const q = new URLSearchParams();
+    if (params.band) q.set("band", params.band);
+    if (params.disposition) q.set("disposition", params.disposition);
+    if (params.q && params.q.trim()) q.set("q", params.q.trim());
+    if (params.needsReview) q.set("needs_review", "true");
+    if (params.limit != null) q.set("limit", String(params.limit));
+    if (params.offset != null) q.set("offset", String(params.offset));
+    const qs = q.toString();
+    const { data, headers } = await requestWithHeaders<Determination[]>(
+      `/api/claims${qs ? `?${qs}` : ""}`,
+    );
+    const total = Number(headers.get("X-Total-Count") ?? data.length);
+    return { rows: data, total: Number.isFinite(total) ? total : data.length };
   },
   getClaim: (claimId: string) =>
     request<ClaimDetail>(`/api/claims/${encodeURIComponent(claimId)}`),
