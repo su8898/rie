@@ -165,6 +165,40 @@ expired signature is refused. **The channel still uses one shared secret, so a s
 provider-intake port (asymmetric signing).** Existing databases need `alembic upgrade head`
 (migration `f6d9a4c1b357`).
 
+## Medical reports
+
+Ported from CIE's statutory medical report forms and adapted to the Fund's own
+([`server/medical_report_service.py`](server/medical_report_service.py)). Nothing here changes the engine.
+
+A provider's system files a completed form over the rails channel. The Fund stores it against the
+claim reference it quotes, exactly as filed (sections → fields → label and value), and both sides
+can read and print it.
+
+| Form code | Form | Basis |
+| --- | --- | --- |
+| `RAF1-MR` | The medical report in the RAF 1 claim form, by the treating practitioner | Act s24(2)(a) |
+| `RAF4` | The serious injury assessment report | Regulation 3 |
+
+- **The Fund judges completeness.** Every field the catalogue marks required must carry a value. The response and the print page name what is missing.
+- **A complete RAF 4 opens the serious-injury assessment.** On a personal claim with no assessment yet, it is created `SUBMITTED` for the medical officer with the form's impairment figure and narrative finding.
+- **A report may arrive before its claim.** It is stored unresolved and tied to the claim the first time the claim's reports are asked for.
+- **No patient identity on the wire.** The patient is identified by the claim reference. A bare 13-digit identity number anywhere in a filing is refused.
+- **Filing is idempotent and replay-protected.** It needs an `Idempotency-Key` and a signed body with a one-time `jti`.
+
+| Method | Path | Signed over | Purpose |
+| --- | --- | --- | --- |
+| GET | `/rails/v1/medical-reports/forms` | `{"catalogue": "medical-report-forms"}` | The form catalogue and its required fields. |
+| POST | `/rails/v1/medical-reports` | the body | File a report. |
+| GET | `/rails/v1/medical-reports/{ref}` · `?provider_id=` | `{"reportRef"}` · `{"providerId"}` | Read one (`?format=xml` for XML), or list a provider's. |
+| GET | `/rails/v1/claims/{claim_id}/documentation` | `{"claimId"}` | Which forms are on file for a claim and whether a complete one is among them. |
+
+Operators see the reports under **Claim detail → Medical reports on file**, with a print page and
+the XML document, over `/api/medical-reports`. **The field lists are working layouts. Check them
+against the gazetted RAF 1 and RAF 4 before go-live; a layout change is an edit to `FORMS`.** CIE's
+rule that holds payment until a first medical report arrives was not ported: it is tied to COIDA
+modifiers and has no RAF equivalent. Existing databases need `alembic upgrade head`
+(migration `a7e2c5d8f419`).
+
 ## API
 
 | Method | Path | Notes |
@@ -183,6 +217,7 @@ provider-intake port (asymmetric signing).** Existing databases need `alembic up
 | GET | `/api/coding/drift?min_months=&min_lines=` | providers whose billing ratio is rising |
 | GET | `/api/remittances?provider_id=` · `/{ref}` · `/{ref}/xml` · `/{ref}/print` | remittance advice: list, detail, XML, print page |
 | POST | `/api/remittances/issue/{batch_id}` | issue advice for a paid batch that has none (ADMIN) |
+| GET | `/api/medical-reports?claim_id=&provider_id=` · `/forms` · `/documentation/{claim_id}` · `/{ref}` · `/{ref}/xml` · `/{ref}/print` | medical reports on file: list, catalogue, per-claim status, detail, XML, print page |
 
 A determination record: `{claim_id, accident_id, accident_action, convergence, validated,
 band, score, reasons[], shadow_signals[], disposition, medical_payable, net_payable,

@@ -22,6 +22,7 @@ import {
   ModeChip,
   YesNo,
 } from "../components/ui";
+import MedicalReportsCard from "../components/MedicalReports";
 import WorkflowPanel from "../components/Workflow";
 import { num, pct, rand } from "../format";
 import type { ClaimDetail, Reason } from "../types";
@@ -297,6 +298,8 @@ export default function ClaimDetailPage() {
           <WorkflowPanel claimId={d.claim_id} />
         </div>
       </div>
+
+      <MedicalReportsCard claimId={d.claim_id} />
 
       {/* Raw claim */}
       <Card

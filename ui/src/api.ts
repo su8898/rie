@@ -50,6 +50,8 @@ import type {
   CodeRuleKind,
   DriftReport,
   RemittanceSummary,
+  MedicalReportSummary,
+  ClaimDocumentation,
   Reason,
   RecallEstimate,
   RecallSample,
@@ -571,6 +573,16 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ effective_to, note }),
     }),
+  medicalReports: (claimId: string) =>
+    request<MedicalReportSummary[]>(
+      `/api/medical-reports?claim_id=${encodeURIComponent(claimId)}`,
+    ),
+  claimDocumentation: (claimId: string) =>
+    request<ClaimDocumentation>(
+      `/api/medical-reports/documentation/${encodeURIComponent(claimId)}`,
+    ),
+  medicalReportPrintUrl: (ref: string) => `/api/medical-reports/${encodeURIComponent(ref)}/print`,
+  medicalReportXmlUrl: (ref: string) => `/api/medical-reports/${encodeURIComponent(ref)}/xml`,
   remittances: (providerId?: string) =>
     request<RemittanceSummary[]>(
       `/api/remittances${providerId ? `?provider_id=${encodeURIComponent(providerId)}` : ""}`,

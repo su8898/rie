@@ -421,6 +421,27 @@ class RemittanceLine(Base):
     reasons: Mapped[list] = mapped_column(JSON, default=list)
 
 
+class MedicalReport(Base):
+    """A statutory medical report a provider files with the Fund (port of CIE's medical reports):
+    the RAF 1 medical report or the RAF 4 serious injury assessment. Self-describing — sections ->
+    fields -> {label, value} — so it is stored and printed exactly as filed. Keyed to a claim by
+    the reference the provider quoted; the patient is never a structured field."""
+    __tablename__ = "medical_report"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ref: Mapped[str] = mapped_column(String, unique=True, index=True)        # MR-…
+    form_code: Mapped[str] = mapped_column(String, index=True)               # RAF1-MR | RAF4
+    form_title: Mapped[str] = mapped_column(String, default="")
+    provider_id: Mapped[str] = mapped_column(String, index=True)
+    claim_ref: Mapped[str] = mapped_column(String, index=True)               # as the provider quoted it
+    claim_id: Mapped[Optional[str]] = mapped_column(String, nullable=True, index=True)   # resolved
+    complete: Mapped[bool] = mapped_column(default=False)                    # judged by the Fund
+    missing: Mapped[list] = mapped_column(JSON, default=list)                # required fields left empty
+    sections: Mapped[list] = mapped_column(JSON, default=list)
+    idempotency_key: Mapped[str] = mapped_column(String, unique=True, index=True)
+    body_hash: Mapped[str] = mapped_column(String)
+    received_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 class RailsSubmission(Base):
     """A provider->fund rails submission: the signed verdict + receipt, idempotency-keyed."""
     __tablename__ = "rails_submission"

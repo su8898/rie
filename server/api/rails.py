@@ -4,7 +4,7 @@ A POST verifies a detached JWS over its body. A GET is for the provider (a JWS o
 own subject, e.g. `{"submissionId": id}` or `{"providerId": id}`) or an operator with a valid
 session — nothing here is public. Beyond claim submission the channel carries the provider
 lookups ported from CIE's interface standard: claim status, registration lookup, remittance
-advice and objections."""
+advice, objections and medical reports."""
 from __future__ import annotations
 
 import time
@@ -14,7 +14,7 @@ from typing import Optional
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
 from sqlalchemy.orm import Session
 
-from .. import jws, models, provider_service, rails_service, remittance_service
+from .. import jws, medical_report_service, models, provider_service, rails_service, remittance_service
 from ..config import RAILS_SECRET
 from ..db import get_db
 from .deps import current_user
@@ -70,7 +70,8 @@ def _write(request: Request, db: Session, body: dict) -> None:
 def _provider(fn, *args):
     try:
         return fn(*args)
-    except (provider_service.ProviderError, remittance_service.RemittanceError) as e:
+    except (provider_service.ProviderError, remittance_service.RemittanceError,
+            medical_report_service.ReportError) as e:
         raise HTTPException(status_code=e.status, detail=e.detail) from None
 
 
@@ -140,3 +141,37 @@ def objections(provider_id: str, request: Request, db: Session = Depends(get_db)
 def objection(ref: str, request: Request, db: Session = Depends(get_db)) -> dict:
     _require(request, db, {"objectionRef": ref}, "{objectionRef}")
     return _provider(provider_service.get_objection, db, ref)
+
+
+# ── medical reports (RAF 1 medical report, RAF 4) ────────────────────────────
+@router.get("/medical-reports/forms")
+def medical_report_forms(request: Request, db: Session = Depends(get_db)) -> list[dict]:
+    _require(request, db, {"catalogue": "medical-report-forms"}, '{"catalogue": "medical-report-forms"}')
+    return medical_report_service.catalogue()
+
+
+@router.post("/medical-reports")
+def file_medical_report(request: Request, payload: dict = Body(...), db: Session = Depends(get_db)) -> dict:
+    _write(request, db, payload)
+    return _provider(medical_report_service.receive, db, payload, request.headers.get("Idempotency-Key"))
+
+
+@router.get("/medical-reports")
+def medical_reports(provider_id: str, request: Request, db: Session = Depends(get_db)) -> list[dict]:
+    _require(request, db, {"providerId": provider_id}, "{providerId}")
+    return medical_report_service.list_reports(db, provider_id=provider_id)
+
+
+@router.get("/medical-reports/{ref}")
+def medical_report(ref: str, request: Request, format: str = "json", db: Session = Depends(get_db)):
+    _require(request, db, {"reportRef": ref}, "{reportRef}")
+    detail = _provider(medical_report_service.get, db, ref)
+    if format == "xml":
+        return Response(content=medical_report_service.to_xml(detail), media_type="application/xml")
+    return detail
+
+
+@router.get("/claims/{claim_id}/documentation")
+def claim_documentation(claim_id: str, request: Request, db: Session = Depends(get_db)) -> dict:
+    _require(request, db, {"claimId": claim_id}, "{claimId}")
+    return _provider(medical_report_service.documentation, db, claim_id)

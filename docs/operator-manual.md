@@ -259,6 +259,8 @@ When a claim is repudiated or a dispute is litigated, drive the matter on the cl
 
 ### 9.2 Approve and pay (the money keys)
 
+**Medical reports.** A provider files the RAF 1 medical report and the RAF 4 serious injury assessment electronically. They appear on the claim's page under **Medical reports on file**, each with a **Print** page and an **XML** document. The two chips at the top show, per form, whether one is on file and whether a complete one is. A report marked *Incomplete* lists the required fields the provider left empty; ask the provider to file a corrected report. When a complete RAF 4 arrives for a personal claim with no serious-injury assessment, the assessment is opened for the Medical Officer automatically, carrying the form's impairment percentage and narrative finding.
+
 When a batch is paid, the system issues a **remittance advice** for each provider paid in it, listed at the foot of **Payments**. Each advice shows every line billed, what was paid and why any line was reduced, and has a **Print** page and an **XML** document. Providers fetch and acknowledge their own advice over the rails channel, and the status changes to *Acknowledged* when they do. An advice never shows a review or fraud signal. A provider's objection to a reduction arrives in **Disputes** with *raised by PROVIDER*.
 
 In **Payments**, you are the second and third pair of hands: **approve** a batch a Handler assembled (you must be a *different* admin than the assembler — segregation of duties), then **pay** it. You are the sole authority for `pay`, lifecycle `pay`, undertaking-invoice `pay`, and litigation `order-paid`.
