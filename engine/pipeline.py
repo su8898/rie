@@ -15,10 +15,11 @@ from .corroboration import convergence, corroboration_signals
 from .disposition import disposition
 from .gates import merits_gate, prescription_gates, s24_gates, standing_gates
 from .heads import head_past_medical
-from .models import Accident, Claim, Ruleset
+from .models import Accident, Activity, Claim, Ruleset
 from .payments import eligible_to_pay
 from .reference import RefBook
 from .scoring import score_and_band
+from .signals import billing_signals
 
 
 def process_claim(c: Claim, accidents: list[Accident], book: RefBook, rs: Ruleset,
@@ -26,7 +27,8 @@ def process_claim(c: Claim, accidents: list[Accident], book: RefBook, rs: Rulese
                   accident_dx_regions: set[str] = frozenset(),
                   seen_lines: Optional[set] = None, cohort_is_bus_taxi: bool = False,
                   conv_floor_p10: float = 20.0, summons_served: Optional[date] = None,
-                  mode_overrides: Optional[dict] = None) -> dict:
+                  mode_overrides: Optional[dict] = None,
+                  activity: Optional[Activity] = None) -> dict:
     """The brain, invoked once per claim. Deterministic. Returns the determination record.
     `seen_lines` is the pay-once ledger across claims (§4e, s17(5)): the caller threads the
     party's lines already paid elsewhere; this claim's lines are added to it on return."""
@@ -55,12 +57,14 @@ def process_claim(c: Claim, accidents: list[Accident], book: RefBook, rs: Rulese
                                     prior_lines, auth_usage) for l in c.lines]
     seen_lines |= seen
     line_reasons = [r for lr in line_results for r in lr.reasons]
+    billing_reasons = billing_signals(c, rs, provider_tier, activity)       # §10
 
     # D. heads (medical here; earnings/GD computed when their inputs arrive) (§5)
     medical_payable = head_past_medical(line_results, c.fault_pct)
 
     # E. score, band, disposition                                    (§10, §9)
-    assessment = score_and_band(gate_reasons + line_reasons + graph_reasons, mode_overrides)
+    assessment = score_and_band(gate_reasons + line_reasons + billing_reasons + graph_reasons,
+                                mode_overrides)
     disp = disposition(assessment, merits_pending=(c.merits_accepted is None
                                                    and c.claim_type == "PERSONAL"))
 

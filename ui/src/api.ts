@@ -46,6 +46,9 @@ import type {
   RateSource,
   RateSummary,
   RateVersion,
+  CodeRule,
+  CodeRuleKind,
+  DriftReport,
   Reason,
   RecallEstimate,
   RecallSample,
@@ -567,6 +570,14 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ effective_to, note }),
     }),
+  adminCodeRules: () => request<CodeRule[]>("/api/admin/code-rules"),
+  upsertCodeRule: (body: { code: string; rule: CodeRuleKind; param: number; basis: string }) =>
+    request<CodeRule>("/api/admin/code-rules", { method: "POST", body: JSON.stringify(body) }),
+  deleteCodeRule: (code: string) =>
+    request<{ ok: boolean }>(`/api/admin/code-rules/${encodeURIComponent(code)}`, {
+      method: "DELETE",
+    }),
+  priceDrift: () => request<DriftReport>("/api/coding/drift"),
   adminPreauth: () => request<string[]>("/api/admin/preauth"),
   addPreauth: (code: string) =>
     request<{ ok: boolean }>("/api/admin/preauth", {

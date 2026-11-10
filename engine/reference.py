@@ -7,7 +7,7 @@ normalisation, NON_BENCHMARKABLE carries no overage.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from typing import Optional
 
@@ -31,9 +31,11 @@ class RefBook:
     empirical: dict[tuple[str, str], float]
     sep: dict[str, object]                            # NAPPI -> single exit price (rate value)
     non_benchmarkable: set[str]                       # TARIFF codes with no benchmark by design
+    code_rules: dict[str, tuple[str, float]] = field(default_factory=dict)   # TARIFF code -> (rule, param) (§3b)
 
     def __post_init__(self) -> None:                               # codes compare normalised (§3)
         self.non_benchmarkable = {normalise_code("TARIFF", x) for x in self.non_benchmarkable}
+        self.code_rules = {normalise_code("TARIFF", k): v for k, v in self.code_rules.items()}
 
 
 def dispensing_fee(sep: float) -> float:

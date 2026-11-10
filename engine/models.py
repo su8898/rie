@@ -28,6 +28,15 @@ class Ruleset:                     # effective at accident date (§1)
     caps: list[tuple[date, float]] = field(default_factory=list)   # (effective_from, annual_cap)
     preauth_required: set[str] = field(default_factory=set)        # code classes needing pre-auth
     s19_grounds: set[str] = field(default_factory=set)
+    # §10 — billing-signal thresholds (calibration is governance: reference data, not code)
+    line_count_flag: int = 12                 # lines on one encounter at/above this
+    material_lines_flag: int = 12             # NAPPI lines on one encounter at/above this ...
+    material_share: float = 0.6               # ... forming at least this share of its lines
+    impossible_day_encounters: int = 30       # claimants billed by one provider on one day
+    impossible_week_encounters: int = 8       # encounters billed for one claimant in one ISO week
+    shopping_providers: int = 3               # same-discipline providers billing one claimant
+    no_agency_disciplines: set[str] = field(  # assigned by schedule/referral — never "shopping"
+        default_factory=lambda: {"Anaesthesiology", "Radiology", "Pathology (Clinical)"})
 
     def __post_init__(self) -> None:                               # codes compare normalised (§3)
         self.preauth_required = {normalise_code("TARIFF", x) for x in self.preauth_required}
@@ -94,6 +103,14 @@ class Claim:
     payee_verified: bool = False
     attorney_in_standing: bool = True
     provider_registered: bool = True
+    facility: bool = False         # hospital / emergency-unit account — group billing, daily care (§10)
+
+
+@dataclass
+class Activity:                    # §10 — billing on OTHER claims, threaded by the caller
+    provider_day: dict[tuple[str, date], int] = field(default_factory=dict)   # (provider, day) -> other claimants billed
+    claimant_encounters: set[tuple[str, date]] = field(default_factory=set)   # this claimant's (provider, day) elsewhere
+    claimant_providers: dict[str, set[str]] = field(default_factory=dict)     # discipline -> providers billing this claimant elsewhere
 
 
 @dataclass

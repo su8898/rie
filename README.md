@@ -90,6 +90,44 @@ percentage increase (one key or every key in a filter), correct, retire, CSV imp
 Maintenance is forward-only and every change writes `ref_rate_log` and the admin audit log.
 Existing databases need `alembic upgrade head` (migration `d4b7e2a91c35`).
 
+## Coding rules and billing signals
+
+Ported from CIE's coding rules and scorer signals; specified first in `spec/rie_engine.py` (§4b, §7b).
+
+**Coding rules** are the tariff's own billing rules, held per tariff code in `ref_code_rule` and read
+through `RefBook.code_rules` ([`engine/coding.py`](engine/coding.py)):
+
+| Rule | Effect at adjudication |
+| --- | --- |
+| `ONCE_PER_ENCOUNTER` | The first use for a claimant, provider and day is paid. A repeat, at any amount and on any claim, is paid nothing with `UNBUNDLING_CONFLICT`. |
+| `TIME_BLOCK` | Quantity is minutes. One block per `param` minutes or part thereof (emergency theatre time, 0011). |
+| `TIME_ANAES` | Quantity is minutes. One block per 15 minutes or part in the first hour, 1.5 blocks per 15 minutes after (0023). |
+| `TIME_FIRST_HOUR` | Quantity is minutes. One block for the first hour, then a third per 15 minutes or part (0039). |
+| `PCT_OF_TIME` | `param` share of the anaesthetic-time lines billed by the same provider on the same day (0018, 0019). With no such line the modifier is `REFERENCE_UNRESOLVED` and goes to review. |
+
+`python3 db/load_reference.py` seeds the once-only codes from the tariff descriptions and the standard
+time modifiers the tariff carries. Maintain them under **Admin → Coding rules** or over
+`/api/admin/code-rules` (ADMIN); a rule set by hand survives a reload. **Before go-live, confirm with
+RAF that time-modifier quantities are billed in minutes, and review the seeded once-only list: the
+descriptions are OCR text.**
+
+**Billing signals** ([`engine/signals.py`](engine/signals.py)) are soft features. They score and never
+reprice a line. An encounter is one provider treating the claimant on one day. Thresholds are
+`Ruleset` fields.
+
+| Signal | Fires when | Default |
+| --- | --- | --- |
+| `LINE_COUNT_OUTLIER` | 12 or more lines on one encounter | scored, endogenous |
+| `MATERIAL_PADDING` | 12 or more NAPPI lines forming 60% or more of one encounter | scored |
+| `IMPOSSIBLE_DAY` | one provider bills 30 or more claimants on one day | scored |
+| `IMPOSSIBLE_WEEK` | 8 or more encounters are billed for one claimant in one ISO week | scored |
+| `PROVIDER_SHOPPING` | 3 or more providers of one discipline bill one claimant | shadow |
+
+The day and week screens skip a claim submitted with `"facility": true` (a hospital account). The
+server supplies the cross-claim counts (`pipeline_service.billing_activity`). **Coding → Price drift**
+(`GET /api/coding/drift`) ranks providers whose billed ÷ reference ratio rises month on month.
+Existing databases need `alembic upgrade head` (migration `e5c8f3b0a246`).
+
 ## API
 
 | Method | Path | Notes |
@@ -104,6 +142,8 @@ Existing databases need `alembic upgrade head` (migration `d4b7e2a91c35`).
 | GET | `/api/dashboard` | band/disposition mix, exposure, eligibility |
 | GET | `/api/rates?source=&q=&on=` · `/versions` · `/log` · `/export` | rate in force on a date, version history, change trail, CSV |
 | POST | `/api/rates` · `/increase` · `/bulk-increase` · `/import` · `/{id}/adjust` · `/{id}/retire` | dated rate maintenance (ADMIN) |
+| GET · POST · DELETE | `/api/admin/code-rules` · `/api/admin/code-rules/{code}` | coding rules per tariff code (ADMIN) |
+| GET | `/api/coding/drift?min_months=&min_lines=` | providers whose billing ratio is rising |
 
 A determination record: `{claim_id, accident_id, accident_action, convergence, validated,
 band, score, reasons[], shadow_signals[], disposition, medical_payable, net_payable,

@@ -7,8 +7,9 @@ no workers) — it is the algorithm the system exists to run. Every section is
 cross-referenced to domain-logic.md (§n).
 
 Pipeline:  raw claim ─► canonicalise ─► resolve accident (§6.0) ─► corroborate (§6.0)
-           ─► compliance gates (§4) ─► merits gate (§4c) ─► per-line adjudication (§3, §5f)
-           ─► heads of damage (§5) ─► score + band (§10, §11) ─► disposition (§9)
+           ─► compliance gates (§4) ─► merits gate (§4c) ─► per-line adjudication (§3, §3b, §5f)
+           ─► billing signals (§10) ─► heads of damage (§5) ─► score + band (§10, §11)
+           ─► disposition (§9)
            ─► payment eligibility (§8e)
 
 Design invariants (CIE doctrine):
@@ -22,8 +23,8 @@ Design invariants (CIE doctrine):
 
 from __future__ import annotations
 from dataclasses import dataclass, field
-from datetime import date
-from decimal import ROUND_HALF_UP, Decimal
+from datetime import date, timedelta
+from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal
 from enum import Enum, auto
 from typing import Optional
 
@@ -103,6 +104,7 @@ R = {  # the reason-code catalogue (§10) — abridged bases
     "SERVICE_BEFORE_ACCIDENT":ReasonMeta(Category.COMPLIANCE, True, 0, Maturity.GROUNDED, basis="date CHECK"),
     "SUPPLIER_PRECLUSION":    ReasonMeta(Category.ADJUSTED,   True, 0, Maturity.GROUNDED, basis="s17(5) — pay once"),
     "DUPLICATE_LINE":         ReasonMeta(Category.ADJUSTED,   True, 0, Maturity.GROUNDED, basis="pay first occurrence"),
+    "UNBUNDLING_CONFLICT":    ReasonMeta(Category.ADJUSTED,   True, 0, Maturity.GROUNDED, basis="§3b — the tariff limits the code to once per encounter; pay the first"),
     "PREAUTH_MISSING":        ReasonMeta(Category.PREAUTH,    True, 0, Maturity.GROUNDED, basis="§5f ruleset"),
     "PREAUTH_EXCEEDED":       ReasonMeta(Category.ADJUSTED,   True, 0, Maturity.GROUNDED, basis="§5f — reprice to ceiling"),
     "UNDERTAKING_NOT_ACTIVE": ReasonMeta(Category.COMPLIANCE, True, 0, Maturity.GROUNDED, basis="s17(4)(a)"),
@@ -116,7 +118,8 @@ R = {  # the reason-code catalogue (§10) — abridged bases
     "VALUE_OUTLIER_EXTREME":  ReasonMeta(Category.FRAUD, False, 30, Maturity.HEURISTIC, endogenous=True, basis="condition band, extreme"),
     "LINE_COUNT_OUTLIER":     ReasonMeta(Category.FRAUD, False, 15, Maturity.HEURISTIC, endogenous=True, basis="corpus percentile"),
     "MATERIAL_PADDING":       ReasonMeta(Category.FRAUD, False, 15, Maturity.HEURISTIC, basis="NAPPI-dominated encounter"),
-    "IMPOSSIBLE_DAY":         ReasonMeta(Category.FRAUD, False, 25, Maturity.HEURISTIC, basis="billed minutes > plausible day"),
+    "IMPOSSIBLE_DAY":         ReasonMeta(Category.FRAUD, False, 25, Maturity.HEURISTIC, basis="claimants billed by one provider in one day"),
+    "IMPOSSIBLE_WEEK":        ReasonMeta(Category.FRAUD, False, 20, Maturity.HEURISTIC, basis="encounters billed for one claimant in one week"),
     "DX_ACCIDENT_MISMATCH":   ReasonMeta(Category.FRAUD, False, 15, Maturity.HEURISTIC, basis="body region vs accident profile"),
     "PRE_EXISTING_CONDITION": ReasonMeta(Category.COMPLIANCE, False, 5, Maturity.HEURISTIC, basis="review — aggravation compensable"),
     "INJURY_ESCALATION":      ReasonMeta(Category.FRAUD, False, 15, Maturity.HEURISTIC, basis="RAF1/4 vs first-contact records"),
@@ -126,6 +129,7 @@ R = {  # the reason-code catalogue (§10) — abridged bases
     "LATE_CLAIM_CLUSTER":     ReasonMeta(Category.FRAUD, False, 15, Maturity.HEURISTIC, basis="deadline clustering"),
     # Graph / collusion — launch in SHADOW (§11)
     "RING_PARTIES":           ReasonMeta(Category.FRAUD, False, 25, Maturity.UNVALIDATED, basis="party-graph recurrence"),
+    "PROVIDER_SHOPPING":      ReasonMeta(Category.FRAUD, False, 25, Maturity.UNVALIDATED, basis="same-discipline providers billing one claimant"),
     "CLAIMANT_SURGE":         ReasonMeta(Category.FRAUD, False, 20, Maturity.UNVALIDATED, basis="claimants vs capacity, cohort-aware"),
     "CLAIMANT_RECURRENCE":    ReasonMeta(Category.FRAUD, False, 15, Maturity.UNVALIDATED, basis="P_* across accidents"),
     "CONVERGENCE_THIN":       ReasonMeta(Category.FRAUD, False, 20, Maturity.UNVALIDATED, basis="evidence density/timing (§6.0)"),
@@ -156,6 +160,15 @@ class Ruleset:                    # effective at accident date (§1)
     caps: list[tuple[date, float]] = field(default_factory=list)   # (effective_from, annual_cap)
     preauth_required: set[str] = field(default_factory=set)        # code classes needing pre-auth
     s19_grounds: set[str] = field(default_factory=set)
+    # §10 — billing-signal thresholds (calibration is governance: reference data, not code)
+    line_count_flag: int = 12                 # lines on one encounter at/above this
+    material_lines_flag: int = 12             # NAPPI lines on one encounter at/above this ...
+    material_share: float = 0.6               # ... forming at least this share of its lines
+    impossible_day_encounters: int = 30       # claimants billed by one provider on one day
+    impossible_week_encounters: int = 8       # encounters billed for one claimant in one ISO week
+    shopping_providers: int = 3               # same-discipline providers billing one claimant
+    no_agency_disciplines: set[str] = field(  # assigned by schedule/referral — never "shopping"
+        default_factory=lambda: {"Anaesthesiology", "Radiology", "Pathology (Clinical)"})
 
     def __post_init__(self) -> None:                               # codes compare normalised (§3)
         self.preauth_required = {normalise_code("TARIFF", x) for x in self.preauth_required}
@@ -218,6 +231,13 @@ class Claim:
     payee_verified: bool = False
     attorney_in_standing: bool = True
     provider_registered: bool = True
+    facility: bool = False        # hospital / emergency-unit account — group billing, daily care (§10)
+
+@dataclass
+class Activity:                   # §10 — billing on OTHER claims, threaded by the caller
+    provider_day: dict[tuple[str, date], int] = field(default_factory=dict)   # (provider, day) → other claimants billed
+    claimant_encounters: set[tuple[str, date]] = field(default_factory=set)   # this claimant's (provider, day) elsewhere
+    claimant_providers: dict[str, set[str]] = field(default_factory=dict)     # discipline → providers billing this claimant elsewhere
 
 @dataclass
 class Accident:                   # §6.0
@@ -333,9 +353,11 @@ class RefBook:
     empirical: dict[tuple[str, str], float]
     sep: dict[str, object]                            # NAPPI → single exit price (rate value)
     non_benchmarkable: set[str]                       # TARIFF codes with no benchmark by design
+    code_rules: dict[str, tuple[str, float]] = field(default_factory=dict)   # TARIFF code → (rule, param) (§3b)
 
     def __post_init__(self) -> None:                               # codes compare normalised (§3)
         self.non_benchmarkable = {normalise_code("TARIFF", x) for x in self.non_benchmarkable}
+        self.code_rules = {normalise_code("TARIFF", k): v for k, v in self.code_rules.items()}
 
 def dispensing_fee(sep: float) -> float:
     return money(D(sep) * D(DISP_FEE_PCT)) if sep < DISP_FEE_THRESHOLD else DISP_FEE_FLAT
@@ -379,6 +401,70 @@ def resolve(book: RefBook, kind: str, code: str, discipline: str = GP_DISCIPLINE
     if (kind, nc) in book.empirical:
         return book.empirical[(kind, nc)], "empirical", LegalStatus.ENDOGENOUS
     return None, "—", None
+
+# ────────────────────────────────────────────────────────────────────────────
+# 4b. CODING RULES — what the tariff itself says about a code           (§3b)
+# ────────────────────────────────────────────────────────────────────────────
+# A code rule is reference data: TARIFF code → (rule, param). The rules are the tariff's own
+# billing rules, so they are payment rules, never statistics.
+ONCE_PER_ENCOUNTER = "ONCE_PER_ENCOUNTER"     # the description limits the code to once per encounter
+TIME_BLOCK = "TIME_BLOCK"                     # qty is MINUTES: one block per `param` minutes or part
+TIME_ANAES = "TIME_ANAES"                     # qty is MINUTES: a block per 15 min or part in the first hour, 1.5 after
+TIME_FIRST_HOUR = "TIME_FIRST_HOUR"           # qty is MINUTES: a block for the first hour, then a third per 15 min or part
+PCT_OF_TIME = "PCT_OF_TIME"                   # `param` share of the anaesthetic time billed with it
+TIME_RULES = {TIME_BLOCK, TIME_ANAES, TIME_FIRST_HOUR}
+ANAES_TIME_RULES = {TIME_ANAES, TIME_FIRST_HOUR}       # what a PCT_OF_TIME modifier is a percentage of
+CODE_RULES = TIME_RULES | {ONCE_PER_ENCOUNTER, PCT_OF_TIME}
+
+def code_rule(book: RefBook, line: Line) -> tuple[Optional[str], float]:
+    """The coding rule on a line's code — (None, 0.0) for an ordinary code or any NAPPI line."""
+    if line.kind != "TARIFF":
+        return None, 0.0
+    return book.code_rules.get(normalise_code("TARIFF", line.code), (None, 0.0))
+
+def encounter_key(party_token: str, line: Line) -> tuple:
+    """One encounter's use of a once-only code: who, by whom, when, what — at any amount."""
+    return ("ONCE", party_token, line.provider_id, line.service_date,
+            normalise_code("TARIFF", line.code))
+
+def blocks(minutes: Decimal, size) -> Decimal:
+    """Billing blocks "or part thereof": minutes / size, rounded up."""
+    return (minutes / D(size)).to_integral_value(rounding=ROUND_CEILING)
+
+def time_total(rule: str, param: float, rate: float, minutes: float) -> Decimal:
+    """The reference TOTAL for a time modifier billed in minutes; `rate` is its block rate."""
+    m, r = D(minutes), D(rate)
+    if rule == TIME_BLOCK:
+        return r * blocks(m, param or 30)
+    later = blocks(max(m - 60, Decimal(0)), 15)       # 15-minute periods beyond the first hour
+    if rule == TIME_ANAES:
+        return r * blocks(min(m, Decimal(60)), 15) + r * Decimal("1.5") * later
+    return r + r / 3 * later                          # TIME_FIRST_HOUR
+
+def line_reference(c: Claim, line: Line, book: RefBook, tier: str
+                   ) -> tuple[Optional[float], str, Optional[LegalStatus]]:
+    """→ (the reference TOTAL for the line | None, src, legal_status). An ordinary code is
+    rate × qty. A time modifier is billed in minutes and priced by its ladder off the block rate.
+    A percentage-of-time modifier is a share of the anaesthetic-time lines billed with it (same
+    provider, same day); with none on the claim it is a percentage of nothing and does not
+    resolve — the line goes to review."""
+    rule, param = code_rule(book, line)
+    if rule == PCT_OF_TIME:
+        base, src, status = Decimal(0), "—", None
+        for sib in c.lines:
+            if (sib.provider_id, sib.service_date) == (line.provider_id, line.service_date) \
+               and code_rule(book, sib)[0] in ANAES_TIME_RULES:
+                total, sib_src, sib_status = line_reference(c, sib, book, tier)
+                if total is not None:
+                    base, src, status = base + D(total), sib_src, sib_status
+        return (money(D(param) * base), src, status) if base > 0 else (None, "—", None)
+    rate, src, status = resolve(book, line.kind, line.code, line.discipline or tier,
+                                line.service_date)
+    if rate is None:
+        return None, src, status
+    if rule in TIME_RULES:
+        return money(time_total(rule, param, rate, line.qty)), src, status
+    return money(D(rate) * D(line.qty)), src, status
 
 # ────────────────────────────────────────────────────────────────────────────
 # 5. GATES — grounded, hard, cited                                       (§4)
@@ -486,6 +572,11 @@ def adjudicate_line(c: Claim, line: Line, book: RefBook, rs: Ruleset,
     if key in seen:                                   # §4f — pay the first occurrence only
         return LineResult(0.0, ["DUPLICATE_LINE"], "—")
     seen.add(key)
+    if code_rule(book, line)[0] == ONCE_PER_ENCOUNTER:           # §3b — the tariff's own limit
+        once = encounter_key(c.party_token, line)
+        if once in prior or once in seen:             # billed again at any amount, on any claim
+            return LineResult(0.0, ["UNBUNDLING_CONFLICT"], "—")
+        seen.add(once)
     if line.dx[:3] not in accident_dx_regions and accident_dx_regions:
         reasons.append("DX_ACCIDENT_MISMATCH")        # soft → review, aggravation compensable
 
@@ -508,12 +599,11 @@ def adjudicate_line(c: Claim, line: Line, book: RefBook, rs: Ruleset,
         if nc in rs.preauth_required and not line.emergency:
             return LineResult(0.0, reasons + ["PREAUTH_MISSING"], "—")
 
-    # 6.3 reference pricing — the payment rule (§3); resolve for the line's provider discipline
-    rate, src, status = resolve(book, line.kind, line.code, line.discipline or tier,
-                                line.service_date)
-    if rate is None:                                  # uncovered → hard R&N review, never paid as billed
+    # 6.3 reference pricing — the payment rule (§3, §3b); resolved for the line's provider
+    # discipline and service date, and priced by the code's own rule where it has one
+    expected, src, status = line_reference(c, line, book, tier)
+    if expected is None:                              # uncovered → hard R&N review, never paid as billed
         return LineResult(line.amount, reasons + ["REFERENCE_UNRESOLVED"], src, needs_review=True)
-    expected = money(D(rate) * D(line.qty))
     if line.amount > expected:
         reasons.append("BILLED_OVER_REFERENCE")
         if status in PAYMENT_RULE_STATUSES:
@@ -565,6 +655,48 @@ def head_funeral(c: Claim, necessary_costs: float, non_necessary: float = 0.0
     flags any non-necessary components (soft — routes to review, never a hard exclusion)."""
     reasons = ["FUNERAL_SCOPE"] if non_necessary > 0 else []
     return apportion(necessary_costs, c.fault_pct), reasons
+
+# ────────────────────────────────────────────────────────────────────────────
+# 7b. BILLING SIGNALS — encounter-shaped over-servicing screens          (§10)
+# ────────────────────────────────────────────────────────────────────────────
+
+def iso_week(d: date) -> date:
+    """The Monday of the date's ISO week."""
+    return d - timedelta(days=d.weekday())
+
+def padded(lines: list[Line], rs: Ruleset) -> bool:
+    """Consumable stacking: many NAPPI lines forming most of one encounter."""
+    n = sum(1 for l in lines if l.kind == "NAPPI")
+    return n >= rs.material_lines_flag and n >= rs.material_share * len(lines)
+
+def billing_signals(c: Claim, rs: Ruleset, tier: str, activity: Optional[Activity] = None) -> list[str]:
+    """Soft features only — they score, they never reprice a line. An encounter is one provider
+    treating the claimant on one day. `activity` is the same claimant's and the same providers'
+    billing on OTHER claims; without it the screens see this claim alone."""
+    act = activity or Activity()
+    out: list[str] = []
+    encounters: dict[tuple[str, date], list[Line]] = {}
+    for l in c.lines:
+        encounters.setdefault((l.provider_id, l.service_date), []).append(l)
+    if any(len(ls) >= rs.line_count_flag for ls in encounters.values()):
+        out.append("LINE_COUNT_OUTLIER")
+    if any(padded(ls, rs) for ls in encounters.values()):
+        out.append("MATERIAL_PADDING")
+    if not c.facility:                                # a hospital bills many patients, and daily care, legitimately
+        if any(act.provider_day.get(e, 0) + 1 >= rs.impossible_day_encounters for e in encounters):
+            out.append("IMPOSSIBLE_DAY")              # one provider, one day, too many claimants
+        weeks: dict[date, int] = {}
+        for _provider, day in set(encounters) | act.claimant_encounters:
+            weeks[iso_week(day)] = weeks.get(iso_week(day), 0) + 1
+        if any(weeks[iso_week(day)] >= rs.impossible_week_encounters for _provider, day in encounters):
+            out.append("IMPOSSIBLE_WEEK")             # one claimant, one week, more than a visit a day
+    providers = {d: set(ps) for d, ps in act.claimant_providers.items()}
+    for l in c.lines:
+        providers.setdefault(l.discipline or tier, set()).add(l.provider_id)
+    if any(len(providers[d]) >= rs.shopping_providers
+           for d in {l.discipline or tier for l in c.lines} - rs.no_agency_disciplines):
+        out.append("PROVIDER_SHOPPING")               # substitutable providers on one claimant
+    return out
 
 # ────────────────────────────────────────────────────────────────────────────
 # 8. SCORING — reasons → points → band                              (§10, §11)
@@ -658,7 +790,8 @@ def process_claim(c: Claim, accidents: list[Accident], book: RefBook, rs: Rulese
                   accident_dx_regions: set[str] = frozenset(),
                   seen_lines: set = None, cohort_is_bus_taxi: bool = False,
                   conv_floor_p10: float = 20.0, summons_served: Optional[date] = None,
-                  mode_overrides: Optional[dict] = None) -> dict:
+                  mode_overrides: Optional[dict] = None,
+                  activity: Optional[Activity] = None) -> dict:
     """The brain, invoked once per claim. Deterministic. Returns the determination record.
     `seen_lines` is the pay-once ledger across claims (§4e, s17(5)): the caller threads the
     party's lines already paid elsewhere; this claim's lines are added to it on return."""
@@ -687,12 +820,14 @@ def process_claim(c: Claim, accidents: list[Accident], book: RefBook, rs: Rulese
                                     prior_lines, auth_usage) for l in c.lines]
     seen_lines |= seen
     line_reasons = [r for lr in line_results for r in lr.reasons]
+    billing_reasons = billing_signals(c, rs, provider_tier, activity)       # §10
 
     # D. heads (medical here; earnings/GD computed when their inputs arrive) (§5)
     medical_payable = head_past_medical(line_results, c.fault_pct)
 
     # E. score, band, disposition                                    (§10, §9)
-    assessment = score_and_band(gate_reasons + line_reasons + graph_reasons, mode_overrides)
+    assessment = score_and_band(gate_reasons + line_reasons + billing_reasons + graph_reasons,
+                                mode_overrides)
     disp = disposition(assessment, merits_pending=(c.merits_accepted is None
                                                    and c.claim_type == "PERSONAL"))
 

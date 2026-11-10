@@ -22,12 +22,14 @@ def test_unvalidated_maps_to_shadow_others_to_scored():
 
 def test_unvalidated_codes_are_exactly_the_graph_signals():
     unvalidated = {c for c, m in R.items() if m.maturity is Maturity.UNVALIDATED}
-    assert unvalidated == {"RING_PARTIES", "CLAIMANT_SURGE", "CLAIMANT_RECURRENCE", "CONVERGENCE_THIN"}
+    assert unvalidated == {"RING_PARTIES", "PROVIDER_SHOPPING", "CLAIMANT_SURGE", "CLAIMANT_RECURRENCE",
+                      "CONVERGENCE_THIN"}
 
 
 def test_all_shadow_modes_are_unvalidated():
     shadow = {c for c, m in MODE.items() if m is SignalMode.SHADOW}
-    assert shadow == {"RING_PARTIES", "CLAIMANT_SURGE", "CLAIMANT_RECURRENCE", "CONVERGENCE_THIN"}
+    assert shadow == {"RING_PARTIES", "PROVIDER_SHOPPING", "CLAIMANT_SURGE", "CLAIMANT_RECURRENCE",
+                      "CONVERGENCE_THIN"}
 
 
 # ── representative hard grounded gates ───────────────────────────────────────
@@ -109,7 +111,7 @@ def test_no_hard_fraud_codes_in_catalogue():
 
 
 def test_catalogue_size():
-    assert len(R) == 39
+    assert len(R) == 42
 
 
 def test_reference_unresolved_is_a_hard_grounded_review_gate():

@@ -781,3 +781,37 @@ export interface AwardClass {
   injury_class: string;
   severity_tiers: string[];
 }
+
+// ── coding rules (§3b) + price drift ──────────────────────────────────────────
+export type CodeRuleKind =
+  | "ONCE_PER_ENCOUNTER"
+  | "TIME_BLOCK"
+  | "TIME_ANAES"
+  | "TIME_FIRST_HOUR"
+  | "PCT_OF_TIME";
+
+export interface CodeRule {
+  code: string;
+  rule: CodeRuleKind;
+  param: number;
+  basis: string;
+  origin: string; // tariff | standard | manual
+}
+
+export interface DriftRow {
+  provider_id: string;
+  n_months: number;
+  first_month: string;
+  last_month: string;
+  first_ratio: number;
+  last_ratio: number;
+  slope_per_month: number;
+  series: { month: string; ratio: number; lines: number }[];
+}
+
+export interface DriftReport {
+  min_months: number;
+  min_lines: number;
+  n_providers: number;
+  rising: DriftRow[];
+}

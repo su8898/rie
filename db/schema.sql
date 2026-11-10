@@ -190,6 +190,17 @@ CREATE TABLE ref_rate_version (
 	CONSTRAINT uq_ref_rate_version_key_from UNIQUE (source, kind, code, discipline, effective_from)
 );
 
+CREATE TABLE ref_code_rule (
+	code VARCHAR NOT NULL, 
+	rule VARCHAR NOT NULL, 
+	param FLOAT NOT NULL, 
+	basis VARCHAR NOT NULL, 
+	origin VARCHAR NOT NULL, 
+	created_by VARCHAR NOT NULL, 
+	created_at DATETIME DEFAULT (CURRENT_TIMESTAMP) NOT NULL, 
+	PRIMARY KEY (code)
+);
+
 CREATE TABLE ref_raf2022 (
 	code VARCHAR NOT NULL, 
 	rate FLOAT NOT NULL, 

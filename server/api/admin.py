@@ -99,6 +99,25 @@ def delete_negotiated(kind: str, code: str, db: Session = Depends(get_db),
     return {"ok": True}
 
 
+# ── coding rules (§3b) ──
+@router.get("/code-rules")
+def code_rules(db: Session = Depends(get_db), user: dict = Depends(_admin)) -> list[dict]:
+    return svc.list_code_rules(db)
+
+
+@router.post("/code-rules")
+def upsert_code_rule(body: dict = Body(...), db: Session = Depends(get_db),
+                     user: dict = Depends(_admin)) -> dict:
+    return svc.upsert_code_rule(db, user, body.get("code", ""), body.get("rule", ""),
+                                param=body.get("param", 0.0), basis=body.get("basis", ""))
+
+
+@router.delete("/code-rules/{code}")
+def delete_code_rule(code: str, db: Session = Depends(get_db), user: dict = Depends(_admin)) -> dict:
+    svc.delete_code_rule(db, user, code)
+    return {"ok": True}
+
+
 # ── signal-mode overrides (§11) ──
 @router.get("/signal-modes")
 def signal_modes(db: Session = Depends(get_db), user: dict = Depends(_admin)) -> list[dict]:

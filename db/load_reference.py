@@ -17,6 +17,10 @@ Mapping into RIE:
   ref_nappi   -> ref_nappi_sep  unit_price as SEP (NAPPI+dispensing-fee is ENFORCEABLE).
   ref_icd10   -> ref_icd10      diagnoses (validation/display).
   ref_meta    -> ref_edition    provenance stamped on the load.
+  ref_tariffs -> ref_code_rule  the tariff's own billing rules (ported from CIE): a code whose
+                                description limits it to once per encounter, and the standard time
+                                modifiers the tariff carries (billed in minutes, priced by ladder).
+                                Rules an administrator added by hand are kept.
 
 This also creates the tables and seeds users + statutory config, so it is a self-contained
 deploy-init:  python3 db/load_reference.py   (target DB = RIE_DATABASE_URL).
@@ -24,13 +28,14 @@ deploy-init:  python3 db/load_reference.py   (target DB = RIE_DATABASE_URL).
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from sqlalchemy import delete, insert  # noqa: E402
+from sqlalchemy import delete, insert, select  # noqa: E402
 
 from server import models  # noqa: E402
 from server.db import Base, SessionLocal, engine  # noqa: E402
@@ -88,6 +93,43 @@ def _load_icd10(db, src) -> int:
     return len(icd)
 
 
+# Tariff-description phrasings that limit a code to once per encounter (kept conservative — the
+# descriptions are OCR text; "once per level/week/annum" are NOT per-encounter limits). From CIE.
+FREQ_ONCE_RE = re.compile(r"(use (code )?once only|to be charged once only|"
+                          r"chargeable once per 24 hours|once per (service|session))", re.IGNORECASE)
+# The standard time modifiers (SASA coding guidelines; CIE's modifier-pricing rules). The billed
+# quantity is MINUTES and the tariff rate is the block value. Seeded only for codes the tariff carries.
+STANDARD_CODE_RULES = {
+    "11": ("TIME_BLOCK", 30.0, "emergency theatre time — one block per half-hour or part thereof"),
+    "23": ("TIME_ANAES", 0.0, "anaesthetic time — per 15 minutes or part; 1.5x after the first hour"),
+    "39": ("TIME_FIRST_HOUR", 0.0, "anaesthetic time — first hour, then a third per 15 minutes or part"),
+    "18": ("PCT_OF_TIME", 0.5, "adds 50% of the anaesthetic time billed with it"),
+    "19": ("PCT_OF_TIME", 0.5, "adds 50% of the anaesthetic time billed with it"),
+}
+
+
+def _load_code_rules(db, src) -> int:
+    rules: dict = {}
+    for r in src.execute("SELECT norm_code, description FROM ref_tariffs WHERE norm_code IS NOT NULL"):
+        code = _norm(r["norm_code"])
+        m = FREQ_ONCE_RE.search(r["description"] or "")
+        if m:
+            rules.setdefault(code, {"code": code, "rule": "ONCE_PER_ENCOUNTER", "param": 0.0,
+                                    "basis": f"tariff description: \u201c{m.group(0)}\u201d",
+                                    "origin": "tariff", "created_by": "loader"})
+        elif code in STANDARD_CODE_RULES:
+            rule, param, basis = STANDARD_CODE_RULES[code]
+            rules.setdefault(code, {"code": code, "rule": rule, "param": param, "basis": basis,
+                                    "origin": "standard", "created_by": "loader"})
+    manual = set(db.scalars(select(models.RefCodeRule.code)
+                            .where(models.RefCodeRule.origin == "manual")))
+    db.execute(delete(models.RefCodeRule).where(models.RefCodeRule.origin != "manual"))
+    rows = [v for k, v in rules.items() if k not in manual]      # a hand-set rule wins
+    if rows:
+        _bulk(db, models.RefCodeRule, rows)
+    return len(rows)
+
+
 def _load_editions(db, src) -> None:
     db.execute(delete(models.RefEdition))
     rows = [{"kind": r["kind"], "version": r["version"], "n": r["n"], "synced_at": r["synced_at"]}
@@ -103,7 +145,7 @@ def load(db, ref_path: str = REFERENCE_DB) -> dict:
     src.row_factory = sqlite3.Row
     try:
         counts = {"rpl": _load_tariffs(db, src), "nappi": _load_nappi(db, src),
-                  "icd10": _load_icd10(db, src)}
+                  "icd10": _load_icd10(db, src), "code_rules": _load_code_rules(db, src)}
         _load_editions(db, src)
         db.commit()
     finally:

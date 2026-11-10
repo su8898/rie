@@ -121,6 +121,20 @@ class RefNonBench(Base):
     code: Mapped[str] = mapped_column(String, primary_key=True)
 
 
+class RefCodeRule(Base):
+    """A tariff code's own billing rule (domain-logic §3b), ported from CIE's coding rules: a
+    once-per-encounter limit, a time-modifier ladder, or a percentage-of-time modifier. One rule
+    per (normalised) TARIFF code; the engine reads them through RefBook.code_rules."""
+    __tablename__ = "ref_code_rule"
+    code: Mapped[str] = mapped_column(String, primary_key=True)      # normalised TARIFF code
+    rule: Mapped[str] = mapped_column(String)                        # engine.CODE_RULES
+    param: Mapped[float] = mapped_column(Float, default=0.0)         # block minutes / share of time
+    basis: Mapped[str] = mapped_column(String, default="")           # the tariff clause or guideline cited
+    origin: Mapped[str] = mapped_column(String, default="manual")    # tariff | standard | manual
+    created_by: Mapped[str] = mapped_column(String, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 class RefCap(Base):
     __tablename__ = "ref_cap"
     effective_from: Mapped[date] = mapped_column(Date, primary_key=True)

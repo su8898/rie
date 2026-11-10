@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 import engine
 
 from . import adapter, awards_service, models
-from .pipeline_service import load_graph, prior_lines
+from .pipeline_service import billing_activity, load_graph, prior_lines
 from .pseudonymise import pseudonymise_ingest
 from .reference_data import build_mode_overrides, build_refbook, build_ruleset
 
@@ -34,7 +34,8 @@ def compute_offer(db: Session, payload: dict, today: Optional[date] = None) -> d
         claim, accidents, book, rs, today=today or date.today(),
         accident_dx_regions=set(payload.get("accident_dx_regions", [])),
         mode_overrides=build_mode_overrides(db),                # §11 — ADMIN signal-mode overrides
-        seen_lines=set(prior_lines(db, claim)),                 # §4e — pay once across claims
+        seen_lines=set(prior_lines(db, claim, book)),           # §4e — pay once across claims
+        activity=billing_activity(db, claim),                   # §10 — cross-claim billing context
     )
 
     hi = payload.get("heads_input", {})
