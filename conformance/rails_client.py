@@ -1,5 +1,6 @@
-"""Reference rails client — sign an RCJ claim and submit it to a running RIE server, then
-verify the fund's signed receipt. This is the integrator's starting point.
+"""Shared-secret demo client (development only) — sign a claim with the dev HS256 secret, submit
+it to a running RIE server and verify the receipt. The shared secret identifies nobody and is
+refused in production: an integrator starts from `refclient.py` (ES256, a key per party) instead.
 
 Usage (with the server running, e.g. `PORT=8077 ./run.sh`):
     RAILS_URL=http://localhost:8077 python3 conformance/rails_client.py

@@ -48,6 +48,12 @@ def _outcome(det: "models.Determination") -> str:
             else "REPRICED" if det.disposition == "ADJUSTED" else "HELD")
 
 
+def claim_providers(db: Session, claim_id: str) -> set[str]:
+    """The providers who billed on a claim — whose parties may read it over the rails."""
+    return set(db.scalars(select(models.BillingLineRecord.provider_id)
+                          .where(models.BillingLineRecord.claim_id == claim_id)))
+
+
 # ── claim status ─────────────────────────────────────────────────────────────
 def _payment(db: Session, claim_id: str) -> dict:
     """The latest live payment instruction for the claim, as the provider needs to see it."""

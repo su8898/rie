@@ -62,8 +62,33 @@ CREATE TABLE rails_seen_jti (
 	PRIMARY KEY (jti)
 );
 
+CREATE TABLE rails_party (
+	party_id VARCHAR NOT NULL, 
+	name VARCHAR NOT NULL, 
+	kind VARCHAR NOT NULL, 
+	public_jwk JSON NOT NULL, 
+	providers JSON NOT NULL, 
+	status VARCHAR NOT NULL, 
+	created_by VARCHAR NOT NULL, 
+	created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now() NOT NULL, 
+	PRIMARY KEY (party_id)
+);
+
+CREATE TABLE rails_batch (
+	batch_id VARCHAR NOT NULL, 
+	idempotency_key VARCHAR NOT NULL, 
+	body_hash VARCHAR NOT NULL, 
+	party_id VARCHAR NOT NULL, 
+	n_claims INTEGER NOT NULL, 
+	summary JSON NOT NULL, 
+	results JSON NOT NULL, 
+	created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now() NOT NULL, 
+	PRIMARY KEY (batch_id)
+);
+
 CREATE TABLE rails_submission (
 	submission_id VARCHAR NOT NULL, 
+	party_id VARCHAR, 
 	idempotency_key VARCHAR NOT NULL, 
 	body_hash VARCHAR NOT NULL, 
 	claim_id VARCHAR NOT NULL, 

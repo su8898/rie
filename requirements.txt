@@ -4,6 +4,7 @@ sqlalchemy>=2.0
 alembic>=1.13
 pydantic>=2.7
 itsdangerous>=2.1
+cryptography>=42          # ES256 signatures on the provider channel
 httpx>=0.27
 pytest>=8.0
 # production database driver (SQLite is the hermetic default):
