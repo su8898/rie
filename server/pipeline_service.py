@@ -36,7 +36,8 @@ def _line_details(claim: engine.Claim, book: engine.RefBook, rs: engine.Ruleset,
     out = []
     for line in claim.lines:
         lr = engine.adjudicate_line(claim, line, book, rs, tier, seen, set(dx_regions), prior, usage)
-        rate, _src, status = engine.resolve(book, line.kind, line.code, tier)
+        rate, _src, status = engine.resolve(book, line.kind, line.code, line.discipline or tier,
+                                            line.service_date)
         out.append({
             "provider_id": line.provider_id,
             "kind": line.kind, "code": line.code, "billed": line.amount, "payable": lr.payable,

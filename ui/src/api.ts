@@ -40,6 +40,12 @@ import type {
   PrecisionRow,
   Provider,
   QueueRow,
+  RateImportResult,
+  RateList,
+  RateLogRow,
+  RateSource,
+  RateSummary,
+  RateVersion,
   Reason,
   RecallEstimate,
   RecallSample,
@@ -487,6 +493,80 @@ export const api = {
       `/api/admin/negotiated/${encodeURIComponent(kind)}/${encodeURIComponent(code)}`,
       { method: "DELETE" },
     ),
+  // — dated reference rates (read: any operator; maintain: ADMIN) —
+  rates: (p: {
+    source: RateSource;
+    q?: string;
+    discipline?: string;
+    on?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const qs = new URLSearchParams({ source: p.source });
+    if (p.q) qs.set("q", p.q);
+    if (p.discipline) qs.set("discipline", p.discipline);
+    if (p.on) qs.set("on", p.on);
+    qs.set("limit", String(p.limit ?? 25));
+    qs.set("offset", String(p.offset ?? 0));
+    return request<RateList>(`/api/rates?${qs.toString()}`);
+  },
+  rateSummary: () => request<RateSummary>("/api/rates/summary"),
+  rateVersions: (k: { source: RateSource; kind: string; code: string; discipline: string }) =>
+    request<RateVersion[]>(
+      `/api/rates/versions?${new URLSearchParams({
+        source: k.source,
+        kind: k.kind,
+        code: k.code,
+        discipline: k.discipline,
+      }).toString()}`,
+    ),
+  rateLog: (limit = 25) => request<RateLogRow[]>(`/api/rates/log?limit=${limit}`),
+  rateExportUrl: (source: RateSource, on?: string) =>
+    `/api/rates/export?source=${source}${on ? `&on=${encodeURIComponent(on)}` : ""}`,
+  addRate: (body: {
+    source: RateSource;
+    kind?: string;
+    code: string;
+    discipline?: string;
+    rate: number;
+    effective_from: string;
+    note?: string;
+  }) => request<RateVersion>("/api/rates", { method: "POST", body: JSON.stringify(body) }),
+  increaseRate: (body: {
+    source: RateSource;
+    kind?: string;
+    code: string;
+    discipline?: string;
+    pct: number;
+    effective_from: string;
+  }) =>
+    request<RateVersion>("/api/rates/increase", { method: "POST", body: JSON.stringify(body) }),
+  bulkIncreaseRates: (body: {
+    source: RateSource;
+    pct: number;
+    effective_from: string;
+    q?: string;
+    discipline?: string;
+  }) =>
+    request<{ increased: number; skipped: number; skipped_detail: string[] }>(
+      "/api/rates/bulk-increase",
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  importRates: (source: RateSource, csv: string) =>
+    request<RateImportResult>("/api/rates/import", {
+      method: "POST",
+      body: JSON.stringify({ source, csv }),
+    }),
+  adjustRate: (id: number, rate: number, note: string) =>
+    request<RateVersion>(`/api/rates/${id}/adjust`, {
+      method: "POST",
+      body: JSON.stringify({ rate, note }),
+    }),
+  retireRate: (id: number, effective_to: string, note: string) =>
+    request<RateVersion>(`/api/rates/${id}/retire`, {
+      method: "POST",
+      body: JSON.stringify({ effective_to, note }),
+    }),
   adminPreauth: () => request<string[]>("/api/admin/preauth"),
   addPreauth: (code: string) =>
     request<{ ok: boolean }>("/api/admin/preauth", {

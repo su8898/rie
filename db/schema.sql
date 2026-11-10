@@ -155,6 +155,41 @@ CREATE TABLE ref_preauth (
 	PRIMARY KEY (code)
 );
 
+CREATE TABLE ref_rate_log (
+	id SERIAL NOT NULL, 
+	rate_id INTEGER, 
+	source VARCHAR NOT NULL, 
+	kind VARCHAR NOT NULL, 
+	code VARCHAR NOT NULL, 
+	discipline VARCHAR NOT NULL, 
+	action VARCHAR NOT NULL, 
+	old_rate FLOAT, 
+	new_rate FLOAT, 
+	old_effective_from DATE, 
+	new_effective_from DATE, 
+	changed_by VARCHAR NOT NULL, 
+	note VARCHAR NOT NULL, 
+	changed_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now() NOT NULL, 
+	PRIMARY KEY (id)
+);
+
+CREATE TABLE ref_rate_version (
+	id SERIAL NOT NULL, 
+	source VARCHAR NOT NULL, 
+	kind VARCHAR NOT NULL, 
+	code VARCHAR NOT NULL, 
+	discipline VARCHAR NOT NULL, 
+	rate FLOAT NOT NULL, 
+	effective_from DATE NOT NULL, 
+	effective_to DATE, 
+	origin VARCHAR NOT NULL, 
+	note VARCHAR NOT NULL, 
+	created_by VARCHAR NOT NULL, 
+	created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now() NOT NULL, 
+	PRIMARY KEY (id), 
+	CONSTRAINT uq_ref_rate_version_key_from UNIQUE (source, kind, code, discipline, effective_from)
+);
+
 CREATE TABLE ref_raf2022 (
 	code VARCHAR NOT NULL, 
 	rate FLOAT NOT NULL, 

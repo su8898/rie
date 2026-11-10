@@ -85,7 +85,8 @@ def adjudicate_line(c: Claim, line: Line, book: RefBook, rs: Ruleset,
             return LineResult(0.0, reasons + ["PREAUTH_MISSING"], "—")
 
     # reference pricing — the payment rule (§3); resolve for the line's provider discipline
-    rate, src, status = resolve(book, line.kind, line.code, line.discipline or tier)
+    rate, src, status = resolve(book, line.kind, line.code, line.discipline or tier,
+                                line.service_date)
     if rate is None:                                  # uncovered -> hard R&N review, never paid as billed
         return LineResult(line.amount, reasons + ["REFERENCE_UNRESOLVED"], src, needs_review=True)
     expected = money(D(rate) * D(line.qty))

@@ -246,13 +246,14 @@ When a claim is repudiated or a dispute is litigated, drive the matter on the cl
 
 ### 9.1 The Admin console
 
-**Admin** has six tabs; every change is audit-logged and effective-dated — it's reference data, never a code deploy:
+**Admin** has seven tabs; every change is audit-logged and effective-dated — it's reference data, never a code deploy:
 
 - **Users** — create operators, set roles, activate/deactivate. (You cannot deactivate the account you're signed in as.)
 - **Signal modes** — apply the `SHADOW → ADVISORY → SCORED` promotion lifecycle per signal. The *Recommended* column is what measured precision suggests (Governance computes the Wilson-lower ≥ 60% floor; you **Set** it here). `GROUNDED`, law-cited signals are locked `SCORED` — you cannot switch off the law.
 - **Caps** — the s17(4)(c) statutory annual-cap schedule (effective-dated; the engine applies the cap effective on the service date).
 - **Pre-auth** — the set of codes that require pre-authorisation (add/remove).
 - **Negotiated** — negotiated ENFORCEABLE rates that override the gazetted tariff (the engine prices `min(billed, negotiated)` for these).
+- **Dated rates** — the tariff, negotiated and NAPPI exit-price rates as dated versions. Add a rate from an effective date and the prior one is closed the day before; the engine pays each line at the rate in force on its **service date**, so late claims price at the tariff of their day. Also: percentage increase (one rate or every rate in the filter), correct, retire, CSV import/export, and the change log. A negotiated rate that has dated versions is maintained here, not on the Negotiated tab.
 - **Audit** — the append-only log of every admin mutation.
 
 ### 9.2 Approve and pay (the money keys)

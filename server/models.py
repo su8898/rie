@@ -8,7 +8,8 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import JSON, Date, DateTime, Float, ForeignKey, Integer, String, func, select
+from sqlalchemy import (JSON, Date, DateTime, Float, ForeignKey, Integer, String,
+                        UniqueConstraint, func, select)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base
@@ -67,6 +68,52 @@ class RefNappiSep(Base):
     __tablename__ = "ref_nappi_sep"
     nappi_code: Mapped[str] = mapped_column(String, primary_key=True)
     sep: Mapped[float] = mapped_column(Float)
+
+
+class RefRateVersion(Base):
+    """Dated versions of a payment-rule reference rate (ported from CIE's tariff_specialty_rate).
+
+    Append-only: a new rate for a later date SUPERSEDES the prior version (closes its
+    effective_to the day before) and the old amount stays on the books, so a claim prices at the
+    rate in force on its SERVICE date. `source` names the reference tier — RPL (tariff x
+    discipline), NEGOTIATED (kind x code) or SEP (NAPPI single exit price). A key with versions is
+    priced from them; a key without any keeps its undated row in ref_rpl / ref_negotiated /
+    ref_nappi_sep. Every change is written to ref_rate_log."""
+    __tablename__ = "ref_rate_version"
+    __table_args__ = (UniqueConstraint("source", "kind", "code", "discipline", "effective_from",
+                                       name="uq_ref_rate_version_key_from"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source: Mapped[str] = mapped_column(String, index=True)          # RPL | NEGOTIATED | SEP
+    kind: Mapped[str] = mapped_column(String)                        # TARIFF | NAPPI
+    code: Mapped[str] = mapped_column(String, index=True)            # normalised for TARIFF
+    discipline: Mapped[str] = mapped_column(String, default="")      # RPL only
+    rate: Mapped[float] = mapped_column(Float)
+    effective_from: Mapped[date] = mapped_column(Date)
+    effective_to: Mapped[Optional[date]] = mapped_column(Date, nullable=True)   # NULL = open
+    origin: Mapped[str] = mapped_column(String, default="manual")    # baseline | manual | import
+    note: Mapped[str] = mapped_column(String, default="")
+    created_by: Mapped[str] = mapped_column(String, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class RefRateLog(Base):
+    """Immutable rate change trail: which rate changed, when, by whom, old -> new, and why.
+    Key columns are denormalised so the trail reads on its own."""
+    __tablename__ = "ref_rate_log"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    rate_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    source: Mapped[str] = mapped_column(String)
+    kind: Mapped[str] = mapped_column(String)
+    code: Mapped[str] = mapped_column(String, index=True)
+    discipline: Mapped[str] = mapped_column(String, default="")
+    action: Mapped[str] = mapped_column(String)                      # CREATE | SUPERSEDE | RETIRE | ADJUST
+    old_rate: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    new_rate: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    old_effective_from: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    new_effective_from: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    changed_by: Mapped[str] = mapped_column(String, default="")
+    note: Mapped[str] = mapped_column(String, default="")
+    changed_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
 class RefNonBench(Base):

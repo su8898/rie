@@ -2,13 +2,16 @@
 // data is edited. Nothing here is a code deploy — every change is effective-dated,
 // audit-logged reference data the engine reads live on the next determination.
 //
-// Six tabs over the /api/admin surface:
+// Seven tabs — six over the /api/admin surface, plus dated rates over /api/rates:
 //   • users          — RBAC: create user, change role, activate/deactivate.
 //   • signal-modes   — the §11 promotion lifecycle as an effective-dated
 //                      SHADOW/ADVISORY/SCORED override (Grounded locked SCORED).
 //   • caps           — the s17(4)(c) statutory annual-cap schedule (effective-dated).
 //   • preauth        — the codes that require pre-authorisation (ENFORCEABLE tier, §5f).
 //   • negotiated     — negotiated ENFORCEABLE TARIFF/NAPPI rates that override RPL/SEP.
+//   • rates          — dated versions of the tariff / negotiated / NAPPI rates: the
+//                      engine prices each line at the version in force on its
+//                      service date (AdminRates.tsx).
 //   • audit          — the append-only admin CUD log (§9), newest first.
 //
 // Everything mutating goes through `run(key, fn, okMsg)`: it disables all
@@ -35,6 +38,7 @@ import {
   usePaged,
 } from "../components/ui";
 import { rand } from "../format";
+import RatesTab from "./AdminRates";
 import type {
   AdminAuditRow,
   AdminUser,
@@ -50,6 +54,7 @@ type Tab =
   | "caps"
   | "preauth"
   | "negotiated"
+  | "rates"
   | "audit";
 
 const TABS: { key: Tab; label: string }[] = [
@@ -58,6 +63,7 @@ const TABS: { key: Tab; label: string }[] = [
   { key: "caps", label: "Caps" },
   { key: "preauth", label: "Pre-auth" },
   { key: "negotiated", label: "Negotiated" },
+  { key: "rates", label: "Dated rates" },
   { key: "audit", label: "Audit" },
 ];
 
@@ -215,6 +221,7 @@ export default function AdminPage() {
           run={run}
         />
       )}
+      {tab === "rates" && <RatesTab />}
       {tab === "audit" && <AuditTab rows={audit} />}
 
       {toast && (

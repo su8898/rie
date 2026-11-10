@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 import engine
 
-from . import models
+from . import models, rates_service
 from .crosswalk import apply_crosswalk
 
 
@@ -44,6 +44,14 @@ def build_refbook(db: Session, nappi_codes=None) -> engine.RefBook:
             select(models.RefNappiSep).where(models.RefNappiSep.nappi_code.in_(set(nappi_codes))))}
     else:
         sep = {}
+    # Dated versions (rates_service) replace the undated value for their key: the engine then
+    # prices each line at the version in force on its service date (engine.rate_on).
+    dated = rates_service.overlay(db, nappi_codes)
+    negotiated.update(dated["NEGOTIATED"])
+    for code, by_disc in dated["RPL"].items():
+        rpl.setdefault(code, {}).update(by_disc)
+    sep.update(dated["SEP"])
+
     book = engine.RefBook(negotiated=negotiated, rpl=rpl, raf2022=raf2022,
                           empirical=empirical, sep=sep, non_benchmarkable=non_bench)
     apply_crosswalk(book)         # activate SME-CONFIRMED COIDA→RAF equivalences (no-op until confirmed)
