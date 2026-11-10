@@ -144,7 +144,10 @@ def test_resolve_accident_worklist_when_between_050_and_085():
         _claim(case_number_raw=None, party_token="P_1"), [acc], place="JHB", vehicles=set())
     assert 0.50 <= 0.60 < 0.85
     assert action == "WORKLIST"
-    assert res is acc
+    # H7: a WORKLIST match is never a join — the claim anchors to its own new accident and
+    # names the candidate for a human to confirm
+    assert res is not acc and res.accident_id == "A_R_1"
+    assert res.worklist_candidate == acc.accident_id
 
 
 def test_resolve_accident_created_when_no_match_mints_a1():
@@ -152,17 +155,19 @@ def test_resolve_accident_created_when_no_match_mints_a1():
         _claim(case_number_raw=None, accident_date=date(2020, 1, 1)), [],
         place="", vehicles=set())
     assert action == "CREATED"
-    assert res.accident_id == "A_1"
+    assert res.accident_id == "A_R_1"            # H7: derived from the claim id, never a position
+    assert res.worklist_candidate is None
 
 
-def test_resolve_accident_created_mints_next_index():
-    # two existing accidents that do not block-match -> new id A_3 (len+1)
+def test_resolve_accident_created_id_is_independent_of_graph_size():
+    # H7: two existing accidents that do not block-match -> still A_<claim_id>, so a gap in
+    # the graph or two concurrent first-touch claims can never collide on an id
     old = [_accident(when=date(2000, 1, 1)), _accident(when=date(2000, 1, 1))]
     res, action = resolve_accident(
-        _claim(case_number_raw=None, accident_date=date(2020, 1, 1)), old,
+        _claim(case_number_raw=None, claim_id="R_77", accident_date=date(2020, 1, 1)), old,
         place="", vehicles=set())
     assert action == "CREATED"
-    assert res.accident_id == "A_3"
+    assert res.accident_id == "A_R_77"
 
 
 def test_resolve_accident_created_carries_normalised_cas():

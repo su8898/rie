@@ -205,3 +205,14 @@ def test_gd_boundary_values_are_within_band():
     assert head_general_damages(_claim(si_accepted=True, fault_pct=0.0), 100000.0, 200000.0, 100000.0)[1] == []
     # proposed == p75 (inclusive) -> no note
     assert head_general_damages(_claim(si_accepted=True, fault_pct=0.0), 100000.0, 200000.0, 200000.0)[1] == []
+
+
+# ── H12: exact money (Decimal half-up at the boundary) ───────────────────────
+def test_apportion_rounds_half_up_not_binary():
+    # 100.05 * 0.7 = 70.035 -> 70.04 (float arithmetic gave 70.03499999 -> 70.03)
+    assert apportion(100.05, 30.0) == 70.04
+
+
+def test_head_past_medical_sums_cents_exactly():
+    # 0.1 + 0.2 in binary is 0.30000000000000004; in Decimal it is 0.30
+    assert head_past_medical([_lr(0.1), _lr(0.2)], None) == 0.3

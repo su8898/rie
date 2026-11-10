@@ -26,6 +26,7 @@ const DISP_ORDER: Disposition[] = [
   "COMPLIANCE",
   "PREAUTH",
   "SI_GATE",
+  "REVIEW",
   "ADJUSTED",
   "CLEAN",
 ];
@@ -37,6 +38,7 @@ const DISP_OUTCOME: Record<Disposition, string> = {
   COMPLIANCE: "request documents · cure · reject",
   PREAUTH: "obtain authorisation or reject the invoice",
   SI_GATE: "RAF 4 serious-injury process",
+  REVIEW: "R&N review — a billed code has no benchmark",
   ADJUSTED: "auto-adjudicated, no human",
   CLEAN: "paid / offered as computed",
 };
@@ -99,7 +101,9 @@ export default function DashboardPage() {
         <Stat
           label="Determinations"
           value={num(data.determinations)}
-          sub="claims the engine has scored and dispositioned"
+          sub={`claims scored and dispositioned (latest verdict per claim) · ${num(
+            data.needs_review ?? 0,
+          )} awaiting R&N review`}
         />
         <Stat
           label="Eligible to pay"
@@ -166,7 +170,7 @@ export default function DashboardPage() {
         {/* Disposition breakdown */}
         <Card
           title="Disposition breakdown"
-          sub="The routing verdict per claim, worst-first (§9): the single most severe reason wins, so a claim is counted once, in its worst lane. FRAUD/MERITS/COMPLIANCE/PREAUTH/SI_GATE need a human; ADJUSTED and CLEAN carry the auto-processed volume."
+          sub="The routing verdict per claim, worst-first (§9): the single most severe reason wins, so a claim is counted once, in its worst lane. FRAUD/MERITS/COMPLIANCE/PREAUTH/SI_GATE/REVIEW need a human; ADJUSTED and CLEAN carry the auto-processed volume."
         >
           {dispTotal === 0 ? (
             <div className="text-sm text-slate-400">No determinations yet.</div>

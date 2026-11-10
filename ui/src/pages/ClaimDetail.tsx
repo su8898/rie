@@ -80,6 +80,23 @@ export default function ClaimDetailPage() {
               validated
             </span>
           )}
+          {d.needs_review && (
+            <span
+              className="rounded bg-fuchsia-100 px-2 py-0.5 text-xs font-medium text-fuchsia-800"
+              title="A billed code has no benchmark (or an interdicted/endogenous overage) — R&N review before payment (§3)"
+            >
+              needs R&N review
+            </span>
+          )}
+          {d.accident_candidate && (
+            <span
+              className="rounded bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-800"
+              title="WORKLIST — the engine found a fuzzy accident match but did not join it; a human confirms or dismisses"
+            >
+              worklist · candidate{" "}
+              <span className="font-mono">{d.accident_candidate}</span>
+            </span>
+          )}
         </div>
         <p className="mt-1 max-w-3xl text-sm text-slate-500">
           The full determination record for this claim — the engine's reasoning
@@ -132,6 +149,7 @@ export default function ClaimDetailPage() {
               <ul className="space-y-2">
                 {d.reasons.map((code) => {
                   const meta = reasons.get(code);
+                  const advisory = (d.advisory_signals ?? []).includes(code);
                   return (
                     <li
                       key={code}
@@ -139,6 +157,14 @@ export default function ClaimDetailPage() {
                     >
                       <div className="flex flex-wrap items-center gap-2">
                         <CodePill>{code}</CodePill>
+                        {advisory && (
+                          <span
+                            className="rounded bg-sky-100 px-1.5 py-0.5 text-[11px] font-medium text-sky-700"
+                            title="ADVISORY on this determination: visible, zero points, no say in the disposition (§11)"
+                          >
+                            advisory · not dispositive
+                          </span>
+                        )}
                         {meta && (
                           <>
                             <span className="text-xs font-medium text-slate-500">
@@ -241,6 +267,9 @@ export default function ClaimDetailPage() {
           >
             <dl className="space-y-1.5 text-xs">
               <Row k="Accident" v={d.accident_id} mono />
+              {d.accident_candidate && (
+                <Row k="Worklist candidate" v={d.accident_candidate} mono />
+              )}
               <Row k="Engine" v={d.engine_version} mono />
               <Row k="Ruleset" v={d.ruleset_effective} mono />
               <Row k="Reference" v={d.reference_edition} mono />

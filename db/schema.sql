@@ -280,6 +280,7 @@ CREATE TABLE billing_lines (
 	legal_status VARCHAR, 
 	needs_review BOOLEAN NOT NULL, 
 	reasons JSON NOT NULL, 
+	service_date DATE, 
 	PRIMARY KEY (id), 
 	FOREIGN KEY(claim_id) REFERENCES claims (claim_id)
 );
@@ -308,6 +309,9 @@ CREATE TABLE determinations (
 	reasons JSON NOT NULL, 
 	shadow_signals JSON NOT NULL, 
 	holds JSON NOT NULL, 
+	needs_review BOOLEAN NOT NULL, 
+	advisory_signals JSON NOT NULL, 
+	accident_candidate VARCHAR, 
 	engine_version VARCHAR NOT NULL, 
 	ruleset_effective VARCHAR NOT NULL, 
 	reference_edition VARCHAR NOT NULL, 

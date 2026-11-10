@@ -1,9 +1,9 @@
 """Per-function unit tests for engine.adjudication — concrete value assertions.
 
-Key subtlety: adjudicate_line does NOT normalise codes for rs.preauth_required or
-Authorisation.codes — those match the RAW line code. Only resolve() (called for reference
-pricing) strips leading zeros. So the RefBook is keyed on normalised tariff codes, while
-preauth_required / auth.codes are keyed on the exact line code.
+Codes compare normalised everywhere (H3): Ruleset.preauth_required, Authorisation.codes and
+RefBook.non_benchmarkable are normalised on construction, and adjudicate_line normalises the
+line code before the pre-auth, authorisation and duplicate checks — so "500" cannot bypass a
+"0500" pre-auth requirement and "0190" + "190" cannot both pay.
 """
 from __future__ import annotations
 
@@ -256,9 +256,11 @@ def test_reference_qty_multiplies_expected_over():
     assert (lr.payable, lr.reasons) == (1000.0, ["BILLED_OVER_REFERENCE"])
 
 
-def test_reference_uncovered_needs_review_pays_billed():
+def test_reference_uncovered_needs_review_is_a_hard_review_gate():
+    # H6: an uncovered code carries the billed figure forward but is never paid as billed —
+    # REFERENCE_UNRESOLVED (hard, REVIEW) routes the claim to R&N review and holds payment
     lr = adjudicate_line(_claim(), _line(code="7777", amount=500.0), _book(), _rs(), "GP", set(), set())
-    assert (lr.payable, lr.reasons, lr.src, lr.needs_review) == (500.0, [], "—", True)
+    assert (lr.payable, lr.reasons, lr.src, lr.needs_review) == (500.0, ["REFERENCE_UNRESOLVED"], "—", True)
 
 
 def test_dx_mismatch_note_survives_into_reference_reprice():
@@ -267,3 +269,92 @@ def test_dx_mismatch_note_survives_into_reference_reprice():
                          _book(), _rs(), "GP", set(), {"S72"})
     assert lr.reasons == ["DX_ACCIDENT_MISMATCH", "BILLED_OVER_REFERENCE"]
     assert lr.payable == 500.0
+
+
+# ── H2: the cross-claim pay-once ledger (s17(5)) ─────────────────────────────
+def test_prior_line_from_another_claim_is_supplier_preclusion():
+    from engine.adjudication import line_key
+    prior = frozenset({line_key("P_1", _line())})
+    lr = adjudicate_line(_claim(), _line(), _book(), _rs(), "GP", set(), set(), prior)
+    assert (lr.payable, lr.reasons, lr.src) == (0.0, ["SUPPLIER_PRECLUSION"], "—")
+
+
+def test_line_key_normalises_code_and_carries_kind():
+    from engine.adjudication import line_key
+    assert line_key("P_1", _line(code="0190")) == line_key("P_1", _line(code="190"))
+    assert line_key("P_1", _line(code="190")) != line_key("P_1", _line(kind="NAPPI", code="190"))
+
+
+# ── H3: one code identity ────────────────────────────────────────────────────
+def test_preauth_required_matches_normalised_code():
+    c = _claim(claim_type="UNDERTAKING_INVOICE",
+               undertaking=Undertaking(active=True, scope_dx={"S72"}, scope_coded=True))
+    lr = adjudicate_line(c, _line(code="500", amount=500.0), _book(), _rs(), "GP", set(), set())
+    assert lr.reasons == ["PREAUTH_MISSING"] and lr.payable == 0.0
+
+
+def test_duplicate_line_across_leading_zero_variants():
+    seen: set = set()
+    adjudicate_line(_claim(), _line(code="0190"), _book(), _rs(), "GP", seen, set())
+    lr = adjudicate_line(_claim(), _line(code="190"), _book(), _rs(), "GP", seen, set())
+    assert lr.reasons == ["DUPLICATE_LINE"] and lr.payable == 0.0
+
+
+def test_authorisation_codes_normalised_on_construction():
+    auth = _auth(codes={"0190", "55"})
+    assert auth.codes == {"190", "55"}
+    assert find_authorisation(Undertaking(True, {"S72"}, True, [auth]), _line(code="190")) is auth
+
+
+# ── H4: authorisation consumption across lines ───────────────────────────────
+def test_ceiling_is_consumed_across_lines():
+    from engine.adjudication import consume_authorisation
+    auth, usage = _auth(ceiling=1000.0), {}
+    assert consume_authorisation(auth, _line(amount=999.0), usage) == 999.0
+    assert consume_authorisation(auth, _line(amount=998.0), usage) == 1.0
+    assert consume_authorisation(auth, _line(amount=997.0), usage) == 0.0
+
+
+def test_qty_limit_is_consumed_across_lines():
+    from engine.adjudication import consume_authorisation
+    auth, usage = _auth(qty_limit=3.0, ceiling=10000.0), {}
+    assert consume_authorisation(auth, _line(qty=2.0, amount=200.0), usage) == 200.0
+    assert consume_authorisation(auth, _line(qty=2.0, amount=200.0), usage) == 100.0   # 1 unit left
+    assert consume_authorisation(auth, _line(qty=1.0, amount=100.0), usage) == 0.0
+
+
+def test_qty_limit_zero_means_unlimited_units():
+    from engine.adjudication import consume_authorisation
+    auth, usage = _auth(qty_limit=0.0, ceiling=10000.0), {}
+    assert consume_authorisation(auth, _line(qty=50.0, amount=5000.0), usage) == 5000.0
+
+
+def test_non_positive_qty_is_treated_as_one_unit():
+    from engine.adjudication import consume_authorisation
+    auth, usage = _auth(qty_limit=1.0, ceiling=10000.0), {}
+    assert consume_authorisation(auth, _line(qty=0.0, amount=400.0), usage) == 400.0
+    assert consume_authorisation(auth, _line(qty=0.0, amount=400.0), usage) == 0.0
+
+
+def test_adjudicate_line_tracks_usage_through_the_claim():
+    u = Undertaking(True, {"S72"}, True, [_auth(ceiling=1000.0)])
+    c = _claim(claim_type="UNDERTAKING_INVOICE", undertaking=u)
+    usage: dict = {}
+    first = adjudicate_line(c, _line(amount=999.0), _book(), _rs(), "GP", set(), set(), frozenset(), usage)
+    second = adjudicate_line(c, _line(amount=998.0), _book(), _rs(), "GP", set(), set(), frozenset(), usage)
+    assert (first.payable, first.reasons) == (999.0, [])
+    assert (second.payable, second.reasons, second.src) == (1.0, ["PREAUTH_EXCEEDED"], "authorisation")
+
+
+def test_adjudicate_line_without_usage_dict_still_prices_one_line():
+    u = Undertaking(True, {"S72"}, True, [_auth(ceiling=300.0)])
+    c = _claim(claim_type="UNDERTAKING_INVOICE", undertaking=u)
+    lr = adjudicate_line(c, _line(amount=500.0), _book(), _rs(), "GP", set(), set())
+    assert (lr.payable, lr.reasons) == (300.0, ["PREAUTH_EXCEEDED"])
+
+
+# ── H12: exact money ─────────────────────────────────────────────────────────
+def test_expected_reference_is_exact_decimal():
+    # RPL 500 x qty 3 = 1500.00 exactly; billed 1500.001 is over by a sub-cent -> still repriced
+    lr = adjudicate_line(_claim(), _line(qty=3.0, amount=1500.001), _book(), _rs(), "GP", set(), set())
+    assert (lr.payable, lr.reasons) == (1500.0, ["BILLED_OVER_REFERENCE"])

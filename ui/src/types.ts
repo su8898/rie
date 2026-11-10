@@ -15,6 +15,7 @@ export type Disposition =
   | "COMPLIANCE"
   | "PREAUTH"
   | "SI_GATE"
+  | "REVIEW"
   | "ADJUSTED"
   | "CLEAN";
 
@@ -47,10 +48,22 @@ export interface Determination {
   reasons: string[];
   shadow_signals: string[];
   holds: string[];
+  /** A billed code has no benchmark (or an interdicted/endogenous overage) — R&N review (§3). */
+  needs_review: boolean;
+  /** The ADVISORY subset of `reasons`: visible, zero points, never routes the claim (§11). */
+  advisory_signals: string[];
+  /** WORKLIST: the fuzzy-matched accident a human must confirm or dismiss (§6.0). */
+  accident_candidate: string | null;
   engine_version: string;
   ruleset_effective: string;
   reference_edition: string;
   created_at: string | null;
+}
+
+/** A page of determinations plus the server's full filtered count (X-Total-Count). */
+export interface DeterminationPage {
+  rows: Determination[];
+  total: number;
 }
 
 // The immutable claim corpus row (GET /api/claims/{id} -> claim).
@@ -142,6 +155,8 @@ export interface Dashboard {
   by_band: Record<Band, number>;
   by_disposition: Partial<Record<Disposition, number>>;
   eligible_to_pay: number;
+  /** Latest determinations with a line awaiting R&N review (§3). */
+  needs_review: number;
   net_payable_total: number;
   medical_payable_total: number;
 }

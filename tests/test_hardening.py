@@ -275,7 +275,11 @@ def test_resubmitting_claim_id_is_409_and_admin_rescore_appends():
     _login(client, "admin")
     r = client.post("/api/claims/R_h5/rescore", json={"note": "post-review re-determination"})
     assert r.status_code == 200 and r.json()["medical_payable"] == 500.0
-    assert len([x for x in client.get("/api/claims?q=R_h5").json() if x["claim_id"] == "R_h5"]) == 2
+    # H9: the list shows each claim once, by its latest determination (the rescore superseded)
+    latest = client.get("/api/claims/R_h5").json()["determination"]
+    listed = [x for x in client.get("/api/claims?q=R_h5").json() if x["claim_id"] == "R_h5"]
+    assert latest["id"] > d["determination"]["id"]
+    assert len(listed) == 1 and listed[0]["id"] == latest["id"]
     assert any(a["action"] == "RESCORE_CLAIM" and a["target"] == "R_h5"
                for a in client.get("/api/admin/audit").json())
     assert client.post("/api/claims/R_nope/rescore").status_code == 404

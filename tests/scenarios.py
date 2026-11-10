@@ -28,7 +28,8 @@ DEFAULT_DOCS = {
 # ── builders (module-parameterised) ──────────────────────────────────────────
 def _book(M):
     # TARIFF-family dicts are keyed on the NORMALISED code (resolve strips leading zeros:
-    # "0190"->"190"); NAPPI codes and the non-benchmarkable set key on the raw code.
+    # "0190"->"190"); NAPPI codes key on the raw code. The non-benchmarkable set, the
+    # pre-auth set and authorisation codes normalise themselves on construction (H3).
     return M.RefBook(
         negotiated={("TARIFF", "55"): 400.0},
         rpl={"190": {"GP": 500.0, "SPECIALIST": 700.0}, "23": {"GP": 100.0}, "100": {"GP": 200.0}},
@@ -66,10 +67,11 @@ def _claim(M, ctype="SUPPLIER", lines=None, docs=None, **kw):
 
 
 def _accident(M, case="CAS100/02/2026", when=date(2026, 2, 1), parties=None, oar=None,
-              sources=None, where="", vehicles=None):
+              sources=None, where="", vehicles=None, claimants=None):
     return M.Accident(accident_id="A_pre", case_number=case, when=when, where=where,
                       vehicles=set(vehicles or []), parties=set(parties or ["P_1"]),
-                      oar_occupants=oar, sources=dict(sources or {}))
+                      oar_occupants=oar, sources=dict(sources or {}),
+                      claimants=set(claimants or []))
 
 
 def _undertaking(M, active=True, scope=("S72",), coded=True, auths=None):
@@ -369,3 +371,157 @@ def convergence_cluster_collapse(M):
     acc = _accident(M, parties=["P_1"], oar=5,
                     sources={"EMS": "ring1", "HOSPITAL": "ring1", "INDEPENDENT_CLAIMANT": "c9"})
     return _std(M, _claim(M), accidents=[acc])
+
+
+# ── 2026-11-09 review, High findings (H1-H8, H12) ─────────────────────────────
+# Each scenario here pins a behavioural change made oracle-first; the conformance test proves
+# the modular engine reproduces it, the unit tests assert the concrete values.
+
+# H1 — prescription clocks count calendar years, not 365-day blocks
+@scenario
+def h1_three_calendar_years_spanning_leap_day_not_prescribed(M):
+    # 2024-03-01 + 3 calendar years = 2027-03-01 (1096 days; 365*3 would have expired 02-28)
+    return _std(M, _claim(M, ctype="PERSONAL", merits_accepted=True,
+                          accident_date=date(2024, 3, 1), lodged_on=date(2027, 3, 1)))
+
+
+@scenario
+def h1_day_after_third_anniversary_prescribed(M):
+    return _std(M, _claim(M, ctype="PERSONAL", merits_accepted=True,
+                          accident_date=date(2024, 3, 1), lodged_on=date(2027, 3, 2)))
+
+
+@scenario
+def h1_leap_day_accident_anniversary_falls_to_first_of_march(M):
+    # accident 29 Feb 2024: no 29 Feb 2027 -> anniversary 1 Mar 2027; lodging that day is in time
+    return _std(M, _claim(M, ctype="PERSONAL", merits_accepted=True,
+                          accident_date=date(2024, 2, 29), lodged_on=date(2027, 3, 1)))
+
+
+@scenario
+def h1_summons_five_calendar_years(M):
+    # lodged 2026-03-01 + 5y = 2031-03-01; served on the anniversary is in time (strict >)
+    return _std(M, _claim(M, ctype="PERSONAL", merits_accepted=True),
+                summons_served=date(2031, 3, 1))
+
+
+# H2 — the cross-claim pay-once ledger (s17(5)) and one claim per claimant per accident
+@scenario
+def h2_cross_claim_line_supplier_preclusion(M):
+    # the same service was already paid on another claim for this party -> SUPPLIER_PRECLUSION
+    prior = {M.line_key("P_1", _line(M))}
+    return _std(M, _claim(M, lines=[_line(M), _line(M, amount=300.0)]), seen_lines=prior)
+
+
+@scenario
+def h2_duplicate_personal_claim_same_claimant_same_accident(M):
+    acc = _accident(M, parties=["P_1"], oar=5, claimants=["P_1"],
+                    sources={"EMS": "c1", "HOSPITAL": "c2", "SAPS": "c3"})
+    return _std(M, _claim(M, ctype="PERSONAL", merits_accepted=True), accidents=[acc])
+
+
+@scenario
+def h2_supplier_claim_for_an_existing_claimant_is_not_a_duplicate_claim(M):
+    acc = _accident(M, parties=["P_1"], oar=5, claimants=["P_1"],
+                    sources={"EMS": "c1", "HOSPITAL": "c2", "SAPS": "c3"})
+    return _std(M, _claim(M), accidents=[acc])
+
+
+# H3 — one code identity: leading zeros never separate two codes
+@scenario
+def h3_leading_zero_cannot_bypass_preauth(M):
+    u = _undertaking(M, scope=("S72",), coded=True, auths=[])
+    return _std(M, _claim(M, ctype="UNDERTAKING_INVOICE",
+                          lines=[_line(M, code="500", amount=500.0, dx="S72")], undertaking=u))
+
+
+@scenario
+def h3_leading_zero_variants_are_one_duplicate_line(M):
+    return _std(M, _claim(M, lines=[_line(M, code="0190", amount=500.0),
+                                    _line(M, code="190", amount=500.0)]))
+
+
+@scenario
+def h3_leading_zero_non_benchmarkable_still_unresolved(M):
+    return _std(M, _claim(M, lines=[_line(M, code="11", amount=500.0)]))
+
+
+@scenario
+def h3_authorisation_matches_normalised_code(M):
+    u = _undertaking(M, scope=("S72",), coded=True, auths=[_auth(M, codes=("190",), ceiling=1000.0)])
+    return _std(M, _claim(M, ctype="UNDERTAKING_INVOICE",
+                          lines=[_line(M, code="0190", amount=500.0, dx="S72")], undertaking=u))
+
+
+# H4 — an authorisation is a finite promise: the ceiling and qty_limit are consumed across lines
+@scenario
+def h4_ceiling_consumed_across_lines(M):
+    u = _undertaking(M, scope=("S72",), coded=True, auths=[_auth(M, codes=("0190",), ceiling=1000.0)])
+    return _std(M, _claim(M, ctype="UNDERTAKING_INVOICE", undertaking=u,
+                          lines=[_line(M, code="0190", amount=999.0, dx="S72"),
+                                 _line(M, code="0190", amount=998.0, dx="S72"),
+                                 _line(M, code="0190", amount=997.0, dx="S72")]))
+
+
+@scenario
+def h4_qty_limit_consumed_across_lines(M):
+    # 3 units authorised: line 1 uses 2 (R200), line 2 asks 2 @ R100/unit -> 1 unit (R100)
+    u = _undertaking(M, scope=("S72",), coded=True,
+                     auths=[_auth(M, codes=("0190",), qty=3.0, ceiling=10000.0)])
+    return _std(M, _claim(M, ctype="UNDERTAKING_INVOICE", undertaking=u,
+                          lines=[_line(M, code="0190", qty=2.0, amount=200.0, dx="S72"),
+                                 _line(M, code="0190", qty=2.0, amount=200.0, dx="S72",
+                                       svc=date(2026, 3, 2))]))
+
+
+# H5 — ADVISORY signals and GREEN-band heuristics never route a claim
+@scenario
+def h5_advisory_override_is_visible_but_not_dispositive(M):
+    return _std(M, _claim(M, lines=[_line(M, dx="K35")]), accident_dx_regions={"S72"},
+                mode_overrides={"DX_ACCIDENT_MISMATCH": M.SignalMode.ADVISORY})
+
+
+@scenario
+def h5_single_green_heuristic_stays_clean_and_payable(M):
+    # (same inputs as dx_accident_mismatch: 15 points, GREEN -> informational, not FRAUD)
+    return _std(M, _claim(M, lines=[_line(M, dx="K35")]), accident_dx_regions={"S72"})
+
+
+# H6 — an uncovered code is a hard REVIEW gate, not paid as billed
+@scenario
+def h6_uncovered_code_billed_absurdly_is_held_for_review(M):
+    return _std(M, _claim(M, lines=[_line(M, code="7777", amount=1_000_000_000_000.0)]))
+
+
+# H8 — Grounded gates cannot be shadowed; a non-enum override value is ignored
+@scenario
+def h8_grounded_gate_shadow_override_ignored(M):
+    return _std(M, _claim(M, ctype="PERSONAL", merits_accepted=True,
+                          accident_date=date(2020, 1, 1), lodged_on=date(2024, 1, 1)),
+                mode_overrides={"PRESCRIBED_LODGEMENT": M.SignalMode.SHADOW})
+
+
+@scenario
+def h8_non_enum_override_value_falls_back_to_default(M):
+    return _std(M, _claim(M, lines=[_line(M, dx="K35")]), accident_dx_regions={"S72"},
+                mode_overrides={"DX_ACCIDENT_MISMATCH": "SHADOW"})
+
+
+@scenario
+def h8_unvalidated_signal_promoted_to_scored(M):
+    return _std(M, _claim(M, case_number_raw=None), accidents=[],
+                mode_overrides={"CONVERGENCE_THIN": M.SignalMode.SCORED})
+
+
+# H12 — money is exact: Decimal half-up at the engine boundary
+@scenario
+def h12_apportionment_rounds_half_up(M):
+    # R100.05 at 30% fault = R70.035 -> R70.04 (binary float rounding gave R70.03)
+    return _std(M, _claim(M, ctype="PERSONAL", merits_accepted=True, fault_pct=30.0,
+                          lines=[_line(M, amount=100.05)]))
+
+
+@scenario
+def h12_nappi_fee_and_qty_pricing_exact(M):
+    # SEP 88.40 + 30% fee (26.52) = 114.92; qty 3 -> 344.76 expected, billed 344.77 -> repriced
+    return _std(M, _claim(M, lines=[_line(M, kind="NAPPI", code="700101", qty=3.0, amount=344.77)]))

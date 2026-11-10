@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import JSON, Date, DateTime, Float, ForeignKey, Integer, String, func
+from sqlalchemy import JSON, Date, DateTime, Float, ForeignKey, Integer, String, func, select
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base
@@ -176,6 +176,7 @@ class BillingLineRecord(Base):
     legal_status: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     needs_review: Mapped[bool] = mapped_column(default=False)
     reasons: Mapped[list] = mapped_column(JSON, default=list)
+    service_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)   # pay-once ledger key (§4e)
 
 
 class Determination(Base):
@@ -195,10 +196,19 @@ class Determination(Base):
     reasons: Mapped[list] = mapped_column(JSON, default=list)
     shadow_signals: Mapped[list] = mapped_column(JSON, default=list)
     holds: Mapped[list] = mapped_column(JSON, default=list)
+    needs_review: Mapped[bool] = mapped_column(default=False)          # a line needs R&N review (§3)
+    advisory_signals: Mapped[list] = mapped_column(JSON, default=list) # visible, non-dispositive (§11)
+    accident_candidate: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # WORKLIST match (§6.0)
     engine_version: Mapped[str] = mapped_column(String)
     ruleset_effective: Mapped[str] = mapped_column(String)
     reference_edition: Mapped[str] = mapped_column(String)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+def latest_determination_ids():
+    """Subquery of the newest determination id per claim. A rescore appends a row; every
+    portfolio read (dashboard, lists, precision) must count a claim once, by its latest verdict."""
+    return select(func.max(Determination.id)).group_by(Determination.claim_id)
 
 
 # ── state machines (operational, actor-stamped) ──────────────────────────────

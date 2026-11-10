@@ -10,14 +10,15 @@ from __future__ import annotations
 from typing import Optional
 
 from .models import Claim, LineResult, Ruleset
+from .vocab import D, money
 
 
-def apportion(amount: float, fault_pct: Optional[float]) -> float:
-    return round(amount * (1 - (fault_pct or 0.0) / 100), 2)
+def apportion(amount, fault_pct: Optional[float]) -> float:
+    return money(D(amount) * (1 - D(fault_pct or 0.0) / 100))
 
 
 def head_past_medical(line_results: list[LineResult], fault_pct: Optional[float]) -> float:
-    return apportion(sum(r.payable for r in line_results), fault_pct)
+    return apportion(sum(D(r.payable) for r in line_results), fault_pct)
 
 
 def _sweatman(annual_losses_after_contingency: list[float], c: Claim, rs: Ruleset
@@ -27,7 +28,7 @@ def _sweatman(annual_losses_after_contingency: list[float], c: Claim, rs: Rulese
     cap = rs.cap_at(c.accident_date)
     worksheet = [{"year": i + 1, "loss": loss, "cap": cap, "capped": min(loss, cap)}
                  for i, loss in enumerate(annual_losses_after_contingency)]
-    return apportion(sum(w["capped"] for w in worksheet), c.fault_pct), worksheet
+    return apportion(sum(D(w["capped"]) for w in worksheet), c.fault_pct), worksheet
 
 
 def head_loss_of_earnings(annual_losses_after_contingency: list[float],

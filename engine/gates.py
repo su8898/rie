@@ -5,18 +5,28 @@ accident date.
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date
 from typing import Optional
 
 from .models import Claim, Ruleset
 
 
+def add_years(d: date, years: int) -> date:
+    """The calendar anniversary (s23 counts years, not 365-day blocks). A 29 February start
+    with no anniversary in the target year falls to 1 March — prescription is construed against
+    the party invoking it, so the clock never runs a day short."""
+    try:
+        return d.replace(year=d.year + years)
+    except ValueError:
+        return date(d.year + years, 3, 1)
+
+
 def prescription_gates(c: Claim, rs: Ruleset, today: date, summons_served: Optional[date]) -> list[str]:
     out = []
     years = rs.lodgement_years_hitrun if c.hit_and_run else rs.lodgement_years_identified
-    if not c.prescription_suspended and c.lodged_on > c.accident_date + timedelta(days=365 * years):
+    if not c.prescription_suspended and c.lodged_on > add_years(c.accident_date, years):
         out.append("PRESCRIBED_LODGEMENT")
-    if summons_served and summons_served > c.lodged_on + timedelta(days=365 * rs.summons_years):
+    if summons_served and summons_served > add_years(c.lodged_on, rs.summons_years):
         out.append("PRESCRIBED_SUMMONS")
     return out
 

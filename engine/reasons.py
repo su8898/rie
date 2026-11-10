@@ -29,6 +29,7 @@ R: dict[str, ReasonMeta] = {
     "UNDERTAKING_SCOPE":       ReasonMeta(Category.COMPLIANCE, True, 0, Maturity.GROUNDED, basis="undertaking terms (soft if uncoded)"),
     "GENERAL_DAMAGES_NO_SI":   ReasonMeta(Category.SI_GATE,    True, 0, Maturity.GROUNDED, basis="reg 3 / RAF 4"),
     "EARNINGS_UNPROVEN":       ReasonMeta(Category.COMPLIANCE, True, 0, Maturity.GROUNDED, basis="proof requirement"),
+    "REFERENCE_UNRESOLVED":    ReasonMeta(Category.REVIEW,     True, 0, Maturity.GROUNDED, basis="§3 — no benchmark for the code; R&N review before payment"),
     # Soft features
     "BILLED_OVER_REFERENCE":   ReasonMeta(Category.ADJUSTED,   False,  0, Maturity.GROUNDED, basis="repriced when enforceable/accepted; else signal"),
     "VALUE_OUTLIER":           ReasonMeta(Category.FRAUD, False, 15, Maturity.HEURISTIC, endogenous=True, basis="condition band p90"),

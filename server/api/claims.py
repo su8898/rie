@@ -4,8 +4,8 @@ from __future__ import annotations
 from datetime import date
 from typing import Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
-from sqlalchemy import desc, or_, select
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response
+from sqlalchemy import desc, func, or_, select
 from sqlalchemy.orm import Session
 
 from pydantic import BaseModel
@@ -15,7 +15,7 @@ from .. import (
     serious_injury_service, undertaking_service,
 )
 from ..db import get_db
-from ..models import ClaimRecord, Determination
+from ..models import ClaimRecord, Determination, latest_determination_ids
 from ..pipeline_service import DuplicateClaim, assess_and_store
 from ..pseudonymise import pseudonymise_ingest
 from ..validation import SubmissionError, validate_submission
@@ -32,6 +32,8 @@ def _det_dict(r: Determination) -> dict:
         "medical_payable": r.medical_payable, "net_payable": r.net_payable,
         "eligible_to_pay": r.eligible_to_pay, "reasons": r.reasons,
         "shadow_signals": r.shadow_signals, "holds": r.holds,
+        "needs_review": bool(r.needs_review), "advisory_signals": r.advisory_signals or [],
+        "accident_candidate": r.accident_candidate,
         "engine_version": r.engine_version, "ruleset_effective": r.ruleset_effective,
         "reference_edition": r.reference_edition,
         "created_at": r.created_at.isoformat() if r.created_at else None,
@@ -88,20 +90,27 @@ def rescore(claim_id: str, body: RescoreIn = RescoreIn(), db: Session = Depends(
 
 
 @router.get("")
-def list_claims(db: Session = Depends(get_db), user: dict = Depends(current_user),
+def list_claims(response: Response, db: Session = Depends(get_db), user: dict = Depends(current_user),
                 band: str | None = None, disposition: str | None = None,
-                q: str | None = None,
+                q: str | None = None, needs_review: bool | None = None,
                 limit: int = Query(50, le=200), offset: int = 0) -> list[dict]:
-    stmt = select(Determination).order_by(desc(Determination.id))
+    """One row per claim — its LATEST determination (a rescore supersedes, it does not add a
+    row here). `X-Total-Count` carries the full filtered count so the UI can page server-side."""
+    stmt = select(Determination).where(Determination.id.in_(latest_determination_ids()))
     if band:
         stmt = stmt.where(Determination.band == band)
     if disposition:
         stmt = stmt.where(Determination.disposition == disposition)
+    if needs_review is not None:
+        stmt = stmt.where(Determination.needs_review.is_(needs_review))
     if q and q.strip():
         like = f"%{q.strip()}%"
         stmt = stmt.where(or_(Determination.claim_id.ilike(like),
                               Determination.accident_id.ilike(like)))
-    return [_det_dict(r) for r in db.scalars(stmt.limit(limit).offset(offset))]
+    total = db.scalar(select(func.count()).select_from(stmt.subquery()))
+    response.headers["X-Total-Count"] = str(total or 0)
+    rows = db.scalars(stmt.order_by(desc(Determination.id)).limit(limit).offset(offset))
+    return [_det_dict(r) for r in rows]
 
 
 @router.get("/{claim_id}")

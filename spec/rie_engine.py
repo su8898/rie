@@ -22,7 +22,8 @@ Design invariants (CIE doctrine):
 
 from __future__ import annotations
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date
+from decimal import ROUND_HALF_UP, Decimal
 from enum import Enum, auto
 from typing import Optional
 
@@ -54,14 +55,27 @@ class Category(Enum):             # §9 — disposition, worst-first
     COMPLIANCE = 3
     PREAUTH = 4
     SI_GATE = 5
-    ADJUSTED = 6
-    CLEAN = 7
+    REVIEW = 6                    # no benchmark for a billed code — R&N review before payment (§3)
+    ADJUSTED = 7
+    CLEAN = 8
 
 class Band(Enum):
     GREEN = auto(); AMBER = auto(); RED = auto()
 
 AMBER_AT, RED_AT = 25, 50
 ENDOGENOUS_POINT_CAP = 45         # endogenous signals alone can never reach RED (§10)
+
+# Money is exact. Every rand figure is computed in Decimal and rounded half-up to the cent at
+# the engine boundary; the record carries floats only as a JSON representation of those cents.
+CENT = Decimal("0.01")
+
+def D(x) -> Decimal:
+    """Exact decimal of a rand/quantity input (floats via their shortest repr: 100.05 -> 100.05)."""
+    return x if isinstance(x, Decimal) else Decimal(repr(x)) if isinstance(x, float) else Decimal(x)
+
+def money(x) -> float:
+    """Round to the cent, half-up (R70.035 -> R70.04), as a float for the JSON record."""
+    return float(D(x).quantize(CENT, rounding=ROUND_HALF_UP))
 
 @dataclass(frozen=True)
 class ReasonMeta:
@@ -95,6 +109,7 @@ R = {  # the reason-code catalogue (§10) — abridged bases
     "UNDERTAKING_SCOPE":      ReasonMeta(Category.COMPLIANCE, True, 0, Maturity.GROUNDED, basis="undertaking terms (soft if uncoded)"),
     "GENERAL_DAMAGES_NO_SI":  ReasonMeta(Category.SI_GATE,    True, 0, Maturity.GROUNDED, basis="reg 3 / RAF 4"),
     "EARNINGS_UNPROVEN":      ReasonMeta(Category.COMPLIANCE, True, 0, Maturity.GROUNDED, basis="proof requirement"),
+    "REFERENCE_UNRESOLVED":   ReasonMeta(Category.REVIEW,     True, 0, Maturity.GROUNDED, basis="§3 — no benchmark for the code; R&N review before payment"),
     # Soft features
     "BILLED_OVER_REFERENCE":  ReasonMeta(Category.ADJUSTED,   False,  0, Maturity.GROUNDED, basis="repriced when enforceable/accepted; else signal"),
     "VALUE_OUTLIER":          ReasonMeta(Category.FRAUD, False, 15, Maturity.HEURISTIC, endogenous=True, basis="condition band p90"),
@@ -126,6 +141,11 @@ MODE: dict[str, SignalMode] = {
 # 1. DATA SHAPES (minimal — the algorithm's view of the world)          (§2)
 # ────────────────────────────────────────────────────────────────────────────
 
+def normalise_code(kind: str, code: str) -> str:
+    """One code identity everywhere (§3): TARIFF codes compare without leading zeros
+    ('0190' == '190'); NAPPI codes compare raw. Every code comparison in the engine uses this."""
+    return (code.lstrip("0") or "0") if kind == "TARIFF" else code
+
 @dataclass
 class Ruleset:                    # effective at accident date (§1)
     lodgement_years_identified: int = 3
@@ -136,6 +156,9 @@ class Ruleset:                    # effective at accident date (§1)
     caps: list[tuple[date, float]] = field(default_factory=list)   # (effective_from, annual_cap)
     preauth_required: set[str] = field(default_factory=set)        # code classes needing pre-auth
     s19_grounds: set[str] = field(default_factory=set)
+
+    def __post_init__(self) -> None:                               # codes compare normalised (§3)
+        self.preauth_required = {normalise_code("TARIFF", x) for x in self.preauth_required}
 
     def cap_at(self, accident_date: date) -> float:                # §5c — Sweatman/s17(4A)(b)
         rows = [c for eff, c in sorted(self.caps) if eff <= accident_date]
@@ -157,11 +180,14 @@ class Line:
 @dataclass
 class Authorisation:              # §5f — a promise priced in advance
     codes: set[str]
-    qty_limit: float
-    ceiling: float                # rand
+    qty_limit: float              # units authorised across the invoice (0 = unlimited units)
+    ceiling: float                # rand, consumed across every line the authorisation covers
     valid_from: date
     valid_to: date
     status: str = "APPROVED"
+
+    def __post_init__(self) -> None:                               # codes compare normalised (§3)
+        self.codes = {normalise_code("TARIFF", x) for x in self.codes}
 
 @dataclass
 class Undertaking:                # §8c
@@ -204,6 +230,8 @@ class Accident:                   # §6.0
     oar_occupants: Optional[int]
     sources: dict[str, str] = field(default_factory=dict)  # source_class → cluster_id
     claims: list[str] = field(default_factory=list)
+    claimants: set[str] = field(default_factory=set)       # P_* with a PERSONAL claim here (§4e)
+    worklist_candidate: Optional[str] = None               # fuzzy match awaiting a human (§6.0)
 
 # ────────────────────────────────────────────────────────────────────────────
 # 2. ACCIDENT ENTITY RESOLUTION                                        (§6.0)
@@ -232,7 +260,10 @@ def match_score(c: Claim, a: Accident, place: str, vehicles: set[str]) -> float:
 
 def resolve_accident(c: Claim, accidents: list[Accident],
                      place: str = "", vehicles: set[str] = frozenset()) -> tuple[Accident, str]:
-    """Returns (accident, action) — action ∈ JOINED | AUTO_JOINED | WORKLIST | CREATED."""
+    """Returns (accident, action) — action ∈ JOINED | AUTO_JOINED | WORKLIST | CREATED.
+    A WORKLIST match is NOT a join: the claim anchors to its own new accident, which names the
+    candidate (`worklist_candidate`) for a human to confirm or dismiss. New accident ids derive
+    from the first-touch claim id — unique by construction, never a position in the graph."""
     cas = normalise_cas(c.case_number_raw)
     if cas:
         for a in accidents:
@@ -246,10 +277,11 @@ def resolve_accident(c: Claim, accidents: list[Accident],
                 best, score = a, s
     if best and score >= AUTO_JOIN:
         return best, "AUTO_JOINED"
-    if best and score >= WORKLIST:
-        return best, "WORKLIST"                      # human confirms/creates
-    a = Accident(f"A_{len(accidents)+1}", cas, c.accident_date, place, set(vehicles),
+    a = Accident(f"A_{c.claim_id}", cas, c.accident_date, place, set(vehicles),
                  {c.party_token}, None)              # materialised on first touch
+    if best and score >= WORKLIST:
+        a.worklist_candidate = best.accident_id      # human confirms the join (or not)
+        return a, "WORKLIST"
     return a, "CREATED"
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -296,18 +328,21 @@ class RefBook:
     raf2022: dict[str, float]                         # discipline-resolved gazette rate
     empirical: dict[tuple[str, str], float]
     sep: dict[str, float]                             # NAPPI → single exit price
-    non_benchmarkable: set[str]
+    non_benchmarkable: set[str]                       # TARIFF codes with no benchmark by design
+
+    def __post_init__(self) -> None:                               # codes compare normalised (§3)
+        self.non_benchmarkable = {normalise_code("TARIFF", x) for x in self.non_benchmarkable}
 
 def dispensing_fee(sep: float) -> float:
-    return round(sep * DISP_FEE_PCT, 2) if sep < DISP_FEE_THRESHOLD else DISP_FEE_FLAT
+    return money(D(sep) * D(DISP_FEE_PCT)) if sep < DISP_FEE_THRESHOLD else DISP_FEE_FLAT
 
 def resolve(book: RefBook, kind: str, code: str, discipline: str = GP_DISCIPLINE
             ) -> tuple[Optional[float], str, Optional[LegalStatus]]:
     """→ (rate, src, legal_status). The tariff rate resolves for the billing provider's
     discipline (exact → GP → cheapest). Only ENFORCEABLE/ACCEPTED drive the payment rule."""
-    if code in book.non_benchmarkable:
+    nc = normalise_code(kind, code)
+    if kind == "TARIFF" and nc in book.non_benchmarkable:
         return None, "—", None
-    nc = code.lstrip("0") or "0" if kind == "TARIFF" else code   # normalisation
     if (kind, nc) in book.negotiated:
         return book.negotiated[(kind, nc)], "negotiated", LegalStatus.ENFORCEABLE
     if kind == "TARIFF":
@@ -322,7 +357,7 @@ def resolve(book: RefBook, kind: str, code: str, discipline: str = GP_DISCIPLINE
             return g, "RAF 2022", LegalStatus.INTERDICTED
     if kind == "NAPPI" and code in book.sep:
         sep = book.sep[code]
-        return round(sep + dispensing_fee(sep), 2), "NAPPI+fee", LegalStatus.ENFORCEABLE
+        return money(D(sep) + D(dispensing_fee(sep))), "NAPPI+fee", LegalStatus.ENFORCEABLE
     if (kind, nc) in book.empirical:
         return book.empirical[(kind, nc)], "empirical", LegalStatus.ENDOGENOUS
     return None, "—", None
@@ -331,12 +366,21 @@ def resolve(book: RefBook, kind: str, code: str, discipline: str = GP_DISCIPLINE
 # 5. GATES — grounded, hard, cited                                       (§4)
 # ────────────────────────────────────────────────────────────────────────────
 
+def add_years(d: date, years: int) -> date:
+    """The calendar anniversary (s23 counts years, not 365-day blocks). A 29 February start
+    with no anniversary in the target year falls to 1 March — prescription is construed against
+    the party invoking it, so the clock never runs a day short."""
+    try:
+        return d.replace(year=d.year + years)
+    except ValueError:
+        return date(d.year + years, 3, 1)
+
 def prescription_gates(c: Claim, rs: Ruleset, today: date, summons_served: Optional[date]) -> list[str]:
     out = []
     years = rs.lodgement_years_hitrun if c.hit_and_run else rs.lodgement_years_identified
-    if not c.prescription_suspended and c.lodged_on > c.accident_date + timedelta(days=365 * years):
+    if not c.prescription_suspended and c.lodged_on > add_years(c.accident_date, years):
         out.append("PRESCRIBED_LODGEMENT")
-    if summons_served and summons_served > c.lodged_on + timedelta(days=365 * rs.summons_years):
+    if summons_served and summons_served > add_years(c.lodged_on, rs.summons_years):
         out.append("PRESCRIBED_SUMMONS")
     return out
 
@@ -382,21 +426,46 @@ class LineResult:
 def find_authorisation(u: Optional[Undertaking], line: Line) -> Optional[Authorisation]:
     if not u:
         return None
+    nc = normalise_code("TARIFF", line.code)
     for auth in u.authorisations:
-        if auth.status == "APPROVED" and line.code in auth.codes \
+        if auth.status == "APPROVED" and nc in auth.codes \
            and auth.valid_from <= line.service_date <= auth.valid_to:
             return auth
     return None
 
+def line_key(party_token: str, line: Line) -> tuple:
+    """The identity of a billed service for pay-once checks (§4e/§4f): who, by whom, when, what
+    (normalised code), how much."""
+    return (party_token, line.provider_id, line.service_date, line.kind,
+            normalise_code(line.kind, line.code), line.amount)
+
+def consume_authorisation(auth: Authorisation, line: Line, usage: dict) -> float:
+    """§5f — the promise is finite: units up to qty_limit and rand up to the ceiling, consumed
+    across every line the authorisation covers. Returns the payable rand for this line."""
+    used_qty, used_rand = usage.get(id(auth), (Decimal(0), Decimal(0)))
+    qty = D(line.qty) if line.qty > 0 else Decimal(1)
+    units = min(qty, D(auth.qty_limit) - used_qty) if auth.qty_limit > 0 else qty
+    rand_room = D(auth.ceiling) - used_rand
+    payable = money(max(min(D(line.amount) / qty * max(units, Decimal(0)), rand_room), Decimal(0)))
+    usage[id(auth)] = (used_qty + qty, used_rand + D(payable))
+    return payable
+
 def adjudicate_line(c: Claim, line: Line, book: RefBook, rs: Ruleset,
-                    tier: str, seen: set, accident_dx_regions: set[str]) -> LineResult:
+                    tier: str, seen: set, accident_dx_regions: set[str],
+                    prior: frozenset = frozenset(), auth_usage: Optional[dict] = None) -> LineResult:
+    """`seen` is this claim's lines so far; `prior` is every line already paid on another
+    claim for this party (threaded by the caller — the s17(5) control); `auth_usage` tracks
+    authorisation consumption across the claim's lines."""
     reasons: list[str] = []
+    nc = normalise_code(line.kind, line.code)
 
     # 6.1 hard causation/date gates (§4d)
     if line.service_date < c.accident_date:
         return LineResult(0.0, ["SERVICE_BEFORE_ACCIDENT"], "—")
-    key = (c.party_token, line.provider_id, line.service_date, line.code, line.amount)
-    if key in seen:                                   # §4e/§4f — pay once, across claim types
+    key = line_key(c.party_token, line)
+    if key in prior:                                  # §4e — s17(5): already paid on another claim
+        return LineResult(0.0, ["SUPPLIER_PRECLUSION"], "—")
+    if key in seen:                                   # §4f — pay the first occurrence only
         return LineResult(0.0, ["DUPLICATE_LINE"], "—")
     seen.add(key)
     if line.dx[:3] not in accident_dx_regions and accident_dx_regions:
@@ -414,18 +483,18 @@ def adjudicate_line(c: Claim, line: Line, book: RefBook, rs: Ruleset,
             reasons.append("UNDERTAKING_SCOPE")       # soft on uncoded legacy scope → review
         auth = find_authorisation(u, line)
         if auth:                                      # the promise priced in advance
-            ceiling = min(auth.ceiling, auth.qty_limit and auth.ceiling or auth.ceiling)
-            if line.amount > ceiling:
-                return LineResult(ceiling, ["PREAUTH_EXCEEDED"], "authorisation")
+            payable = consume_authorisation(auth, line, auth_usage if auth_usage is not None else {})
+            if payable < line.amount:
+                return LineResult(payable, ["PREAUTH_EXCEEDED"], "authorisation")
             return LineResult(line.amount, reasons, "authorisation")
-        if line.code in rs.preauth_required and not line.emergency:
+        if nc in rs.preauth_required and not line.emergency:
             return LineResult(0.0, reasons + ["PREAUTH_MISSING"], "—")
 
     # 6.3 reference pricing — the payment rule (§3); resolve for the line's provider discipline
     rate, src, status = resolve(book, line.kind, line.code, line.discipline or tier)
-    if rate is None:
-        return LineResult(line.amount, reasons, src, needs_review=True)   # uncovered → R&N review
-    expected = round(rate * line.qty, 2)
+    if rate is None:                                  # uncovered → hard R&N review, never paid as billed
+        return LineResult(line.amount, reasons + ["REFERENCE_UNRESOLVED"], src, needs_review=True)
+    expected = money(D(rate) * D(line.qty))
     if line.amount > expected:
         reasons.append("BILLED_OVER_REFERENCE")
         if status in PAYMENT_RULE_STATUSES:
@@ -437,11 +506,11 @@ def adjudicate_line(c: Claim, line: Line, book: RefBook, rs: Ruleset,
 # 7. HEADS OF DAMAGE — gross → apportioned → capped → offer              (§5)
 # ────────────────────────────────────────────────────────────────────────────
 
-def apportion(amount: float, fault_pct: Optional[float]) -> float:
-    return round(amount * (1 - (fault_pct or 0.0) / 100), 2)
+def apportion(amount, fault_pct: Optional[float]) -> float:
+    return money(D(amount) * (1 - D(fault_pct or 0.0) / 100))
 
 def head_past_medical(line_results: list[LineResult], fault_pct: Optional[float]) -> float:
-    return apportion(sum(r.payable for r in line_results), fault_pct)
+    return apportion(sum(D(r.payable) for r in line_results), fault_pct)
 
 def _sweatman(annual_losses_after_contingency: list[float], c: Claim, rs: Ruleset
               ) -> tuple[float, list[dict]]:
@@ -450,7 +519,7 @@ def _sweatman(annual_losses_after_contingency: list[float], c: Claim, rs: Rulese
     cap = rs.cap_at(c.accident_date)
     worksheet = [{"year": i + 1, "loss": loss, "cap": cap, "capped": min(loss, cap)}
                  for i, loss in enumerate(annual_losses_after_contingency)]
-    return apportion(sum(w["capped"] for w in worksheet), c.fault_pct), worksheet
+    return apportion(sum(D(w["capped"]) for w in worksheet), c.fault_pct), worksheet
 
 def head_loss_of_earnings(annual_losses_after_contingency: list[float],
                           c: Claim, rs: Ruleset) -> tuple[float, list[dict]]:
@@ -489,18 +558,29 @@ class Assessment:
     score: int
     band: Band
     engine_version: str = "rie-scorer v1"
+    advisory: list[str] = field(default_factory=list)   # the ADVISORY subset of reasons: visible, never dispositive
+
+def effective_mode(code: str, meta: Optional[ReasonMeta], overrides: dict) -> SignalMode:
+    """§11 — the live mode: the ADMIN override when it is a real SignalMode and the signal is
+    not Grounded (law-cited gates are always SCORED), else the launch default."""
+    ov = overrides.get(code)
+    if isinstance(ov, SignalMode) and meta is not None and meta.maturity is not Maturity.GROUNDED:
+        return ov
+    return MODE.get(code, SignalMode.SCORED)
 
 def score_and_band(all_reasons: list[str], mode_overrides: Optional[dict] = None) -> Assessment:
     ov = mode_overrides or {}                         # §11 — ADMIN signal-mode overrides (reference data)
-    visible, shadow, pts, endo_pts = [], [], 0, 0
+    visible, advisory, shadow, pts, endo_pts = [], [], [], 0, 0
     for code in dict.fromkeys(all_reasons):           # dedupe, keep order
         meta = R.get(code)
-        mode = ov.get(code) or MODE.get(code, SignalMode.SCORED)
         if meta is None:
             visible.append(code); continue
+        mode = effective_mode(code, meta, ov)
         if mode is SignalMode.SHADOW:
             shadow.append(code); continue
         visible.append(code)
+        if mode is SignalMode.ADVISORY:
+            advisory.append(code)                     # visible, zero points, no say in the disposition
         if mode is SignalMode.SCORED and not meta.hard:
             if meta.endogenous:
                 endo_pts += meta.points               # capped: endogenous alone never reaches RED
@@ -510,14 +590,23 @@ def score_and_band(all_reasons: list[str], mode_overrides: Optional[dict] = None
             pts += 50                                 # hard fraud grounds band RED directly
     score = pts + min(endo_pts, ENDOGENOUS_POINT_CAP)
     band = Band.RED if score >= RED_AT else Band.AMBER if score >= AMBER_AT else Band.GREEN
-    return Assessment(visible, shadow, score, band)
+    return Assessment(visible, shadow, score, band, advisory=advisory)
 
 # ────────────────────────────────────────────────────────────────────────────
 # 9. DISPOSITION — one shared worst-wins ordering                        (§9)
 # ────────────────────────────────────────────────────────────────────────────
 
+def dispositive(code: str, assessment: Assessment) -> bool:
+    """§9/§11 — what may route a claim: hard gates and zero-point facts (a repricing) always;
+    a scoring heuristic only through its band (never alone below AMBER — statistical signals
+    never auto-reject); an ADVISORY signal never."""
+    meta = R.get(code)
+    if meta is None or code in assessment.advisory:
+        return False
+    return meta.hard or meta.points == 0 or assessment.band is not Band.GREEN
+
 def disposition(assessment: Assessment, merits_pending: bool) -> Category:
-    cats = {R[c].category for c in assessment.reasons if c in R}
+    cats = {R[c].category for c in assessment.reasons if dispositive(c, assessment)}
     if merits_pending:
         cats.add(Category.MERITS)                     # held_for_merits
     for cat in Category:                              # enum order = precedence
@@ -539,7 +628,7 @@ def eligible_to_pay(c: Claim, disp: Category, validated: bool,
     if not c.payee_verified:                            holds.append("PAYEE_UNVERIFIED")
     if not c.attorney_in_standing:                      holds.append("ATTORNEY_NOT_IN_STANDING")
     if c.claimant_deceased_on:                          holds.append("LIFE_STATUS_MISMATCH")
-    return (not holds), round(max(payable - interim_paid, 0.0), 2), holds
+    return (not holds), money(max(D(payable) - D(interim_paid), Decimal(0))), holds
 
 # ────────────────────────────────────────────────────────────────────────────
 # 11. THE PIPELINE — one claim, end to end
@@ -551,24 +640,33 @@ def process_claim(c: Claim, accidents: list[Accident], book: RefBook, rs: Rulese
                   seen_lines: set = None, cohort_is_bus_taxi: bool = False,
                   conv_floor_p10: float = 20.0, summons_served: Optional[date] = None,
                   mode_overrides: Optional[dict] = None) -> dict:
-    """The brain, invoked once per claim. Deterministic. Returns the determination record."""
+    """The brain, invoked once per claim. Deterministic. Returns the determination record.
+    `seen_lines` is the pay-once ledger across claims (§4e, s17(5)): the caller threads the
+    party's lines already paid elsewhere; this claim's lines are added to it on return."""
     seen_lines = seen_lines if seen_lines is not None else set()
+    prior_lines = frozenset(seen_lines)
 
     # A. anchor to the accident graph and refresh corroboration          (§6.0)
     accident, action = resolve_accident(c, accidents)
     accident.claims.append(c.claim_id)
     graph_reasons = corroboration_signals(accident, cohort_is_bus_taxi, conv_floor_p10)
+    dup_claim = (["DUPLICATE_CLAIM"] if c.claim_type == "PERSONAL"
+                 and c.party_token in accident.claimants else [])   # one claim per claimant per accident
+    if c.claim_type == "PERSONAL":
+        accident.claimants.add(c.party_token)
 
     # B. grounded gates                                                   (§4)
     deceased_pre = bool(c.claimant_deceased_on and
                         any(l.service_date > c.claimant_deceased_on for l in c.lines))
     gate_reasons = (prescription_gates(c, rs, today, summons_served)
-                    + s24_gates(c) + standing_gates(c, deceased_pre) + merits_gate(c))
+                    + s24_gates(c) + standing_gates(c, deceased_pre) + merits_gate(c) + dup_claim)
     validated = not any(r in ("S24_INCOMPLETE", "OAR_MISSING") for r in gate_reasons)
 
     # C. per-line adjudication                                        (§3, §5f)
-    line_results = [adjudicate_line(c, l, book, rs, provider_tier, seen_lines,
-                                    set(accident_dx_regions)) for l in c.lines]
+    seen, auth_usage = set(), {}
+    line_results = [adjudicate_line(c, l, book, rs, provider_tier, seen, set(accident_dx_regions),
+                                    prior_lines, auth_usage) for l in c.lines]
+    seen_lines |= seen
     line_reasons = [r for lr in line_results for r in lr.reasons]
 
     # D. heads (medical here; earnings/GD computed when their inputs arrive) (§5)
@@ -590,6 +688,8 @@ def process_claim(c: Claim, accidents: list[Accident], book: RefBook, rs: Rulese
         "reasons": assessment.reasons, "shadow_signals": assessment.shadow,
         "disposition": disp.name, "medical_payable": medical_payable,
         "eligible_to_pay": ok, "net_payable": net_payable, "holds": holds,
+        "needs_review": any(lr.needs_review for lr in line_results),
+        "advisory_signals": assessment.advisory, "accident_candidate": accident.worklist_candidate,
         "engine_version": assessment.engine_version,
         "ruleset_effective": c.accident_date.isoformat(), "reference_edition": "RPL-2026",
     }

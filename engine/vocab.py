@@ -5,6 +5,7 @@ Pure stdlib. This module has no internal dependencies; everything else imports f
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import ROUND_HALF_UP, Decimal
 from enum import Enum, auto
 
 
@@ -36,8 +37,9 @@ class Category(Enum):              # §9 — disposition, worst-first
     COMPLIANCE = 3
     PREAUTH = 4
     SI_GATE = 5
-    ADJUSTED = 6
-    CLEAN = 7
+    REVIEW = 6                     # no benchmark for a billed code — R&N review before payment (§3)
+    ADJUSTED = 7
+    CLEAN = 8
 
 
 class Band(Enum):
@@ -48,6 +50,20 @@ class Band(Enum):
 
 AMBER_AT, RED_AT = 25, 50
 ENDOGENOUS_POINT_CAP = 45          # endogenous signals alone can never reach RED (§10)
+
+# Money is exact. Every rand figure is computed in Decimal and rounded half-up to the cent at
+# the engine boundary; the record carries floats only as a JSON representation of those cents.
+CENT = Decimal("0.01")
+
+
+def D(x) -> Decimal:
+    """Exact decimal of a rand/quantity input (floats via their shortest repr: 100.05 -> 100.05)."""
+    return x if isinstance(x, Decimal) else Decimal(repr(x)) if isinstance(x, float) else Decimal(x)
+
+
+def money(x) -> float:
+    """Round to the cent, half-up (R70.035 -> R70.04), as a float for the JSON record."""
+    return float(D(x).quantize(CENT, rounding=ROUND_HALF_UP))
 
 
 @dataclass(frozen=True)
