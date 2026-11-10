@@ -2,24 +2,26 @@
 from __future__ import annotations
 
 from datetime import date
+from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy import desc, or_, select
 from sqlalchemy.orm import Session
 
+from pydantic import BaseModel
+
 from .. import (
-    lifecycle_service, litigation_service, merits_service, models, offers_service,
+    admin_service, lifecycle_service, litigation_service, merits_service, models, offers_service,
     serious_injury_service, undertaking_service,
 )
 from ..db import get_db
 from ..models import ClaimRecord, Determination
-from ..pipeline_service import assess_and_store
+from ..pipeline_service import DuplicateClaim, assess_and_store
 from ..pseudonymise import pseudonymise_ingest
+from ..validation import SubmissionError, validate_submission
 from .deps import current_user, require_role
 
 router = APIRouter(prefix="/claims")
-
-_REQUIRED = ("claim_id", "claim_type", "party_token", "accident_date", "lodged_on")
 
 
 def _det_dict(r: Determination) -> dict:
@@ -50,14 +52,39 @@ def _claim_dict(c: ClaimRecord | None) -> dict | None:
 def submit(payload: dict = Body(...), db: Session = Depends(get_db),
            user: dict = Depends(require_role("HANDLER", "MEDICAL_OFFICER"))) -> dict:
     payload = pseudonymise_ingest(payload)              # POPIA — derive P_* from a raw ID + strip PII (§2)
-    missing = [k for k in _REQUIRED if k not in payload]
-    if missing:
-        raise HTTPException(status_code=422, detail={"missing": missing})
+    try:
+        payload = validate_submission(payload)          # typed + bounded (qty>0, amount>=0, bool docs, ...)
+    except SubmissionError as e:
+        raise HTTPException(status_code=422, detail={"errors": e.errors})
     try:
         today = date.fromisoformat(payload["today"]) if payload.get("today") else None
         return assess_and_store(db, payload, today=today)
+    except DuplicateClaim as e:
+        raise HTTPException(status_code=409, detail=str(e))
     except (KeyError, ValueError, TypeError) as e:
         raise HTTPException(status_code=422, detail=f"bad payload: {e}")
+
+
+class RescoreIn(BaseModel):
+    today: Optional[date] = None
+    note: Optional[str] = None
+
+
+@router.post("/{claim_id}/rescore")
+def rescore(claim_id: str, body: RescoreIn = RescoreIn(), db: Session = Depends(get_db),
+            user: dict = Depends(require_role("ADMIN"))) -> dict:
+    """ADMIN re-determination: re-run the engine over the STORED payload (current reference data
+    and signal modes) and append a new determination. The claim and its lines are never rewritten,
+    so the latest determination always describes the stored record. Audit-logged."""
+    rec = db.get(ClaimRecord, claim_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail="claim not found")
+    record = assess_and_store(db, dict(rec.raw), today=body.today, rescore=True)
+    admin_service._audit(db, user, "RESCORE_CLAIM", claim_id,
+                         {"note": body.note, "band": record["band"], "disposition": record["disposition"],
+                          "net_payable": record["net_payable"]})
+    db.commit()
+    return record
 
 
 @router.get("")

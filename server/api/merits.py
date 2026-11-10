@@ -1,7 +1,10 @@
 """Merits determination — accept (fault %) / reject (s19 ground) / appeal."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from .. import merits_service, models
@@ -9,6 +12,11 @@ from ..db import get_db
 from .deps import current_user
 
 router = APIRouter(prefix="/merits")
+
+
+class MeritsIn(BaseModel):
+    fault_pct: Optional[float] = Field(default=None, ge=0, le=100)
+    ground: Optional[str] = Field(default=None, max_length=64)
 
 
 def _log(x) -> dict:
@@ -31,8 +39,8 @@ def get_merits(claim_id: str, db: Session = Depends(get_db),
 
 
 @router.post("/{claim_id}/{action}")
-def decide(claim_id: str, action: str, body: dict = Body(default={}),
+def decide(claim_id: str, action: str, body: MeritsIn = MeritsIn(),
            db: Session = Depends(get_db), user: dict = Depends(current_user)) -> dict:
     m = merits_service.decide(db, claim_id, action, user,
-                              fault_pct=body.get("fault_pct"), ground=body.get("ground"))
+                              fault_pct=body.fault_pct, ground=body.ground)
     return _dict(m)

@@ -21,6 +21,8 @@ export type Disposition =
 export interface Health {
   status: string;
   db: string;
+  /** "dev" | "test" | "prod" — the SPA shows dev-only affordances (quick logins) only for dev/test. */
+  env?: string;
 }
 
 export interface AuthUser {

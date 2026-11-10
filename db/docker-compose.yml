@@ -1,8 +1,12 @@
 # Real deployment: PostgreSQL 16 + a one-shot reference loader (seeds reference.db) + the API
 # (serving the SPA + JSON API + provider rails on one port).
 #
-#   cd db && docker compose up --build          # bring the whole stack up
-#   open http://localhost:8021                   # SPA (admin/admin, handler/handler, ...)
+#   cd db && cp .env.example .env && $EDITOR .env   # set the four secrets (generate: openssl rand -hex 32)
+#   docker compose up --build                       # bring the whole stack up
+#   open http://localhost:8021                      # SPA — login admin / $RIE_BOOTSTRAP_ADMIN_PASSWORD
+#
+# No dev users exist in prod: the first ADMIN is bootstrapped from RIE_BOOTSTRAP_ADMIN_PASSWORD;
+# create the rest (and a second ADMIN for payments — three-way segregation of duties) in Admin.
 #
 # `reference.db` (the 59 MB RAF reference snapshot at the repo root) is bind-mounted into the
 # loader, which populates the reference tables in Postgres, then exits; the API starts after.
@@ -29,6 +33,11 @@ services:
     environment:
       RIE_DATABASE_URL: postgresql+psycopg2://rie:rie@db:5432/rie
       RIE_REFERENCE_DB: /app/reference.db
+      RIE_APP_ENV: ${RIE_APP_ENV:-prod}
+      RIE_SECRET_KEY: ${RIE_SECRET_KEY:?set RIE_SECRET_KEY in db/.env (>=32 random chars)}
+      RIE_RAILS_SECRET: ${RIE_RAILS_SECRET:?set RIE_RAILS_SECRET in db/.env}
+      RIE_PSEUDONYM_SECRET: ${RIE_PSEUDONYM_SECRET:?set RIE_PSEUDONYM_SECRET in db/.env}
+      RIE_BOOTSTRAP_ADMIN_PASSWORD: ${RIE_BOOTSTRAP_ADMIN_PASSWORD:?set RIE_BOOTSTRAP_ADMIN_PASSWORD in db/.env}
     volumes:
       - ../reference.db:/app/reference.db:ro
     depends_on:
@@ -42,8 +51,13 @@ services:
       dockerfile: db/Dockerfile.api
     environment:
       RIE_DATABASE_URL: postgresql+psycopg2://rie:rie@db:5432/rie
-      RIE_SECRET_KEY: change-me-in-production
-      RIE_RAILS_SECRET: change-me-rails-secret
+      # The API refuses to start outside dev/test with a default or short (<32 char) secret.
+      # Put real values in db/.env (compose reads it) — never commit them.
+      RIE_APP_ENV: ${RIE_APP_ENV:-prod}
+      RIE_SECRET_KEY: ${RIE_SECRET_KEY:?set RIE_SECRET_KEY in db/.env (>=32 random chars)}
+      RIE_RAILS_SECRET: ${RIE_RAILS_SECRET:?set RIE_RAILS_SECRET in db/.env}
+      RIE_PSEUDONYM_SECRET: ${RIE_PSEUDONYM_SECRET:?set RIE_PSEUDONYM_SECRET in db/.env}
+      RIE_BOOTSTRAP_ADMIN_PASSWORD: ${RIE_BOOTSTRAP_ADMIN_PASSWORD:?set RIE_BOOTSTRAP_ADMIN_PASSWORD in db/.env}
     ports: ["8021:8021"]
     depends_on:
       db:

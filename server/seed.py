@@ -8,11 +8,14 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from . import models
+from .config import BOOTSTRAP_ADMIN_PASSWORD, SEED_DEV_USERS
 from .db import Base, SessionLocal, engine
 from .security import hash_password
 
-_USERS = [("admin", "ADMIN"), ("handler", "HANDLER"), ("medical", "MEDICAL_OFFICER"),
-          ("investigator", "INVESTIGATOR"), ("legal", "LEGAL")]
+# Dev logins (username == password). `treasury` is the second ADMIN the payment flow needs:
+# assembler, approver and payer must be three different people (§8e segregation of duties).
+_USERS = [("admin", "ADMIN"), ("treasury", "ADMIN"), ("handler", "HANDLER"),
+          ("medical", "MEDICAL_OFFICER"), ("investigator", "INVESTIGATOR"), ("legal", "LEGAL")]
 
 
 def _empty(db: Session, model) -> bool:
@@ -20,9 +23,19 @@ def _empty(db: Session, model) -> bool:
 
 
 def seed_users(db: Session) -> None:
-    if _empty(db, models.AppUser):
+    """Dev/test: the username==password dev logins. Production: never — bootstrap ONE admin from
+    RIE_BOOTSTRAP_ADMIN_PASSWORD when the table is empty, otherwise leave users alone."""
+    if SEED_DEV_USERS:                                  # dev/test: ensure every dev login exists
+        have = set(db.scalars(select(models.AppUser.username)))
         for uname, role in _USERS:
-            db.add(models.AppUser(username=uname, password_hash=hash_password(uname), role=role))
+            if uname not in have:
+                db.add(models.AppUser(username=uname, password_hash=hash_password(uname), role=role))
+        return
+    if not _empty(db, models.AppUser):
+        return
+    if BOOTSTRAP_ADMIN_PASSWORD:
+        db.add(models.AppUser(username="admin", password_hash=hash_password(BOOTSTRAP_ADMIN_PASSWORD),
+                              role="ADMIN"))
 
 
 def seed_statutory(db: Session) -> None:

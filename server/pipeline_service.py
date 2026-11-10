@@ -20,6 +20,10 @@ from .pseudonymise import pseudonymise_ingest
 from .reference_data import build_mode_overrides, build_refbook, build_ruleset
 
 
+class DuplicateClaim(ValueError):
+    """The claim_id is already in the immutable corpus; a re-determination must be explicit (rescore)."""
+
+
 def _optdate(s) -> Optional[date]:
     return date.fromisoformat(s) if s else None
 
@@ -42,9 +46,16 @@ def _line_details(claim: engine.Claim, book: engine.RefBook, rs: engine.Ruleset,
     return out
 
 
-def assess_and_store(db: Session, payload: dict, today: Optional[date] = None) -> dict:
+def assess_and_store(db: Session, payload: dict, today: Optional[date] = None,
+                     *, rescore: bool = False) -> dict:
+    """Score one claim and persist. A claim_id already in the corpus is refused (DuplicateClaim)
+    unless `rescore=True` — the explicit ADMIN re-determination path, which appends a new
+    determination over the *stored* payload so the record and its lines never diverge."""
     payload = pseudonymise_ingest(payload)              # POPIA — derive P_* from a raw ID, strip PII (§2)
     claim = adapter.json_to_claim(payload)
+    existing = db.get(models.ClaimRecord, claim.claim_id)
+    if existing is not None and not rescore:
+        raise DuplicateClaim(f"claim {claim.claim_id} already submitted — use the ADMIN rescore to re-determine")
     nappi_codes = {l.code for l in claim.lines if l.kind == "NAPPI"}
     book, rs = build_refbook(db, nappi_codes), build_ruleset(db)
     tier = payload.get("provider_tier", "GP")
@@ -82,7 +93,7 @@ def _persist(db: Session, claim: engine.Claim, payload: dict, record: dict,
             oar_occupants=None, sources={}, claims=[claim.claim_id],
         ))
 
-    if db.get(models.ClaimRecord, claim.claim_id) is None:     # immutable corpus — write once
+    if db.get(models.ClaimRecord, claim.claim_id) is None:     # immutable corpus — write once (rescore never rewrites)
         db.add(models.ClaimRecord(
             claim_id=claim.claim_id, claim_type=claim.claim_type, party_token=claim.party_token,
             accident_date=claim.accident_date, lodged_on=claim.lodged_on, raw=payload,

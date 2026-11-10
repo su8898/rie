@@ -13,13 +13,32 @@ def _d(s: Optional[str]) -> Optional[date]:
     return date.fromisoformat(s) if s else None
 
 
-def json_to_claim(p: dict) -> engine.Claim:
-    lines = [engine.Line(
-        kind=l["kind"], code=l["code"], qty=float(l["qty"]), amount=float(l["amount"]),
+_KINDS = ("TARIFF", "NAPPI")
+
+
+def _line(l: dict) -> engine.Line:
+    if l.get("kind") not in _KINDS:
+        raise ValueError(f"line kind must be one of {_KINDS}, got {l.get('kind')!r}")
+    qty, amount = float(l["qty"]), float(l["amount"])
+    if not (qty > 0):
+        raise ValueError(f"line qty must be > 0, got {qty}")
+    if not (amount >= 0) or amount != amount or amount in (float("inf"), float("-inf")):
+        raise ValueError(f"line amount must be a finite value >= 0, got {amount}")
+    return engine.Line(
+        kind=l["kind"], code=str(l["code"]), qty=qty, amount=amount,
         service_date=date.fromisoformat(l["service_date"]), provider_id=l["provider_id"],
-        dx=l.get("dx", ""), emergency=bool(l.get("emergency", False)),
-        scheme_paid=bool(l.get("scheme_paid", False)), discipline=l.get("discipline", ""),
-    ) for l in p.get("lines", [])]
+        dx=l.get("dx") or "", emergency=bool(l.get("emergency", False)),
+        scheme_paid=bool(l.get("scheme_paid", False)), discipline=l.get("discipline") or "",
+    )
+
+
+def json_to_claim(p: dict) -> engine.Claim:
+    lines = [_line(l) for l in p.get("lines", [])]
+    fault = p.get("fault_pct")
+    if fault is not None:
+        fault = float(fault)
+        if not (0.0 <= fault <= 100.0):
+            raise ValueError(f"fault_pct must be within 0..100, got {fault}")
 
     u = None
     if p.get("undertaking"):
@@ -39,7 +58,7 @@ def json_to_claim(p: dict) -> engine.Claim:
         case_number_raw=p.get("case_number_raw"), documents=dict(p.get("documents", {})),
         lines=lines, hit_and_run=bool(p.get("hit_and_run", False)),
         prescription_suspended=bool(p.get("prescription_suspended", False)),
-        fault_pct=p.get("fault_pct"), merits_accepted=p.get("merits_accepted"),
+        fault_pct=fault, merits_accepted=p.get("merits_accepted"),
         merits_ground=p.get("merits_ground"), si_accepted=p.get("si_accepted"),
         undertaking=u, claimant_deceased_on=_d(p.get("claimant_deceased_on")),
         payee_verified=bool(p.get("payee_verified", False)),
