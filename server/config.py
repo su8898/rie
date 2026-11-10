@@ -31,6 +31,10 @@ RAILS_SHARED_SECRET_ENABLED = IS_DEV or os.environ.get("RIE_RAILS_ALLOW_SHARED_S
 # The Fund's own ES256 signing key (PEM, P-256) for receipts; its public half is published as a
 # JWKS. Unset, a key is generated at start-up — fine for dev, but it changes on every restart.
 RAILS_SIGNING_KEY_PEM = os.environ.get("RIE_RAILS_SIGNING_KEY", "")
+# The practice register (provider_registry). A practice it marks suspended or deregistered is
+# always refused. With enforcement on, a practice that is NOT in the register is refused too —
+# turn it on only once the register is loaded, or every claim is held.
+PROVIDER_REGISTER_ENFORCED = os.environ.get("RIE_PROVIDER_REGISTER_ENFORCED", "") == "1"
 # POPIA pseudonymisation HMAC key — raw national IDs are HMAC'd to P_* tokens at ingest (§2/§4/§9).
 PSEUDONYM_SECRET = os.environ.get("RIE_PSEUDONYM_SECRET", _DEFAULTS["RIE_PSEUDONYM_SECRET"])
 

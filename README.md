@@ -230,6 +230,27 @@ refused unless `RIE_RAILS_ALLOW_SHARED_SECRET=1` is set. ES256 needs the `crypto
 (now in `requirements.txt`). Existing databases need `alembic upgrade head` (migration `b8f3d6e9a520`).
 Not ported: EDIFACT intake, CIE's gateway with per-switch traffic logs, and its switch console.
 
+## The practice register
+
+Ported from CIE's provider identity registry ([`server/provider_registry_service.py`](server/provider_registry_service.py)).
+It is a local, administrator-maintained register keyed on the practice number, standing in for the
+BHF practice-number register until a live feed is granted. Nothing here changes the engine: at claim
+intake the register sets three fund-side facts that a submitter must not assert for itself.
+
+| Fact | Rule |
+| --- | --- |
+| Registration | A practice marked `SUSPENDED` or `DEREGISTERED` may not bill. The claim is `PROVIDER_UNREGISTERED` and payment is blocked, whatever the payload says. |
+| Discipline | A verified row's discipline is the one its lines are priced under. The submitter's value is kept as `discipline_asserted`. |
+| Setting | A claim whose practices are all registered as a hospital or emergency unit is a facility account. One whose practices are all rooms-based is not. |
+
+A practice the register does not know leaves the claim as submitted. Set
+`RIE_PROVIDER_REGISTER_ENFORCED=1` to refuse unknown practices too, but only once the register is
+loaded, or every claim is held. The facts are fixed at submission: a rescore does not re-read the
+register. Maintain it under **Admin → Practice register** or over `/api/admin/practices` (add,
+update, status with a reason, CSV import); any operator can read `/api/practices`. `RegisterFeed`
+is the seam for a live feed and is inert today. Existing databases need `alembic upgrade head`
+(migration `c9a4e7f1b632`).
+
 ## API
 
 | Method | Path | Notes |
@@ -248,6 +269,8 @@ Not ported: EDIFACT intake, CIE's gateway with per-switch traffic logs, and its 
 | GET | `/api/coding/drift?min_months=&min_lines=` | providers whose billing ratio is rising |
 | GET | `/api/remittances?provider_id=` · `/{ref}` · `/{ref}/xml` · `/{ref}/print` | remittance advice: list, detail, XML, print page |
 | POST | `/api/remittances/issue/{batch_id}` | issue advice for a paid batch that has none (ADMIN) |
+| GET | `/api/practices?q=&status=` · `/summary` · `/{provider_id}` | the practice register: list, counts, one practice's identity |
+| POST | `/api/admin/practices` · `/import` · `/{provider_id}/status` | maintain the practice register (ADMIN) |
 | GET | `/api/medical-reports?claim_id=&provider_id=` · `/forms` · `/documentation/{claim_id}` · `/{ref}` · `/{ref}/xml` · `/{ref}/print` | medical reports on file: list, catalogue, per-claim status, detail, XML, print page |
 
 A determination record: `{claim_id, accident_id, accident_action, convergence, validated,

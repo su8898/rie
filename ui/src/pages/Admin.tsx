@@ -2,7 +2,7 @@
 // data is edited. Nothing here is a code deploy — every change is effective-dated,
 // audit-logged reference data the engine reads live on the next determination.
 //
-// Nine tabs — eight over the /api/admin surface, plus dated rates over /api/rates:
+// Ten tabs — nine over the /api/admin surface, plus dated rates over /api/rates:
 //   • users          — RBAC: create user, change role, activate/deactivate.
 //   • signal-modes   — the §11 promotion lifecycle as an effective-dated
 //                      SHADOW/ADVISORY/SCORED override (Grounded locked SCORED).
@@ -16,6 +16,8 @@
 //                      time-modifier ladders, percentage of time (AdminCodeRules.tsx).
 //   • rails-parties  — who may sign onto the provider channel: each party's public
 //                      ES256 key and the providers it may act for (AdminRailsParties.tsx).
+//   • practices      — the practice register: who each billing practice is, its
+//                      discipline and setting, and whether it may bill (AdminPractices.tsx).
 //   • audit          — the append-only admin CUD log (§9), newest first.
 //
 // Everything mutating goes through `run(key, fn, okMsg)`: it disables all
@@ -43,6 +45,7 @@ import {
 } from "../components/ui";
 import { rand } from "../format";
 import CodeRulesTab from "./AdminCodeRules";
+import PracticesTab from "./AdminPractices";
 import RailsPartiesTab from "./AdminRailsParties";
 import RatesTab from "./AdminRates";
 import type {
@@ -63,6 +66,7 @@ type Tab =
   | "rates"
   | "code-rules"
   | "rails-parties"
+  | "practices"
   | "audit";
 
 const TABS: { key: Tab; label: string }[] = [
@@ -74,6 +78,7 @@ const TABS: { key: Tab; label: string }[] = [
   { key: "rates", label: "Dated rates" },
   { key: "code-rules", label: "Coding rules" },
   { key: "rails-parties", label: "Channel keys" },
+  { key: "practices", label: "Practice register" },
   { key: "audit", label: "Audit" },
 ];
 
@@ -234,6 +239,7 @@ export default function AdminPage() {
       {tab === "rates" && <RatesTab />}
       {tab === "code-rules" && <CodeRulesTab />}
       {tab === "rails-parties" && <RailsPartiesTab />}
+      {tab === "practices" && <PracticesTab />}
       {tab === "audit" && <AuditTab rows={audit} />}
 
       {toast && (

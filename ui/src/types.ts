@@ -866,3 +866,33 @@ export interface RailsParty {
   created_by: string;
   created_at: string | null;
 }
+
+// ── the practice register ─────────────────────────────────────────────────────
+export interface Practice {
+  provider_id: string;
+  practice_name: string;
+  discipline: string;
+  practice_type: string;
+  setting: string;
+  professional_nr: string;
+  status: "ACTIVE" | "SUSPENDED" | "DEREGISTERED";
+  status_reason: string;
+  source: string;
+  verified: boolean;
+  notes: string;
+  updated_by: string;
+  updated_at: string | null;
+}
+
+export interface PracticeList {
+  total: number;
+  page: number;
+  page_size: number;
+  items: Practice[];
+}
+
+export interface PracticeSummary {
+  total: number;
+  by_status: Record<string, number>;
+  enforced: boolean;
+}

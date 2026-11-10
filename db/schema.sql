@@ -62,6 +62,23 @@ CREATE TABLE rails_seen_jti (
 	PRIMARY KEY (jti)
 );
 
+CREATE TABLE provider_registry (
+	provider_id VARCHAR NOT NULL, 
+	practice_name VARCHAR NOT NULL, 
+	discipline VARCHAR NOT NULL, 
+	practice_type VARCHAR NOT NULL, 
+	setting VARCHAR NOT NULL, 
+	professional_nr VARCHAR NOT NULL, 
+	status VARCHAR NOT NULL, 
+	status_reason VARCHAR NOT NULL, 
+	source VARCHAR NOT NULL, 
+	verified BOOLEAN NOT NULL, 
+	notes VARCHAR NOT NULL, 
+	updated_by VARCHAR NOT NULL, 
+	updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now() NOT NULL, 
+	PRIMARY KEY (provider_id)
+);
+
 CREATE TABLE rails_party (
 	party_id VARCHAR NOT NULL, 
 	name VARCHAR NOT NULL, 

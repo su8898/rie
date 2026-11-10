@@ -6,7 +6,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Body, Depends, Query
 from sqlalchemy.orm import Session
 
-from .. import admin_service as svc, rails_party_service as parties
+from .. import admin_service as svc, provider_registry_service as practices, rails_party_service as parties
 from ..db import get_db
 from .deps import require_role
 
@@ -97,6 +97,26 @@ def delete_negotiated(kind: str, code: str, db: Session = Depends(get_db),
                       user: dict = Depends(_admin)) -> dict:
     svc.delete_negotiated(db, user, kind, code)
     return {"ok": True}
+
+
+# ── the practice register: who a billing practice is, and whether it may bill ──
+@router.post("/practices")
+def upsert_practice(body: dict = Body(...), db: Session = Depends(get_db),
+                    user: dict = Depends(_admin)) -> dict:
+    fields = {k: body[k] for k in practices.EDITABLE if k in body}     # nothing else is settable
+    return practices.upsert(db, user, body.get("provider_id"), **fields)
+
+
+@router.post("/practices/import")
+def import_practices(body: dict = Body(...), db: Session = Depends(get_db),
+                     user: dict = Depends(_admin)) -> dict:
+    return practices.import_csv(db, user, body.get("csv", ""))
+
+
+@router.post("/practices/{provider_id}/status")
+def set_practice_status(provider_id: str, body: dict = Body(...), db: Session = Depends(get_db),
+                        user: dict = Depends(_admin)) -> dict:
+    return practices.set_status(db, user, provider_id, body.get("status", ""), body.get("reason", ""))
 
 
 # ── rails parties: who may sign onto the provider channel, and for which providers ──
