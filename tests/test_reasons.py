@@ -5,7 +5,7 @@ maps to SCORED. Plus concrete category/points/hard/maturity for representative c
 """
 from __future__ import annotations
 
-from engine.reasons import MODE, R
+from engine.reasons import LAUNCH_ADVISORY, MODE, R
 from engine.vocab import Category, Maturity, SignalMode
 
 
@@ -14,10 +14,17 @@ def test_every_reason_has_a_mode():
     assert set(MODE) == set(R)
 
 
-def test_unvalidated_maps_to_shadow_others_to_scored():
+def test_unvalidated_maps_to_shadow_launch_advisory_to_advisory_others_to_scored():
     for code, meta in R.items():
-        expected = SignalMode.SHADOW if meta.maturity is Maturity.UNVALIDATED else SignalMode.SCORED
+        expected = (SignalMode.SHADOW if meta.maturity is Maturity.UNVALIDATED
+                    else SignalMode.ADVISORY if code in LAUNCH_ADVISORY else SignalMode.SCORED)
         assert MODE[code] is expected, (code, MODE[code])
+
+
+def test_launch_advisory_is_exactly_the_uncalibrated_billing_signals():
+    # thresholds calibrated on another fund's claims: visible, no points, until measured here
+    assert LAUNCH_ADVISORY == {"LINE_COUNT_OUTLIER", "MATERIAL_PADDING", "IMPOSSIBLE_DAY", "IMPOSSIBLE_WEEK"}
+    assert all(R[c].maturity is Maturity.HEURISTIC and not R[c].hard for c in LAUNCH_ADVISORY)
 
 
 def test_unvalidated_codes_are_exactly_the_graph_signals():

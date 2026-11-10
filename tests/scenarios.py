@@ -730,7 +730,7 @@ def b1_twelve_lines_over_two_days_is_two_ordinary_encounters(M):
 
 @scenario
 def b1_consumables_forming_most_of_an_encounter_is_material_padding(M):
-    # 12 NAPPI of 15 lines (80%) -> MATERIAL_PADDING + LINE_COUNT_OUTLIER = 30 points, AMBER
+    # 12 NAPPI of 15 lines (80%) -> MATERIAL_PADDING + LINE_COUNT_OUTLIER, both advisory at launch
     return _std(M, _claim(M, lines=_many(M, 12, kind="NAPPI", code="700101") + _many(M, 3)))
 
 
@@ -808,3 +808,28 @@ def b1_assigned_disciplines_can_never_be_shopping(M):
 @scenario
 def b1_a_claim_with_no_lines_raises_no_billing_signal(M):
     return _std(M, _claim(M, lines=[]), activity=M.Activity())
+
+
+# the billing signals launch ADVISORY; an ADMIN promotion makes them score (§11)
+def _promoted(M, *codes):
+    return {code: M.SignalMode.SCORED for code in codes}
+
+
+@scenario
+def b2_promoted_padding_and_line_count_band_amber(M):
+    # MATERIAL_PADDING 15 + LINE_COUNT_OUTLIER 15 (endogenous) = 30 points
+    return _std(M, _claim(M, lines=_many(M, 12, kind="NAPPI", code="700101") + _many(M, 3)),
+                mode_overrides=_promoted(M, "MATERIAL_PADDING", "LINE_COUNT_OUTLIER"))
+
+
+@scenario
+def b2_promoted_impossible_day_alone_routes_to_fraud_review(M):
+    act = M.Activity(provider_day={("PR1", date(2026, 3, 1)): 29})
+    return _std(M, _claim(M), activity=act, mode_overrides=_promoted(M, "IMPOSSIBLE_DAY"))
+
+
+@scenario
+def b2_promoted_impossible_week_scores_but_stays_green_alone(M):
+    act = M.Activity(claimant_encounters={("PR2", date(2026, 3, d)) for d in (2, 3, 4, 5, 6)})
+    return _std(M, _claim(M, lines=_week_of_visits(M, (6, 7, 8))), activity=act,
+                mode_overrides=_promoted(M, "IMPOSSIBLE_WEEK"))

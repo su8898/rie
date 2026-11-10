@@ -25,7 +25,7 @@ from .models import (
 )
 from .payments import eligible_to_pay
 from .pipeline import process_claim
-from .reasons import MODE, R
+from .reasons import LAUNCH_ADVISORY, MODE, R
 from .reference import RefBook, dispensing_fee, rate_on, resolve
 from .scoring import effective_mode, score_and_band
 from .signals import billing_signals, iso_week, padded
@@ -47,7 +47,7 @@ __all__ = [
     "TIME_RULES", "ANAES_TIME_RULES", "CODE_RULES",
     "billing_signals", "iso_week", "padded",
     "Claim", "Line", "Accident", "Activity", "Authorisation", "Undertaking", "Ruleset",
-    "LineResult", "Assessment", "R", "MODE",
+    "LineResult", "Assessment", "R", "MODE", "LAUNCH_ADVISORY",
     "LegalStatus", "Maturity", "SignalMode", "Category", "Band", "ReasonMeta",
     "PAYMENT_RULE_STATUSES", "AMBER_AT", "RED_AT", "ENDOGENOUS_POINT_CAP", "D", "money",
 ]

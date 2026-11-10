@@ -135,9 +135,14 @@ R = {  # the reason-code catalogue (§10) — abridged bases
     "CONVERGENCE_THIN":       ReasonMeta(Category.FRAUD, False, 20, Maturity.UNVALIDATED, basis="evidence density/timing (§6.0)"),
 }
 
-# Live signal modes — reference data, not code (§11). Defaults at launch:
+# Live signal modes — reference data, not code (§11). Defaults at launch: an unvalidated signal
+# is SHADOW; a billing signal whose thresholds were calibrated on another fund's claims is
+# ADVISORY (visible, no points, never holds a payment) until its precision is measured here and
+# an ADMIN promotes it; everything else is SCORED.
+LAUNCH_ADVISORY = {"LINE_COUNT_OUTLIER", "MATERIAL_PADDING", "IMPOSSIBLE_DAY", "IMPOSSIBLE_WEEK"}
 MODE: dict[str, SignalMode] = {
-    code: (SignalMode.SHADOW if meta.maturity is Maturity.UNVALIDATED else SignalMode.SCORED)
+    code: (SignalMode.SHADOW if meta.maturity is Maturity.UNVALIDATED
+           else SignalMode.ADVISORY if code in LAUNCH_ADVISORY else SignalMode.SCORED)
     for code, meta in R.items()
 }
 

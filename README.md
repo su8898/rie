@@ -106,7 +106,9 @@ through `RefBook.code_rules` ([`engine/coding.py`](engine/coding.py)):
 | `PCT_OF_TIME` | `param` share of the anaesthetic-time lines billed by the same provider on the same day (0018, 0019). With no such line the modifier is `REFERENCE_UNRESOLVED` and goes to review. |
 
 `python3 db/load_reference.py` seeds the once-only codes from the tariff descriptions and the standard
-time modifiers the tariff carries. Maintain them under **Admin → Coding rules** or over
+time modifiers the tariff carries. It also loads CIE's list of codes that must not be priced at a flat
+rate (percentage modifiers, cost-of-material codes) into `ref_non_bench`, so those lines go to review.
+Code 3575 is excluded from the once-only seed because its wording was misread from a neighbouring code. Maintain them under **Admin → Coding rules** or over
 `/api/admin/code-rules` (ADMIN); a rule set by hand survives a reload. **Before go-live, confirm with
 RAF that time-modifier quantities are billed in minutes, and review the seeded once-only list: the
 descriptions are OCR text.**
@@ -115,13 +117,17 @@ descriptions are OCR text.**
 reprice a line. An encounter is one provider treating the claimant on one day. Thresholds are
 `Ruleset` fields.
 
-| Signal | Fires when | Default |
+| Signal | Fires when | Launch mode |
 | --- | --- | --- |
-| `LINE_COUNT_OUTLIER` | 12 or more lines on one encounter | scored, endogenous |
-| `MATERIAL_PADDING` | 12 or more NAPPI lines forming 60% or more of one encounter | scored |
-| `IMPOSSIBLE_DAY` | one provider bills 30 or more claimants on one day | scored |
-| `IMPOSSIBLE_WEEK` | 8 or more encounters are billed for one claimant in one ISO week | scored |
+| `LINE_COUNT_OUTLIER` | 12 or more lines on one encounter | advisory |
+| `MATERIAL_PADDING` | 12 or more NAPPI lines forming 60% or more of one encounter | advisory |
+| `IMPOSSIBLE_DAY` | one provider bills 30 or more claimants on one day | advisory |
+| `IMPOSSIBLE_WEEK` | 8 or more encounters are billed for one claimant in one ISO week | advisory |
 | `PROVIDER_SHOPPING` | 3 or more providers of one discipline bill one claimant | shadow |
+
+The thresholds were calibrated on COIDA claims, so the four advisory signals (`LAUNCH_ADVISORY`)
+are shown to reviewers but carry no points and never hold a payment. Promote one to scored under
+**Admin → Signal modes** once Governance shows its precision on RAF claims.
 
 The day and week screens skip a claim submitted with `"facility": true` (a hospital account). The
 server supplies the cross-claim counts (`pipeline_service.billing_activity`). **Coding → Price drift**

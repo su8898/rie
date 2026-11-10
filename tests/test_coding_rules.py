@@ -171,13 +171,26 @@ def test_provider_billing_thirty_claimants_in_one_day_is_flagged():
         assert "IMPOSSIBLE_DAY" not in det["reasons"]
     hit = _submit("R_CR_DAY_29", "P_CR_DAY_29", "CAS 9329/02/2026",
                   [_line("9206", 500.0, provider="PR_CR_DAY")])
-    assert hit["reasons"] == ["IMPOSSIBLE_DAY"] and hit["band"] == "AMBER"
-    assert hit["disposition"] == "FRAUD" and hit["eligible_to_pay"] is False
+    # advisory at launch: shown to the reviewer, no points, never holds the payment
+    assert hit["reasons"] == hit["advisory_signals"] == ["IMPOSSIBLE_DAY"]
+    assert hit["band"] == "GREEN" and hit["disposition"] == "CLEAN" and hit["eligible_to_pay"] is True
 
     # the same volume on a hospital account is ordinary
     hosp = _submit("R_CR_DAY_30", "P_CR_DAY_30", "CAS 9330/02/2026",
                    [_line("9206", 500.0, provider="PR_CR_DAY")], facility=True)
     assert hosp["reasons"] == [] and hosp["disposition"] == "CLEAN"
+
+    # once an ADMIN promotes the signal it scores, and alone routes the claim to fraud review
+    assert client.post("/api/admin/signal-modes", json={
+        "code": "IMPOSSIBLE_DAY", "mode": "SCORED", "note": "precision measured"}).status_code == 200
+    try:
+        scored = _submit("R_CR_DAY_31", "P_CR_DAY_31", "CAS 9331/02/2026",
+                         [_line("9206", 500.0, provider="PR_CR_DAY")])
+        assert scored["reasons"] == ["IMPOSSIBLE_DAY"] and scored["advisory_signals"] == []
+        assert scored["band"] == "AMBER" and scored["disposition"] == "FRAUD"
+        assert scored["eligible_to_pay"] is False
+    finally:
+        assert client.delete("/api/admin/signal-modes/IMPOSSIBLE_DAY").status_code == 200
 
 
 def test_eight_encounters_for_one_claimant_in_a_week_is_flagged():
@@ -190,8 +203,8 @@ def test_eight_encounters_for_one_claimant_in_a_week_is_flagged():
         assert "IMPOSSIBLE_WEEK" not in det["reasons"]
     eighth = _submit("R_CR_WK_7", "P_CR_WK", "CAS 9340/02/2026",
                      [_line("9206", 500.0, svc="2026-03-08", provider="PR_CR_WK2")])
-    assert eighth["reasons"] == ["IMPOSSIBLE_WEEK"]
-    assert eighth["band"] == "GREEN" and eighth["disposition"] == "CLEAN"    # visible, never alone dispositive
+    assert eighth["reasons"] == eighth["advisory_signals"] == ["IMPOSSIBLE_WEEK"]
+    assert eighth["band"] == "GREEN" and eighth["disposition"] == "CLEAN"    # advisory at launch
 
 
 def test_three_same_discipline_providers_is_recorded_in_shadow():
@@ -249,6 +262,7 @@ def test_loader_reads_once_only_codes_from_the_tariff_and_keeps_manual_rules(tmp
         ("0011", "11", "Emergency theatre time, per half-hour", 419.28, "GP"),
         ("0018", "18", "Modifier", 489.81, "GP"),
         ("9283", None, "no code", 1.0, "GP"),
+        ("3575", "3575", "Cut-downs for venography ... to be charged once only", 60.0, "GP"),  # OCR bleed
     ])
     con.commit()
     con.row_factory = sqlite3.Row
@@ -259,7 +273,8 @@ def test_loader_reads_once_only_codes_from_the_tariff_and_keeps_manual_rules(tmp
             n = load_reference._load_code_rules(db, con)
             db.commit()
             got = {r.code: (r.rule, r.param, r.origin) for r in db.scalars(
-                select(models.RefCodeRule).where(models.RefCodeRule.code.in_(["9280", "9281", "9282", "11", "18"])))}
+                select(models.RefCodeRule).where(
+                    models.RefCodeRule.code.in_(["9280", "9281", "9282", "11", "18", "3575"])))}
             basis = db.get(models.RefCodeRule, "9280").basis
         assert n == 3
         assert got == {"9280": ("ONCE_PER_ENCOUNTER", 0.0, "tariff"),
@@ -289,6 +304,23 @@ def test_loader_with_no_rules_in_the_tariff_loads_none(tmp_path):
             db.commit()
     finally:
         con.close()
+
+
+def test_loader_adds_the_flat_rate_exclusions_once_and_keeps_what_is_there():
+    with SessionLocal() as db:
+        before = set(db.scalars(select(models.RefNonBench.code)))
+        try:
+            added = load_reference._load_non_benchmarkable(db)
+            db.commit()
+            after = set(db.scalars(select(models.RefNonBench.code)))
+            assert added == len(after - before) > 0 and before <= after
+            assert {"9", "8007", "201", "90"} <= after              # stored normalised
+            assert load_reference._load_non_benchmarkable(db) == 0  # a reload adds nothing
+            book = build_refbook(db, nappi_codes=set())
+            assert engine.resolve(book, "TARIFF", "0009") == (None, "—", None)   # held for review
+        finally:
+            db.execute(delete(models.RefNonBench).where(models.RefNonBench.code.in_(after - before)))
+            db.commit()
 
 
 # ── price drift ──────────────────────────────────────────────────────────────
