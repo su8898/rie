@@ -190,3 +190,84 @@ def test_resolve_precedence_negotiated_over_rpl():
     # a code present in BOTH negotiated and rpl resolves via negotiated (checked first)
     book = _book(negotiated={("TARIFF", "190"): 999.0}, rpl={"190": (500.0, 700.0)})
     assert resolve(book, "TARIFF", "0190") == (999.0, "negotiated", LegalStatus.ENFORCEABLE)
+
+
+# ── dated versions: the rate in force on the service date ────────────────────
+from datetime import date  # noqa: E402
+
+from engine.reference import rate_on  # noqa: E402
+
+V2025 = (date(2025, 1, 1), date(2025, 12, 31), 400.0)
+V2026 = (date(2026, 1, 1), None, 500.0)
+
+
+def test_rate_on_plain_rate_is_always_in_force():
+    assert rate_on(123.45, date(1999, 1, 1)) == 123.45
+    assert rate_on(123.45) == 123.45
+
+
+def test_rate_on_picks_the_version_covering_the_date_inclusive_at_both_ends():
+    vs = [V2025, V2026]
+    assert rate_on(vs, date(2025, 1, 1)) == 400.0       # first day of the old version
+    assert rate_on(vs, date(2025, 12, 31)) == 400.0     # its last day
+    assert rate_on(vs, date(2026, 1, 1)) == 500.0       # first day of the new one
+    assert rate_on(vs, date(2031, 6, 1)) == 500.0       # open-ended
+
+
+def test_rate_on_no_version_in_force_is_none():
+    assert rate_on([V2025, V2026], date(2024, 12, 31)) is None           # before the first
+    assert rate_on([V2025], date(2026, 1, 1)) is None                    # after a retired one
+    assert rate_on([], date(2026, 1, 1)) is None and rate_on([]) is None
+
+
+def test_rate_on_without_a_date_answers_with_the_latest_version():
+    assert rate_on([V2026, V2025]) == 500.0             # order of the list is irrelevant
+
+
+def test_rate_on_overlap_resolves_to_the_latest_starting_version():
+    overlap = [(date(2025, 1, 1), None, 400.0), (date(2025, 7, 1), None, 450.0)]
+    assert rate_on(overlap, date(2025, 8, 1)) == 450.0
+    assert rate_on(overlap, date(2025, 3, 1)) == 400.0
+
+
+def test_resolve_rpl_by_service_date_per_discipline():
+    book = _book(rpl={"190": {"GP": [V2025, V2026], "SPECIALIST": 700.0}})
+    assert resolve(book, "TARIFF", "0190", "GP", date(2025, 6, 1)) == (400.0, "RPL", LegalStatus.ACCEPTED)
+    assert resolve(book, "TARIFF", "0190", "GP", date(2026, 6, 1)) == (500.0, "RPL", LegalStatus.ACCEPTED)
+    assert resolve(book, "TARIFF", "0190", "GP")[0] == 500.0             # no date = current rate
+    # an undated sibling discipline is untouched by the GP versions
+    assert resolve(book, "TARIFF", "0190", "SPECIALIST", date(2025, 6, 1))[0] == 700.0
+
+
+def test_resolve_discipline_with_no_version_on_the_date_falls_back_to_the_rates_that_are():
+    book = _book(rpl={"190": {"GP": [V2026], "SPECIALIST": 700.0, "PHYSIO": [V2025]}})
+    # 2025: GP has no version yet -> PHYSIO 400 and SPECIALIST 700 remain -> cheapest in force
+    assert resolve(book, "TARIFF", "0190", "GP", date(2025, 6, 1))[0] == 400.0
+    # 2026: PHYSIO retired -> a PHYSIO bill falls back to the GP rate
+    assert resolve(book, "TARIFF", "0190", "PHYSIO", date(2026, 6, 1))[0] == 500.0
+
+
+def test_resolve_rpl_with_no_version_in_force_falls_to_the_next_tier():
+    book = _book(rpl={"200": {"GP": [V2026]}, "7777": {"GP": [V2026]}})
+    # 0200 has an interdicted gazette rate underneath; 7777 has nothing
+    assert resolve(book, "TARIFF", "0200", "GP", date(2025, 6, 1)) == (300.0, "RAF 2022", LegalStatus.INTERDICTED)
+    assert resolve(book, "TARIFF", "7777", "GP", date(2025, 6, 1)) == (None, "—", None)
+    assert resolve(book, "TARIFF", "7777", "GP", date(2026, 6, 1))[0] == 500.0
+
+
+def test_resolve_negotiated_only_while_the_contract_version_is_in_force():
+    contract = [(date(2026, 1, 1), date(2026, 2, 28), 450.0)]
+    book = _book(negotiated={("TARIFF", "190"): contract, ("NAPPI", "700101"): contract})
+    assert resolve(book, "TARIFF", "0190", "GP", date(2026, 2, 28)) == (450.0, "negotiated", LegalStatus.ENFORCEABLE)
+    assert resolve(book, "TARIFF", "0190", "GP", date(2026, 3, 1)) == (500.0, "RPL", LegalStatus.ACCEPTED)
+    assert resolve(book, "NAPPI", "700101", on=date(2026, 2, 1))[1] == "negotiated"
+    assert resolve(book, "NAPPI", "700101", on=date(2026, 3, 1)) == (114.92, "NAPPI+fee", LegalStatus.ENFORCEABLE)
+
+
+def test_resolve_sep_by_service_date_then_dispensing_fee():
+    book = _book(sep={"700101": [(date(2020, 1, 1), date(2026, 2, 28), 80.0), (date(2026, 3, 1), None, 88.40)]},
+                 empirical={("NAPPI", "700101"): 95.0})
+    assert resolve(book, "NAPPI", "700101", on=date(2026, 2, 10)) == (104.0, "NAPPI+fee", LegalStatus.ENFORCEABLE)
+    assert resolve(book, "NAPPI", "700101", on=date(2026, 3, 1)) == (114.92, "NAPPI+fee", LegalStatus.ENFORCEABLE)
+    # no price in force on the date -> the endogenous median is a signal, not a payment rule
+    assert resolve(book, "NAPPI", "700101", on=date(2019, 6, 1)) == (95.0, "empirical", LegalStatus.ENDOGENOUS)

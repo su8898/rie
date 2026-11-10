@@ -525,3 +525,72 @@ def h12_apportionment_rounds_half_up(M):
 def h12_nappi_fee_and_qty_pricing_exact(M):
     # SEP 88.40 + 30% fee (26.52) = 114.92; qty 3 -> 344.76 expected, billed 344.77 -> repriced
     return _std(M, _claim(M, lines=[_line(M, kind="NAPPI", code="700101", qty=3.0, amount=344.77)]))
+
+
+# dated reference versions — the rate in force on the SERVICE date (port of CIE's rate store) ----
+def _dated_book(M):
+    b = _book(M)
+    b.rpl["190"] = {"GP": [(date(2020, 1, 1), date(2025, 12, 31), 400.0), (date(2026, 1, 1), None, 500.0)],
+                    "SPECIALIST": 700.0}
+    b.rpl["23"] = {"GP": [(date(2026, 3, 1), None, 100.0)]}                 # no rate before March 2026
+    b.rpl["55"] = {"GP": 380.0}
+    b.negotiated[("TARIFF", "55")] = [(date(2026, 1, 1), date(2026, 2, 28), 400.0)]   # contract ended
+    b.sep["700101"] = [(date(2020, 1, 1), date(2026, 2, 28), 80.0), (date(2026, 3, 1), None, 88.40)]
+    return b
+
+
+def _dated(M, c, **kw):
+    return dict(c=c, accidents=[], book=_dated_book(M), rs=_rs(M), today=TODAY, **kw)
+
+
+def _late(M, lines):
+    return _claim(M, accident_date=date(2025, 6, 1), lodged_on=date(2026, 3, 1), lines=lines)
+
+
+@scenario
+def d1_late_claim_prices_at_the_rate_in_force_on_its_service_date(M):
+    return _dated(M, _late(M, [_line(M, code="0190", amount=500.0, svc=date(2025, 7, 1))]))
+
+
+@scenario
+def d1_same_bill_after_the_increase_is_clean(M):
+    return _dated(M, _late(M, [_line(M, code="0190", amount=500.0, svc=date(2026, 3, 1))]))
+
+
+@scenario
+def d1_lines_straddling_an_increase_price_separately(M):
+    return _dated(M, _late(M, [_line(M, code="0190", amount=500.0, svc=date(2025, 12, 31)),
+                               _line(M, code="0190", amount=500.0, svc=date(2026, 1, 1))]))
+
+
+@scenario
+def d1_under_the_old_rate_is_paid_as_billed_never_raised(M):
+    return _dated(M, _late(M, [_line(M, code="0190", amount=350.0, svc=date(2025, 7, 1))]))
+
+
+@scenario
+def d1_no_version_in_force_on_the_service_date_is_unresolved(M):
+    return _dated(M, _claim(M, lines=[_line(M, code="0023", amount=100.0, svc=date(2026, 2, 15))]))
+
+
+@scenario
+def d1_negotiated_rate_applies_while_the_contract_runs(M):
+    return _dated(M, _claim(M, lines=[_line(M, code="0055", amount=450.0, svc=date(2026, 2, 15))]))
+
+
+@scenario
+def d1_expired_negotiated_rate_falls_back_to_the_tariff(M):
+    return _dated(M, _claim(M, lines=[_line(M, code="0055", amount=450.0, svc=date(2026, 3, 10))]))
+
+
+@scenario
+def d1_nappi_priced_at_the_exit_price_of_its_day(M):
+    return _dated(M, _claim(M, lines=[
+        _line(M, kind="NAPPI", code="700101", amount=114.92, svc=date(2026, 2, 10)),
+        _line(M, kind="NAPPI", code="700101", amount=114.92, svc=date(2026, 3, 2))]))
+
+
+@scenario
+def d1_undated_sibling_discipline_is_unaffected(M):
+    return _dated(M, _late(M, [_line(M, code="0190", amount=700.0, svc=date(2025, 7, 1),
+                                     discipline="SPECIALIST")]))

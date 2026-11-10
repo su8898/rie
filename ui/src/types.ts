@@ -586,6 +586,79 @@ export interface NegotiatedRate {
   rate: number;
 }
 
+// Dated reference rates (/api/rates) — a rate is an append-only version; the
+// engine prices each line at the version in force on its service date.
+export type RateSource = "RPL" | "NEGOTIATED" | "SEP";
+
+export interface RateRow {
+  source: RateSource;
+  kind: "TARIFF" | "NAPPI";
+  code: string;
+  discipline: string;
+  rate: number | null; // null = no version in force on the date
+  version_id: number | null; // null = undated (the loader's snapshot)
+  effective_from: string | null;
+  effective_to: string | null;
+  versions: number;
+  dated: boolean;
+}
+
+export interface RateList {
+  source: RateSource;
+  on: string;
+  total: number;
+  items: RateRow[];
+}
+
+export interface RateVersion {
+  id: number | null;
+  source: RateSource;
+  kind: "TARIFF" | "NAPPI";
+  code: string;
+  discipline: string;
+  rate: number;
+  effective_from: string | null;
+  effective_to: string | null;
+  origin: string;
+  note: string;
+  created_by: string;
+  action?: string;
+}
+
+export interface RateLogRow {
+  id: number;
+  rate_id: number | null;
+  source: RateSource;
+  kind: string;
+  code: string;
+  discipline: string;
+  action: "CREATE" | "SUPERSEDE" | "RETIRE" | "ADJUST";
+  old_rate: number | null;
+  new_rate: number | null;
+  old_effective_from: string | null;
+  new_effective_from: string | null;
+  changed_by: string;
+  note: string;
+  changed_at: string | null;
+}
+
+export interface RateSummary {
+  versions: number;
+  dated_keys: number;
+  by_source: Record<string, number>;
+  changes: number;
+  last_change: string | null;
+}
+
+export interface RateImportResult {
+  added: number;
+  superseded: number;
+  skipped: number;
+  failed: number;
+  total: number;
+  errors: string[];
+}
+
 export interface SignalMode {
   signal: string;
   maturity: string;

@@ -14,6 +14,7 @@ from typing import Optional
 from sqlalchemy import delete, desc, select
 from sqlalchemy.orm import Session
 
+from engine.models import normalise_code
 from engine.reasons import MODE, R
 from engine.vocab import Maturity
 
@@ -139,7 +140,17 @@ def list_negotiated(db: Session) -> list[dict]:
                                 .order_by(models.RefNegotiated.kind, models.RefNegotiated.code))]
 
 
+def _refuse_if_dated(db: Session, kind: str, code: str) -> None:
+    """A negotiated rate with dated versions is priced from them (rates_service); editing the
+    undated row would change nothing and mislead, so it is refused here."""
+    if db.scalar(select(models.RefRateVersion.id).where(
+            models.RefRateVersion.source == "NEGOTIATED", models.RefRateVersion.kind == kind,
+            models.RefRateVersion.code == normalise_code(kind, code)).limit(1)) is not None:
+        raise AdminError(f"{kind}:{code} has dated versions — maintain it under Rates")
+
+
 def upsert_negotiated(db: Session, user: dict, kind: str, code: str, rate: float) -> dict:
+    _refuse_if_dated(db, kind, code)
     existing = db.scalar(select(models.RefNegotiated).where(
         models.RefNegotiated.kind == kind, models.RefNegotiated.code == code))
     if existing:
@@ -152,6 +163,7 @@ def upsert_negotiated(db: Session, user: dict, kind: str, code: str, rate: float
 
 
 def delete_negotiated(db: Session, user: dict, kind: str, code: str) -> None:
+    _refuse_if_dated(db, kind, code)
     db.execute(delete(models.RefNegotiated).where(
         models.RefNegotiated.kind == kind, models.RefNegotiated.code == code))
     _audit(db, user, "negotiated.delete", f"{kind}:{code}")

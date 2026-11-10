@@ -75,6 +75,21 @@ NAPPI Traumeel → R43.54 SEP+fee. Browse it at `/api/reference/{tariffs,nappi,i
 To load reference data into any target DB directly (SQLite or Postgres):
 `RIE_DATABASE_URL=... python3 db/load_reference.py`.
 
+## Dated reference rates
+
+The payment-rule rates — the tariff by discipline (`RPL`), negotiated rates and the NAPPI single
+exit price (`SEP`) — are append-only **versions** ([`server/rates_service.py`](server/rates_service.py),
+ported from CIE's effective-dated rate store). A new rate from a later date supersedes the prior
+version (closed the day before); the engine prices every line at the version in force on its
+**service date** (`engine.rate_on`), so a late claim pays at the tariff of its day and an increase
+never reprices history. A key without versions keeps its undated row from the loader, in force on
+every date; its first dated change materialises that row as the `baseline` version.
+
+Maintain them under **Admin → Dated rates** or over `/api/rates` (ADMIN): add / supersede,
+percentage increase (one key or every key in a filter), correct, retire, CSV import and export.
+Maintenance is forward-only and every change writes `ref_rate_log` and the admin audit log.
+Existing databases need `alembic upgrade head` (migration `d4b7e2a91c35`).
+
 ## API
 
 | Method | Path | Notes |
@@ -87,6 +102,8 @@ To load reference data into any target DB directly (SQLite or Postgres):
 | GET | `/api/accidents` · `/{id}` | accident graph with live convergence |
 | GET | `/api/reasons` | reason catalogue (code, maturity, basis, mode) |
 | GET | `/api/dashboard` | band/disposition mix, exposure, eligibility |
+| GET | `/api/rates?source=&q=&on=` · `/versions` · `/log` · `/export` | rate in force on a date, version history, change trail, CSV |
+| POST | `/api/rates` · `/increase` · `/bulk-increase` · `/import` · `/{id}/adjust` · `/{id}/retire` | dated rate maintenance (ADMIN) |
 
 A determination record: `{claim_id, accident_id, accident_action, convergence, validated,
 band, score, reasons[], shadow_signals[], disposition, medical_payable, net_payable,
