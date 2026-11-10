@@ -17,7 +17,7 @@ from .rates_service import RateError
 from .api import (
     accidents, admin, audit, auth, cases, claims, coding, dashboard, disputes, governance, health,
     leakage, lifecycle, litigation, merits, notifications, offers, parties, payments, rails,
-    rates, reasons, reference, serious_injury, undertakings,
+    rates, reasons, reference, remittances, serious_injury, undertakings,
 )
 from .config import IS_DEV, SECRET_KEY, check_secrets
 from .seed import init_db
@@ -66,7 +66,8 @@ for r in (auth.router, claims.router, offers.router, reasons.router, dashboard.r
           accidents.router, leakage.router, lifecycle.router, merits.router,
           serious_injury.router, undertakings.router, litigation.router, payments.router,
           parties.router, audit.router, cases.router, disputes.router, governance.router,
-          admin.router, coding.router, notifications.router, reference.router, rates.router):
+          admin.router, coding.router, notifications.router, reference.router, rates.router,
+          remittances.router):
     app.include_router(r, prefix="/api")
 
 app.include_router(rails.router)          # provider->fund rails: /rails/v1/... (JWS-authenticated)

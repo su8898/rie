@@ -35,6 +35,7 @@ import {
   usePaged,
 } from "../components/ui";
 import { num, rand } from "../format";
+import RemittancesCard from "./PaymentsRemittances";
 import type {
   BatchDict,
   BatchStatus,
@@ -691,6 +692,11 @@ export default function PaymentsPage() {
           )}
         </div>
       </div>
+
+      {/* refetches whenever another batch reaches PAID */}
+      <RemittancesCard
+        refreshKey={(batches ?? []).filter((b) => b.status === "PAID").length}
+      />
 
       {toast && (
         <Toast
