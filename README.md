@@ -134,6 +134,37 @@ server supplies the cross-claim counts (`pipeline_service.billing_activity`). **
 (`GET /api/coding/drift`) ranks providers whose billed ÷ reference ratio rises month on month.
 Existing databases need `alembic upgrade head` (migration `e5c8f3b0a246`).
 
+## Remittance advice and provider lookups
+
+Ported from CIE's remittance advice and its interface-standard profiles. Nothing here changes the engine.
+
+**Remittance advice** ([`server/remittance_service.py`](server/remittance_service.py)). When a
+payment batch is paid, each provider paid in it gets one advice: every adjudicated line with billed,
+paid and reduced, and the reason for a reduction. Lines come from the stored adjudication and are
+reconciled to the cent to the amount actually paid, so an apportioned payment is spread pro rata and
+marked `PAYMENT_ADJUSTED`. Only payment-rule reasons are shown; a review or fraud signal is never
+disclosed. Only `SUPPLIER` and `UNDERTAKING_INVOICE` instructions remit. Formats: JSON, a
+`<Remittance>` XML document and a print page. Operators see them under **Payments → Remittance
+advice**; an ADMIN can issue for a batch paid earlier with `POST /api/remittances/issue/{batch_id}`.
+
+**Provider lookups** ([`server/provider_service.py`](server/provider_service.py)) on the rails channel:
+
+| Method | Path | Signed over | Purpose |
+| --- | --- | --- | --- |
+| GET | `/rails/v1/status/{claim_id}` | `{"claimId"}` | Outcome, billed, payable, payment status and remittance references. No band, score or signal. |
+| POST | `/rails/v1/registration/lookup` | the body | Whether a personal claim is registered for a claimant, and whether the supplied accident date and police case number match it. A raw identity number is tokenised and never stored or echoed. |
+| GET | `/rails/v1/remittances?provider_id=` | `{"providerId"}` | A provider's advices, optionally by service period. |
+| GET | `/rails/v1/remittances/{ref}` | `{"remittanceRef"}` | The full advice. `?format=xml` returns the XML document. |
+| POST | `/rails/v1/remittances/{ref}/ack` | `{"remittanceRef"}` | The provider confirms receipt and reconciliation. |
+| POST | `/rails/v1/objections` | the body, with a one-time `jti` | Lodge an objection (`TARIFF`, `QUANTUM` or `REPUDIATION`). It lands in the dispute register. A late one is recorded and flagged, not refused. |
+| GET | `/rails/v1/objections/{ref}` · `?provider_id=` | `{"objectionRef"}` · `{"providerId"}` | Poll one objection, or list a provider's. |
+
+A read accepts the provider's detached JWS over the subject shown, or an operator session. An
+expired signature is refused. **The channel still uses one shared secret, so a signature proves
+"a party holding the channel secret", not which provider. Per-provider keys arrive with the
+provider-intake port (asymmetric signing).** Existing databases need `alembic upgrade head`
+(migration `f6d9a4c1b357`).
+
 ## API
 
 | Method | Path | Notes |
@@ -150,6 +181,8 @@ Existing databases need `alembic upgrade head` (migration `e5c8f3b0a246`).
 | POST | `/api/rates` · `/increase` · `/bulk-increase` · `/import` · `/{id}/adjust` · `/{id}/retire` | dated rate maintenance (ADMIN) |
 | GET · POST · DELETE | `/api/admin/code-rules` · `/api/admin/code-rules/{code}` | coding rules per tariff code (ADMIN) |
 | GET | `/api/coding/drift?min_months=&min_lines=` | providers whose billing ratio is rising |
+| GET | `/api/remittances?provider_id=` · `/{ref}` · `/{ref}/xml` · `/{ref}/print` | remittance advice: list, detail, XML, print page |
+| POST | `/api/remittances/issue/{batch_id}` | issue advice for a paid batch that has none (ADMIN) |
 
 A determination record: `{claim_id, accident_id, accident_action, convergence, validated,
 band, score, reasons[], shadow_signals[], disposition, medical_payable, net_payable,

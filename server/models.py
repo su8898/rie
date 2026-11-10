@@ -381,6 +381,46 @@ class PaymentInstruction(Base):
     paid: Mapped[bool] = mapped_column(default=False)
 
 
+class Remittance(Base):
+    """Remittance advice (port of CIE's ERA): the Fund's payment record to ONE provider for ONE
+    paid batch — what was billed, what was paid and why any line was reduced. Issued when the
+    batch is paid; the provider's system fetches and acknowledges it over the rails channel."""
+    __tablename__ = "remittance"
+    __table_args__ = (UniqueConstraint("batch_id", "provider_id", name="uq_remittance_batch_provider"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ref: Mapped[str] = mapped_column(String, unique=True, index=True)        # ERA-…
+    invoice_ref: Mapped[str] = mapped_column(String)                         # INV-…
+    payment_ref: Mapped[str] = mapped_column(String)                         # BATCH-<id>
+    batch_id: Mapped[int] = mapped_column(ForeignKey("payment_batch.id"), index=True)
+    provider_id: Mapped[str] = mapped_column(String, index=True)
+    period_from: Mapped[Optional[date]] = mapped_column(Date, nullable=True)  # service dates covered
+    period_to: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    n_claims: Mapped[int] = mapped_column(Integer, default=0)
+    total_billed: Mapped[float] = mapped_column(Float, default=0.0)
+    total_paid: Mapped[float] = mapped_column(Float, default=0.0)
+    total_reduced: Mapped[float] = mapped_column(Float, default=0.0)
+    status: Mapped[str] = mapped_column(String, default="REMITTED", index=True)   # REMITTED | ACKNOWLEDGED
+    issued_by: Mapped[str] = mapped_column(String, default="")
+    acknowledged_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class RemittanceLine(Base):
+    """One adjudicated billing line on a remittance, reconciled to what was actually paid."""
+    __tablename__ = "remittance_line"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    remittance_id: Mapped[int] = mapped_column(ForeignKey("remittance.id"), index=True)
+    claim_id: Mapped[str] = mapped_column(String, index=True)
+    party_token: Mapped[str] = mapped_column(String, default="")             # pseudonymous claimant
+    kind: Mapped[str] = mapped_column(String)
+    code: Mapped[str] = mapped_column(String)
+    service_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    billed: Mapped[float] = mapped_column(Float, default=0.0)
+    paid: Mapped[float] = mapped_column(Float, default=0.0)
+    reduced: Mapped[float] = mapped_column(Float, default=0.0)
+    reasons: Mapped[list] = mapped_column(JSON, default=list)
+
+
 class RailsSubmission(Base):
     """A provider->fund rails submission: the signed verdict + receipt, idempotency-keyed."""
     __tablename__ = "rails_submission"

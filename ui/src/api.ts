@@ -49,6 +49,7 @@ import type {
   CodeRule,
   CodeRuleKind,
   DriftReport,
+  RemittanceSummary,
   Reason,
   RecallEstimate,
   RecallSample,
@@ -570,6 +571,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ effective_to, note }),
     }),
+  remittances: (providerId?: string) =>
+    request<RemittanceSummary[]>(
+      `/api/remittances${providerId ? `?provider_id=${encodeURIComponent(providerId)}` : ""}`,
+    ),
+  remittancePrintUrl: (ref: string) => `/api/remittances/${encodeURIComponent(ref)}/print`,
+  remittanceXmlUrl: (ref: string) => `/api/remittances/${encodeURIComponent(ref)}/xml`,
   adminCodeRules: () => request<CodeRule[]>("/api/admin/code-rules"),
   upsertCodeRule: (body: { code: string; rule: CodeRuleKind; param: number; basis: string }) =>
     request<CodeRule>("/api/admin/code-rules", { method: "POST", body: JSON.stringify(body) }),

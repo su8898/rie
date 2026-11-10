@@ -815,3 +815,21 @@ export interface DriftReport {
   n_providers: number;
   rising: DriftRow[];
 }
+
+// ── remittance advice (the Fund's payment record to a provider) ───────────────
+export interface RemittanceSummary {
+  ref: string;
+  invoice_ref: string;
+  payment_ref: string;
+  batch_id: number;
+  provider_id: string;
+  period_from: string | null;
+  period_to: string | null;
+  n_claims: number;
+  total_billed: number;
+  total_paid: number;
+  total_reduced: number;
+  status: string; // REMITTED | ACKNOWLEDGED
+  issued_at: string | null;
+  acknowledged_at: string | null;
+}

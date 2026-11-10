@@ -190,6 +190,44 @@ CREATE TABLE ref_rate_version (
 	CONSTRAINT uq_ref_rate_version_key_from UNIQUE (source, kind, code, discipline, effective_from)
 );
 
+CREATE TABLE remittance (
+	id SERIAL NOT NULL, 
+	ref VARCHAR NOT NULL, 
+	invoice_ref VARCHAR NOT NULL, 
+	payment_ref VARCHAR NOT NULL, 
+	batch_id INTEGER NOT NULL, 
+	provider_id VARCHAR NOT NULL, 
+	period_from DATE, 
+	period_to DATE, 
+	n_claims INTEGER NOT NULL, 
+	total_billed FLOAT NOT NULL, 
+	total_paid FLOAT NOT NULL, 
+	total_reduced FLOAT NOT NULL, 
+	status VARCHAR NOT NULL, 
+	issued_by VARCHAR NOT NULL, 
+	acknowledged_at TIMESTAMP WITHOUT TIME ZONE, 
+	created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now() NOT NULL, 
+	PRIMARY KEY (id), 
+	CONSTRAINT uq_remittance_batch_provider UNIQUE (batch_id, provider_id), 
+	FOREIGN KEY(batch_id) REFERENCES payment_batch (id)
+);
+
+CREATE TABLE remittance_line (
+	id SERIAL NOT NULL, 
+	remittance_id INTEGER NOT NULL, 
+	claim_id VARCHAR NOT NULL, 
+	party_token VARCHAR NOT NULL, 
+	kind VARCHAR NOT NULL, 
+	code VARCHAR NOT NULL, 
+	service_date DATE, 
+	billed FLOAT NOT NULL, 
+	paid FLOAT NOT NULL, 
+	reduced FLOAT NOT NULL, 
+	reasons JSON NOT NULL, 
+	PRIMARY KEY (id), 
+	FOREIGN KEY(remittance_id) REFERENCES remittance (id)
+);
+
 CREATE TABLE ref_code_rule (
 	code VARCHAR NOT NULL, 
 	rule VARCHAR NOT NULL, 
@@ -197,7 +235,7 @@ CREATE TABLE ref_code_rule (
 	basis VARCHAR NOT NULL, 
 	origin VARCHAR NOT NULL, 
 	created_by VARCHAR NOT NULL, 
-	created_at DATETIME DEFAULT (CURRENT_TIMESTAMP) NOT NULL, 
+	created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now() NOT NULL, 
 	PRIMARY KEY (code)
 );
 

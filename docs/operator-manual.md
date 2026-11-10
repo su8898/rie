@@ -259,6 +259,8 @@ When a claim is repudiated or a dispute is litigated, drive the matter on the cl
 
 ### 9.2 Approve and pay (the money keys)
 
+When a batch is paid, the system issues a **remittance advice** for each provider paid in it, listed at the foot of **Payments**. Each advice shows every line billed, what was paid and why any line was reduced, and has a **Print** page and an **XML** document. Providers fetch and acknowledge their own advice over the rails channel, and the status changes to *Acknowledged* when they do. An advice never shows a review or fraud signal. A provider's objection to a reduction arrives in **Disputes** with *raised by PROVIDER*.
+
 In **Payments**, you are the second and third pair of hands: **approve** a batch a Handler assembled (you must be a *different* admin than the assembler — segregation of duties), then **pay** it. You are the sole authority for `pay`, lifecycle `pay`, undertaking-invoice `pay`, and litigation `order-paid`.
 
 ### 9.3 Close the governance loop

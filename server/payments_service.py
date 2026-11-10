@@ -18,7 +18,7 @@ from typing import Optional
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
-from . import lifecycle_service, models, statemachine as sm
+from . import lifecycle_service, models, remittance_service, statemachine as sm
 
 BATCH = sm.Machine(
     name="payment_batch", state_attr="status", initial="OPEN",
@@ -208,6 +208,8 @@ def pay(db: Session, batch_id: int, user: dict) -> "models.PaymentBatch":
             sm.fire(db, lifecycle_service.LIFECYCLE, lc, inst.claim_id, "pay", user)
     db.add(models.PaymentEvent(batch_id=batch_id, event="PAID", actor=user["username"],
                                role=user["role"], amount=round(total, 2)))
+    db.flush()
+    remittance_service.issue_for_batch(db, b, user)             # one advice per provider paid
     db.commit()
     return b
 
