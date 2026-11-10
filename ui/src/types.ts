@@ -854,3 +854,15 @@ export interface ClaimDocumentation {
     { title: string; on_file: boolean; complete: boolean; reports: string[] }
   >;
 }
+
+// ── rails parties: who may sign onto the provider channel ─────────────────────
+export interface RailsParty {
+  party_id: string;
+  name: string;
+  kind: "PROVIDER" | "SWITCH";
+  providers: string[];
+  status: "ACTIVE" | "SUSPENDED";
+  key_thumbprint: string;
+  created_by: string;
+  created_at: string | null;
+}

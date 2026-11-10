@@ -159,11 +159,10 @@ advice**; an ADMIN can issue for a batch paid earlier with `POST /api/remittance
 | POST | `/rails/v1/objections` | the body, with a one-time `jti` | Lodge an objection (`TARIFF`, `QUANTUM` or `REPUDIATION`). It lands in the dispute register. A late one is recorded and flagged, not refused. |
 | GET | `/rails/v1/objections/{ref}` · `?provider_id=` | `{"objectionRef"}` · `{"providerId"}` | Poll one objection, or list a provider's. |
 
-A read accepts the provider's detached JWS over the subject shown, or an operator session. An
-expired signature is refused. **The channel still uses one shared secret, so a signature proves
-"a party holding the channel secret", not which provider. Per-provider keys arrive with the
-provider-intake port (asymmetric signing).** Existing databases need `alembic upgrade head`
-(migration `f6d9a4c1b357`).
+A read accepts the party's detached JWS over the subject shown, or an operator session. An
+expired signature is refused. Each party signs with its own key and is scoped to its providers
+(see **Provider channel: keys, intake and conformance** below). Existing databases need
+`alembic upgrade head` (migration `f6d9a4c1b357`).
 
 ## Medical reports
 
@@ -198,6 +197,38 @@ against the gazetted RAF 1 and RAF 4 before go-live; a layout change is an edit 
 rule that holds payment until a first medical report arrives was not ported: it is tied to COIDA
 modifiers and has no RAF equivalent. Existing databases need `alembic upgrade head`
 (migration `a7e2c5d8f419`).
+
+## Provider channel: keys, intake and conformance
+
+Ported from CIE's provider-intake standard. The full interface is specified in
+[`docs/provider-interface.md`](docs/provider-interface.md).
+
+- **A signing key per party.** A provider's system, or a switch, signs every request with its own
+  ES256 private key. The Fund holds only the public key, registered under **Admin → Channel keys**
+  (`/api/admin/rails-parties`), so a signature identifies its signer
+  ([`server/rails_auth.py`](server/rails_auth.py)). Suspending a party or rotating its key takes
+  effect at once.
+- **Provider scope on every route.** A party acts only for the provider ids registered against it.
+  A claim for another provider is `403`; another provider's record looks like one that does not exist.
+- **The Fund signs back.** Receipts are signed with the Fund's ES256 key, published at
+  `/rails/v1/.well-known/jwks.json`. Set `RIE_RAILS_SIGNING_KEY` (PEM) in production; unset, a key
+  is generated at start-up and changes on restart.
+- **Switch messages.** `POST /rails/v1/claims/switch` takes a BHF `<Claims>` XML message inside the
+  signed envelope and scores it like any claim ([`server/switch_intake.py`](server/switch_intake.py)).
+- **Batches.** `POST /rails/v1/batches` takes up to 100 claims, answers each on its own, and
+  deduplicates a claim the party already sent ([`server/rails_batch_service.py`](server/rails_batch_service.py)).
+- **Conformance kit.** [`conformance/`](conformance/README.md) holds a self-contained reference
+  client and a runner with seventeen protocol checks.
+
+```bash
+python3 conformance/refclient.py keygen my-key.pem
+python3 conformance/runner.py --base http://localhost:8077 --party MY-PARTY --key my-key.pem --provider PR0001
+```
+
+**The shared secret is off in production.** It identifies nobody, so outside dev and test it is
+refused unless `RIE_RAILS_ALLOW_SHARED_SECRET=1` is set. ES256 needs the `cryptography` package
+(now in `requirements.txt`). Existing databases need `alembic upgrade head` (migration `b8f3d6e9a520`).
+Not ported: EDIFACT intake, CIE's gateway with per-switch traffic logs, and its switch console.
 
 ## API
 

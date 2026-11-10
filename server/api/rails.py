@@ -1,117 +1,163 @@
 """Provider->fund rails endpoints (JWS-authenticated, not the operator session).
 
-A POST verifies a detached JWS over its body. A GET is for the provider (a JWS over the request's
-own subject, e.g. `{"submissionId": id}` or `{"providerId": id}`) or an operator with a valid
-session — nothing here is public. Beyond claim submission the channel carries the provider
-lookups ported from CIE's interface standard: claim status, registration lookup, remittance
-advice, objections and medical reports."""
+Every request is signed. A registered party signs with its own ES256 key and names it in the JWS
+header (`kid`); the Fund verifies with the public key it holds for that party and then checks
+that the party may act for the provider the request concerns. A POST is signed over its body. A
+GET is signed over the request's own subject, e.g. `{"submissionId": id}` or `{"providerId": id}`.
+An operator with a session may make the same reads. Nothing here is public except the Fund's own
+public key (the JWKS), which parties need in order to verify its receipts.
+
+Beyond claim submission the channel carries the profiles ported from CIE's interface standard:
+switch messages, batches, claim status, registration lookup, remittance advice, objections and
+medical reports."""
 from __future__ import annotations
 
-import time
 from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
 from sqlalchemy.orm import Session
 
-from .. import jws, medical_report_service, models, provider_service, rails_service, remittance_service
-from ..config import RAILS_SECRET
+from .. import (
+    medical_report_service, models, provider_service, rails_auth, rails_batch_service,
+    rails_service, remittance_service, switch_intake,
+)
 from ..db import get_db
 from .deps import current_user
 
 router = APIRouter(prefix="/rails/v1")
+Caller = rails_auth.Caller
 
 
-@router.post("/claims")
-def submit(request: Request, payload: dict = Body(...), db: Session = Depends(get_db)) -> dict:
+# ── who is calling ───────────────────────────────────────────────────────────
+def _signed(request: Request, db: Session, obj) -> Caller:
     try:
-        return rails_service.submit(
-            db, payload,
-            idempotency_key=request.headers.get("Idempotency-Key"),
-            signature=request.headers.get("X-JWS-Signature"),
-            secret=RAILS_SECRET)                       # the fund's clock, never the provider's
-    except rails_service.RailsError as e:
-        raise HTTPException(status_code=e.status, detail=e.detail)
+        return rails_auth.authenticate(db, request.headers.get("X-JWS-Signature"), obj)[0]
+    except rails_auth.AuthError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail) from None
 
 
-def _signed(request: Request, obj: dict) -> Optional[dict]:
-    """The JWS header if the request carries a valid, unexpired detached signature over `obj`."""
-    header = jws.verify_detached(request.headers.get("X-JWS-Signature") or "", obj, RAILS_SECRET)
-    if header is None or (header.get("exp") and float(header["exp"]) < time.time()):
-        return None
-    return header
-
-
-def _require(request: Request, db: Session, obj: dict, what: str) -> None:
-    """A read is for the provider (a JWS over `obj`, the request's own subject) or an operator
-    with a session — nothing on this channel is public."""
-    if _signed(request, obj) is not None:
-        return
+def _require(request: Request, db: Session, obj: dict, what: str) -> Optional[Caller]:
+    """A read is for a party (a JWS over `obj`, the request's own subject) or an operator with a
+    session. Returns the party, or None for an operator, who is not provider-scoped."""
+    if request.headers.get("X-JWS-Signature"):
+        return _signed(request, db, obj)
     try:
         current_user(request, db)
     except HTTPException:
         raise HTTPException(status_code=401,
                             detail=f"JWS signature over {what} or operator session required") from None
+    return None
 
 
-def _write(request: Request, db: Session, body: dict) -> None:
-    """A provider write: signed over its body, unexpired, and carrying a one-time jti."""
-    header = _signed(request, body)
-    if header is None:
-        raise HTTPException(status_code=401, detail="invalid, expired or missing JWS signature")
-    jti = header.get("jti")
-    if not jti:
-        raise HTTPException(status_code=400, detail="jti (one-time nonce) required in the JWS header")
+def _write(request: Request, db: Session, body) -> Caller:
+    """A party write: signed over its body, unexpired, carrying a one-time jti not seen before."""
+    try:
+        caller, jti = rails_service.authenticate_write(db, body, request.headers.get("X-JWS-Signature"))
+    except rails_service.RailsError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail) from None
     if db.get(models.RailsSeenJti, jti) is not None:
         raise HTTPException(status_code=409, detail="replay detected: jti already used")
     db.add(models.RailsSeenJti(jti=jti))
+    return caller
 
 
-def _provider(fn, *args):
+def _for_provider(caller: Optional[Caller], provider_id: str) -> None:
+    """The request names a provider outright: the party must be allowed to act for it."""
+    if caller is not None and not caller.may_act_for(provider_id):
+        raise HTTPException(status_code=403,
+                            detail=f"this signing key may not act for provider {provider_id}")
+
+
+def _owns(caller: Optional[Caller], provider_ids, missing: str) -> None:
+    """The request names a record by reference: one a party may not see looks like one that
+    does not exist."""
+    if caller is not None and not caller.may_act_for_any(provider_ids):
+        raise HTTPException(status_code=404, detail=missing)
+
+
+def _call(fn, *args, **kw):
     try:
-        return fn(*args)
+        return fn(*args, **kw)
     except (provider_service.ProviderError, remittance_service.RemittanceError,
-            medical_report_service.ReportError) as e:
+            medical_report_service.ReportError, rails_service.RailsError,
+            rails_batch_service.BatchError, switch_intake.SwitchError) as e:
         raise HTTPException(status_code=e.status, detail=e.detail) from None
+
+
+@router.get("/.well-known/jwks.json")
+def jwks() -> dict:
+    return rails_auth.jwks()
+
+
+# ── claims ───────────────────────────────────────────────────────────────────
+@router.post("/claims")
+def submit(request: Request, payload: dict = Body(...), db: Session = Depends(get_db)) -> dict:
+    return _call(rails_service.submit, db, payload,
+                 idempotency_key=request.headers.get("Idempotency-Key"),
+                 signature=request.headers.get("X-JWS-Signature"))   # the fund's clock, never the provider's
+
+
+@router.post("/claims/switch")
+def submit_switch_message(request: Request, payload: dict = Body(...),
+                          db: Session = Depends(get_db)) -> dict:
+    return _call(switch_intake.submit, db, payload,
+                 idempotency_key=request.headers.get("Idempotency-Key"),
+                 signature=request.headers.get("X-JWS-Signature"))
+
+
+@router.post("/batches")
+def submit_batch(request: Request, payload: dict = Body(...), db: Session = Depends(get_db)) -> dict:
+    return _call(rails_batch_service.submit, db, payload,
+                 idempotency_key=request.headers.get("Idempotency-Key"),
+                 signature=request.headers.get("X-JWS-Signature"))
+
+
+@router.get("/batches/{batch_id}")
+def get_batch(batch_id: str, request: Request, db: Session = Depends(get_db)) -> dict:
+    caller = _require(request, db, {"batchId": batch_id}, "{batchId}")
+    return _call(rails_batch_service.get, db, batch_id, caller)
 
 
 @router.get("/claims/{submission_id}")
 def get_submission(submission_id: str, request: Request, db: Session = Depends(get_db)) -> dict:
-    _require(request, db, {"submissionId": submission_id}, "{submissionId}")
+    caller = _require(request, db, {"submissionId": submission_id}, "{submissionId}")
     out = rails_service.get_submission(db, submission_id)
     if out is None:
         raise HTTPException(status_code=404, detail="submission not found")
+    _owns(caller, provider_service.claim_providers(db, out["claimId"]), "submission not found")
     return out
 
 
 # ── claim status ─────────────────────────────────────────────────────────────
 @router.get("/status/{claim_id}")
 def claim_status(claim_id: str, request: Request, db: Session = Depends(get_db)) -> dict:
-    _require(request, db, {"claimId": claim_id}, "{claimId}")
-    return _provider(provider_service.claim_status, db, claim_id)
+    caller = _require(request, db, {"claimId": claim_id}, "{claimId}")
+    _owns(caller, provider_service.claim_providers(db, claim_id), "claim not found")
+    return _call(provider_service.claim_status, db, claim_id)
 
 
 # ── registration lookup (the body carries an identity number, so it is a signed POST) ──
 @router.post("/registration/lookup")
 def registration_lookup(request: Request, payload: dict = Body(...),
                         db: Session = Depends(get_db)) -> dict:
-    if _signed(request, payload) is None:
-        raise HTTPException(status_code=401, detail="invalid, expired or missing JWS signature")
-    return _provider(provider_service.registration_lookup, db, payload)
+    _signed(request, db, payload)                     # any registered party may ask
+    return _call(provider_service.registration_lookup, db, payload)
 
 
 # ── remittance advice ────────────────────────────────────────────────────────
 @router.get("/remittances")
 def remittances(provider_id: str, request: Request, date_from: Optional[date] = None,
                 date_to: Optional[date] = None, db: Session = Depends(get_db)) -> list[dict]:
-    _require(request, db, {"providerId": provider_id}, "{providerId}")
+    _for_provider(_require(request, db, {"providerId": provider_id}, "{providerId}"), provider_id)
     return remittance_service.list_remittances(db, provider_id, date_from, date_to)
 
 
 @router.get("/remittances/{ref}")
 def remittance(ref: str, request: Request, format: str = "json", db: Session = Depends(get_db)):
-    _require(request, db, {"remittanceRef": ref}, "{remittanceRef}")
-    detail = _provider(remittance_service.detail, db, ref)
+    caller = _require(request, db, {"remittanceRef": ref}, "{remittanceRef}")
+    detail = _call(remittance_service.detail, db, ref)
+    _owns(caller, [detail["provider_id"]], "remittance not found")
     if format == "xml":
         return Response(content=remittance_service.to_xml(detail), media_type="application/xml")
     return detail
@@ -119,28 +165,30 @@ def remittance(ref: str, request: Request, format: str = "json", db: Session = D
 
 @router.post("/remittances/{ref}/ack")
 def acknowledge_remittance(ref: str, request: Request, db: Session = Depends(get_db)) -> dict:
-    if _signed(request, {"remittanceRef": ref}) is None:
-        raise HTTPException(status_code=401, detail="JWS signature over {remittanceRef} required")
-    return _provider(remittance_service.acknowledge, db, ref)
+    caller = _signed(request, db, {"remittanceRef": ref})
+    _owns(caller, [_call(remittance_service.detail, db, ref)["provider_id"]], "remittance not found")
+    return _call(remittance_service.acknowledge, db, ref)
 
 
 # ── objections ───────────────────────────────────────────────────────────────
 @router.post("/objections")
 def lodge_objection(request: Request, payload: dict = Body(...), db: Session = Depends(get_db)) -> dict:
-    _write(request, db, payload)
-    return _provider(provider_service.lodge_objection, db, payload)
+    _for_provider(_write(request, db, payload), str(payload.get("provider_id") or ""))
+    return _call(provider_service.lodge_objection, db, payload)
 
 
 @router.get("/objections")
 def objections(provider_id: str, request: Request, db: Session = Depends(get_db)) -> list[dict]:
-    _require(request, db, {"providerId": provider_id}, "{providerId}")
+    _for_provider(_require(request, db, {"providerId": provider_id}, "{providerId}"), provider_id)
     return provider_service.list_objections(db, provider_id)
 
 
 @router.get("/objections/{ref}")
 def objection(ref: str, request: Request, db: Session = Depends(get_db)) -> dict:
-    _require(request, db, {"objectionRef": ref}, "{objectionRef}")
-    return _provider(provider_service.get_objection, db, ref)
+    caller = _require(request, db, {"objectionRef": ref}, "{objectionRef}")
+    out = _call(provider_service.get_objection, db, ref)
+    _owns(caller, [out["providerId"]], "objection not found")
+    return out
 
 
 # ── medical reports (RAF 1 medical report, RAF 4) ────────────────────────────
@@ -152,20 +200,21 @@ def medical_report_forms(request: Request, db: Session = Depends(get_db)) -> lis
 
 @router.post("/medical-reports")
 def file_medical_report(request: Request, payload: dict = Body(...), db: Session = Depends(get_db)) -> dict:
-    _write(request, db, payload)
-    return _provider(medical_report_service.receive, db, payload, request.headers.get("Idempotency-Key"))
+    _for_provider(_write(request, db, payload), str(payload.get("provider_id") or ""))
+    return _call(medical_report_service.receive, db, payload, request.headers.get("Idempotency-Key"))
 
 
 @router.get("/medical-reports")
 def medical_reports(provider_id: str, request: Request, db: Session = Depends(get_db)) -> list[dict]:
-    _require(request, db, {"providerId": provider_id}, "{providerId}")
+    _for_provider(_require(request, db, {"providerId": provider_id}, "{providerId}"), provider_id)
     return medical_report_service.list_reports(db, provider_id=provider_id)
 
 
 @router.get("/medical-reports/{ref}")
 def medical_report(ref: str, request: Request, format: str = "json", db: Session = Depends(get_db)):
-    _require(request, db, {"reportRef": ref}, "{reportRef}")
-    detail = _provider(medical_report_service.get, db, ref)
+    caller = _require(request, db, {"reportRef": ref}, "{reportRef}")
+    detail = _call(medical_report_service.get, db, ref)
+    _owns(caller, [detail["provider_id"]], "medical report not found")
     if format == "xml":
         return Response(content=medical_report_service.to_xml(detail), media_type="application/xml")
     return detail
@@ -173,5 +222,7 @@ def medical_report(ref: str, request: Request, format: str = "json", db: Session
 
 @router.get("/claims/{claim_id}/documentation")
 def claim_documentation(claim_id: str, request: Request, db: Session = Depends(get_db)) -> dict:
-    _require(request, db, {"claimId": claim_id}, "{claimId}")
-    return _provider(medical_report_service.documentation, db, claim_id)
+    caller = _require(request, db, {"claimId": claim_id}, "{claimId}")
+    filed = {r["provider_id"] for r in medical_report_service.list_reports(db, claim_id=claim_id)}
+    _owns(caller, provider_service.claim_providers(db, claim_id) | filed, "claim not found")
+    return _call(medical_report_service.documentation, db, claim_id)

@@ -6,7 +6,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Body, Depends, Query
 from sqlalchemy.orm import Session
 
-from .. import admin_service as svc
+from .. import admin_service as svc, rails_party_service as parties
 from ..db import get_db
 from .deps import require_role
 
@@ -97,6 +97,37 @@ def delete_negotiated(kind: str, code: str, db: Session = Depends(get_db),
                       user: dict = Depends(_admin)) -> dict:
     svc.delete_negotiated(db, user, kind, code)
     return {"ok": True}
+
+
+# ── rails parties: who may sign onto the provider channel, and for which providers ──
+@router.get("/rails-parties")
+def rails_parties(db: Session = Depends(get_db), user: dict = Depends(_admin)) -> list[dict]:
+    return parties.list_parties(db)
+
+
+@router.post("/rails-parties")
+def register_rails_party(body: dict = Body(...), db: Session = Depends(get_db),
+                         user: dict = Depends(_admin)) -> dict:
+    return parties.register(db, user, body.get("party_id", ""), body.get("name", ""),
+                            body.get("kind", "PROVIDER"), body.get("providers"), body.get("public_jwk"))
+
+
+@router.post("/rails-parties/{party_id}/status")
+def set_rails_party_status(party_id: str, body: dict = Body(...), db: Session = Depends(get_db),
+                           user: dict = Depends(_admin)) -> dict:
+    return parties.set_status(db, user, party_id, body.get("status", ""))
+
+
+@router.post("/rails-parties/{party_id}/providers")
+def set_rails_party_providers(party_id: str, body: dict = Body(...), db: Session = Depends(get_db),
+                              user: dict = Depends(_admin)) -> dict:
+    return parties.set_providers(db, user, party_id, body.get("providers"))
+
+
+@router.post("/rails-parties/{party_id}/key")
+def rotate_rails_party_key(party_id: str, body: dict = Body(...), db: Session = Depends(get_db),
+                           user: dict = Depends(_admin)) -> dict:
+    return parties.rotate_key(db, user, party_id, body.get("public_jwk"))
 
 
 # ── coding rules (§3b) ──

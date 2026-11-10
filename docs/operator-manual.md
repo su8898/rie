@@ -246,7 +246,7 @@ When a claim is repudiated or a dispute is litigated, drive the matter on the cl
 
 ### 9.1 The Admin console
 
-**Admin** has eight tabs; every change is audit-logged and effective-dated — it's reference data, never a code deploy:
+**Admin** has nine tabs; every change is audit-logged and effective-dated — it's reference data, never a code deploy:
 
 - **Users** — create operators, set roles, activate/deactivate. (You cannot deactivate the account you're signed in as.)
 - **Signal modes** — apply the `SHADOW → ADVISORY → SCORED` promotion lifecycle per signal. The *Recommended* column is what measured precision suggests (Governance computes the Wilson-lower ≥ 60% floor; you **Set** it here). `GROUNDED`, law-cited signals are locked `SCORED` — you cannot switch off the law.
@@ -255,6 +255,7 @@ When a claim is repudiated or a dispute is litigated, drive the matter on the cl
 - **Negotiated** — negotiated ENFORCEABLE rates that override the gazetted tariff (the engine prices `min(billed, negotiated)` for these).
 - **Dated rates** — the tariff, negotiated and NAPPI exit-price rates as dated versions. Add a rate from an effective date and the prior one is closed the day before; the engine pays each line at the rate in force on its **service date**, so late claims price at the tariff of their day. Also: percentage increase (one rate or every rate in the filter), correct, retire, CSV import/export, and the change log. A negotiated rate that has dated versions is maintained here, not on the Negotiated tab.
 - **Coding rules** — the tariff's own billing rules per code. *Once per encounter*: a repeat for the same claimant, provider and day is not paid (`UNBUNDLING_CONFLICT`). *Time* rules: the billed quantity is minutes and the line is priced by its ladder off the block rate, not per minute. *Percentage of time*: a share of the anaesthetic-time lines billed with it; with none on the claim the line goes to review. The reference loader seeds the list from the tariff; a rule you set here is kept on reload. Check the seeded once-only codes against the gazette, because the descriptions were read by OCR.
+- **Channel keys** — who may connect to the provider channel. Each connecting party (a provider's own system, or a switch) signs its requests with a private key only it holds; you register the matching **public** key here, with the provider ids the party may act for. A switch may be given `*` for any provider. **Suspend** refuses a party's signatures at once. Never accept or paste a private key: the form refuses one, and a party that sent one must generate a new pair.
 - **Audit** — the append-only log of every admin mutation.
 
 ### 9.2 Approve and pay (the money keys)

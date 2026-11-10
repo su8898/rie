@@ -442,10 +442,41 @@ class MedicalReport(Base):
     received_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+class RailsParty(Base):
+    """A party allowed onto the rails channel (port of CIE's switch registry, with asymmetric
+    keys): a provider's own system, or a switch acting for many providers. The Fund holds only
+    the party's PUBLIC key; the party signs every request with the private half, so a signature
+    identifies its signer. `providers` lists the provider ids it may act for; "*" means any."""
+    __tablename__ = "rails_party"
+    party_id: Mapped[str] = mapped_column(String, primary_key=True)          # the JWS `kid`
+    name: Mapped[str] = mapped_column(String, default="")
+    kind: Mapped[str] = mapped_column(String, default="PROVIDER")            # PROVIDER | SWITCH
+    public_jwk: Mapped[dict] = mapped_column(JSON)
+    providers: Mapped[list] = mapped_column(JSON, default=list)
+    status: Mapped[str] = mapped_column(String, default="ACTIVE", index=True)   # ACTIVE | SUSPENDED
+    created_by: Mapped[str] = mapped_column(String, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class RailsBatch(Base):
+    """A batch of claims pushed in one signed request (port of CIE's batch profile): stored with
+    its per-claim results so a resend over a bad line returns the same answer."""
+    __tablename__ = "rails_batch"
+    batch_id: Mapped[str] = mapped_column(String, primary_key=True)
+    idempotency_key: Mapped[str] = mapped_column(String, unique=True, index=True)
+    body_hash: Mapped[str] = mapped_column(String)
+    party_id: Mapped[str] = mapped_column(String, index=True)
+    n_claims: Mapped[int] = mapped_column(Integer, default=0)
+    summary: Mapped[dict] = mapped_column(JSON, default=dict)
+    results: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 class RailsSubmission(Base):
     """A provider->fund rails submission: the signed verdict + receipt, idempotency-keyed."""
     __tablename__ = "rails_submission"
     submission_id: Mapped[str] = mapped_column(String, primary_key=True)
+    party_id: Mapped[Optional[str]] = mapped_column(String, nullable=True, index=True)   # who signed it
     idempotency_key: Mapped[str] = mapped_column(String, index=True)
     body_hash: Mapped[str] = mapped_column(String)
     claim_id: Mapped[str] = mapped_column(String, index=True)

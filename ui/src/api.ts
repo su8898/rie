@@ -51,6 +51,7 @@ import type {
   DriftReport,
   RemittanceSummary,
   MedicalReportSummary,
+  RailsParty,
   ClaimDocumentation,
   Reason,
   RecallEstimate,
@@ -589,6 +590,19 @@ export const api = {
     ),
   remittancePrintUrl: (ref: string) => `/api/remittances/${encodeURIComponent(ref)}/print`,
   remittanceXmlUrl: (ref: string) => `/api/remittances/${encodeURIComponent(ref)}/xml`,
+  railsParties: () => request<RailsParty[]>("/api/admin/rails-parties"),
+  registerRailsParty: (body: {
+    party_id: string;
+    name: string;
+    kind: string;
+    providers: string[];
+    public_jwk: string;
+  }) => request<RailsParty>("/api/admin/rails-parties", { method: "POST", body: JSON.stringify(body) }),
+  setRailsPartyStatus: (partyId: string, status: string) =>
+    request<RailsParty>(`/api/admin/rails-parties/${encodeURIComponent(partyId)}/status`, {
+      method: "POST",
+      body: JSON.stringify({ status }),
+    }),
   adminCodeRules: () => request<CodeRule[]>("/api/admin/code-rules"),
   upsertCodeRule: (body: { code: string; rule: CodeRuleKind; param: number; basis: string }) =>
     request<CodeRule>("/api/admin/code-rules", { method: "POST", body: JSON.stringify(body) }),

@@ -24,6 +24,13 @@ _DEFAULTS = {
 SECRET_KEY = os.environ.get("RIE_SECRET_KEY", _DEFAULTS["RIE_SECRET_KEY"])
 # Shared HS256 secret for the provider->fund submission rails (per-switch ES256 keys in prod).
 RAILS_SECRET = os.environ.get("RIE_RAILS_SECRET", _DEFAULTS["RIE_RAILS_SECRET"])
+# The shared secret identifies nobody: any holder can act for any provider. It stays on for
+# dev/test and the legacy client; production accepts registered ES256 party keys only, unless
+# RIE_RAILS_ALLOW_SHARED_SECRET=1 is set deliberately.
+RAILS_SHARED_SECRET_ENABLED = IS_DEV or os.environ.get("RIE_RAILS_ALLOW_SHARED_SECRET", "") == "1"
+# The Fund's own ES256 signing key (PEM, P-256) for receipts; its public half is published as a
+# JWKS. Unset, a key is generated at start-up — fine for dev, but it changes on every restart.
+RAILS_SIGNING_KEY_PEM = os.environ.get("RIE_RAILS_SIGNING_KEY", "")
 # POPIA pseudonymisation HMAC key — raw national IDs are HMAC'd to P_* tokens at ingest (§2/§4/§9).
 PSEUDONYM_SECRET = os.environ.get("RIE_PSEUDONYM_SECRET", _DEFAULTS["RIE_PSEUDONYM_SECRET"])
 
