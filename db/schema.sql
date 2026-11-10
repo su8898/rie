@@ -190,6 +190,23 @@ CREATE TABLE ref_rate_version (
 	CONSTRAINT uq_ref_rate_version_key_from UNIQUE (source, kind, code, discipline, effective_from)
 );
 
+CREATE TABLE medical_report (
+	id SERIAL NOT NULL, 
+	ref VARCHAR NOT NULL, 
+	form_code VARCHAR NOT NULL, 
+	form_title VARCHAR NOT NULL, 
+	provider_id VARCHAR NOT NULL, 
+	claim_ref VARCHAR NOT NULL, 
+	claim_id VARCHAR, 
+	complete BOOLEAN NOT NULL, 
+	missing JSON NOT NULL, 
+	sections JSON NOT NULL, 
+	idempotency_key VARCHAR NOT NULL, 
+	body_hash VARCHAR NOT NULL, 
+	received_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now() NOT NULL, 
+	PRIMARY KEY (id)
+);
+
 CREATE TABLE remittance (
 	id SERIAL NOT NULL, 
 	ref VARCHAR NOT NULL, 

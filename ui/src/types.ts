@@ -833,3 +833,24 @@ export interface RemittanceSummary {
   issued_at: string | null;
   acknowledged_at: string | null;
 }
+
+// ── medical reports (RAF 1 medical report, RAF 4) ─────────────────────────────
+export interface MedicalReportSummary {
+  ref: string;
+  form_code: string;
+  form_title: string;
+  provider_id: string;
+  claim_ref: string;
+  claim_id: string | null;
+  complete: boolean;
+  missing: string[];
+  received_at: string | null;
+}
+
+export interface ClaimDocumentation {
+  claim_id: string;
+  forms: Record<
+    string,
+    { title: string; on_file: boolean; complete: boolean; reports: string[] }
+  >;
+}
