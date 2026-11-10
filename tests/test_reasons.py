@@ -5,7 +5,7 @@ maps to SCORED. Plus concrete category/points/hard/maturity for representative c
 """
 from __future__ import annotations
 
-from engine.reasons import MODE, R
+from engine.reasons import LAUNCH_ADVISORY, MODE, R
 from engine.vocab import Category, Maturity, SignalMode
 
 
@@ -14,20 +14,29 @@ def test_every_reason_has_a_mode():
     assert set(MODE) == set(R)
 
 
-def test_unvalidated_maps_to_shadow_others_to_scored():
+def test_unvalidated_maps_to_shadow_launch_advisory_to_advisory_others_to_scored():
     for code, meta in R.items():
-        expected = SignalMode.SHADOW if meta.maturity is Maturity.UNVALIDATED else SignalMode.SCORED
+        expected = (SignalMode.SHADOW if meta.maturity is Maturity.UNVALIDATED
+                    else SignalMode.ADVISORY if code in LAUNCH_ADVISORY else SignalMode.SCORED)
         assert MODE[code] is expected, (code, MODE[code])
+
+
+def test_launch_advisory_is_exactly_the_uncalibrated_billing_signals():
+    # thresholds calibrated on another fund's claims: visible, no points, until measured here
+    assert LAUNCH_ADVISORY == {"LINE_COUNT_OUTLIER", "MATERIAL_PADDING", "IMPOSSIBLE_DAY", "IMPOSSIBLE_WEEK"}
+    assert all(R[c].maturity is Maturity.HEURISTIC and not R[c].hard for c in LAUNCH_ADVISORY)
 
 
 def test_unvalidated_codes_are_exactly_the_graph_signals():
     unvalidated = {c for c, m in R.items() if m.maturity is Maturity.UNVALIDATED}
-    assert unvalidated == {"RING_PARTIES", "CLAIMANT_SURGE", "CLAIMANT_RECURRENCE", "CONVERGENCE_THIN"}
+    assert unvalidated == {"RING_PARTIES", "PROVIDER_SHOPPING", "CLAIMANT_SURGE", "CLAIMANT_RECURRENCE",
+                      "CONVERGENCE_THIN"}
 
 
 def test_all_shadow_modes_are_unvalidated():
     shadow = {c for c, m in MODE.items() if m is SignalMode.SHADOW}
-    assert shadow == {"RING_PARTIES", "CLAIMANT_SURGE", "CLAIMANT_RECURRENCE", "CONVERGENCE_THIN"}
+    assert shadow == {"RING_PARTIES", "PROVIDER_SHOPPING", "CLAIMANT_SURGE", "CLAIMANT_RECURRENCE",
+                      "CONVERGENCE_THIN"}
 
 
 # ── representative hard grounded gates ───────────────────────────────────────
@@ -109,7 +118,7 @@ def test_no_hard_fraud_codes_in_catalogue():
 
 
 def test_catalogue_size():
-    assert len(R) == 39
+    assert len(R) == 42
 
 
 def test_reference_unresolved_is_a_hard_grounded_review_gate():

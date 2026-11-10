@@ -594,3 +594,242 @@ def d1_nappi_priced_at_the_exit_price_of_its_day(M):
 def d1_undated_sibling_discipline_is_unaffected(M):
     return _dated(M, _late(M, [_line(M, code="0190", amount=700.0, svc=date(2025, 7, 1),
                                      discipline="SPECIALIST")]))
+
+
+# coding rules — what the tariff itself says about a code (port of CIE's coding rules) --------
+def _coded_book(M):
+    return M.RefBook(
+        negotiated={}, raf2022={}, empirical={}, sep={"700101": 88.40}, non_benchmarkable=set(),
+        rpl={"190": {"GP": 500.0}, "207": {"GP": 280.0}, "11": {"GP": 400.0}, "23": {"GP": 300.0},
+             "39": {"GP": 450.0}},
+        # keys are given as billed ("0207") — the book normalises them like every other code
+        code_rules={"0207": (M.ONCE_PER_ENCOUNTER, 0.0), "0011": (M.TIME_BLOCK, 30.0),
+                    "0012": (M.TIME_BLOCK, 0.0), "0023": (M.TIME_ANAES, 0.0),
+                    "0039": (M.TIME_FIRST_HOUR, 0.0), "0040": (M.TIME_FIRST_HOUR, 0.0),
+                    "0018": (M.PCT_OF_TIME, 0.5)},
+    )
+
+
+def _coded(M, c, **kw):
+    return dict(c=c, accidents=[], book=_coded_book(M), rs=_rs(M), today=TODAY, **kw)
+
+
+@scenario
+def c2_once_only_code_billed_twice_on_one_encounter_pays_the_first(M):
+    return _coded(M, _claim(M, lines=[_line(M, code="0207", amount=280.0),
+                                      _line(M, code="0207", amount=260.0)]))
+
+
+@scenario
+def c2_once_only_code_on_two_days_is_two_encounters(M):
+    return _coded(M, _claim(M, lines=[_line(M, code="0207", amount=280.0),
+                                      _line(M, code="0207", amount=260.0, svc=date(2026, 3, 2))]))
+
+
+@scenario
+def c2_once_only_code_by_two_providers_is_two_encounters(M):
+    return _coded(M, _claim(M, lines=[_line(M, code="0207", amount=280.0),
+                                      _line(M, code="0207", amount=260.0, provider="PR2")]))
+
+
+@scenario
+def c2_once_only_code_already_paid_on_another_claim_is_refused(M):
+    paid = {("ONCE", "P_1", "PR1", date(2026, 3, 1), "207")}
+    return _coded(M, _claim(M, lines=[_line(M, code="207", amount=250.0)]), seen_lines=paid)
+
+
+@scenario
+def c2_exact_repeat_of_a_once_only_code_is_a_duplicate_line_first(M):
+    return _coded(M, _claim(M, lines=[_line(M, code="0207", amount=280.0),
+                                      _line(M, code="0207", amount=280.0)]))
+
+
+@scenario
+def c2_time_block_prices_minutes_by_the_half_hour_or_part(M):
+    # 45 minutes = 2 blocks x R400 = R800; billed R1,000 -> repriced
+    return _coded(M, _claim(M, lines=[_line(M, code="0011", qty=45.0, amount=1000.0)]))
+
+
+@scenario
+def c2_time_block_at_the_ladder_total_is_clean(M):
+    return _coded(M, _claim(M, lines=[_line(M, code="0011", qty=60.0, amount=800.0)]))
+
+
+@scenario
+def c2_anaesthetic_time_steps_up_after_the_first_hour(M):
+    # 75 minutes = 4 x R300 + 1 x R450 = R1,650; billed R2,000 -> repriced
+    return _coded(M, _claim(M, lines=[_line(M, code="0023", qty=75.0, amount=2000.0)]))
+
+
+@scenario
+def c2_anaesthetic_time_within_the_hour(M):
+    # 31 minutes = 3 blocks (or part thereof) x R300 = R900
+    return _coded(M, _claim(M, lines=[_line(M, code="0023", qty=31.0, amount=900.0)]))
+
+
+@scenario
+def c2_first_hour_rule_adds_a_third_per_quarter_hour(M):
+    # 90 minutes = R450 + 2 x R150 = R750; and 20 minutes is still the first-hour block (R450)
+    return _coded(M, _claim(M, lines=[_line(M, code="0039", qty=90.0, amount=760.0),
+                                      _line(M, code="0039", qty=20.0, amount=450.0,
+                                            svc=date(2026, 3, 2))]))
+
+
+@scenario
+def c2_percentage_of_time_is_a_share_of_the_time_line_billed_with_it(M):
+    # 0023 for 75 min -> R1,650; 0018 adds 50% = R825; billed R900 -> repriced
+    return _coded(M, _claim(M, lines=[_line(M, code="0023", qty=75.0, amount=1650.0),
+                                      _line(M, code="0018", amount=900.0)]))
+
+
+@scenario
+def c2_percentage_of_time_with_no_time_line_goes_to_review(M):
+    return _coded(M, _claim(M, lines=[_line(M, code="0190"), _line(M, code="0018", amount=300.0)]))
+
+
+@scenario
+def c2_percentage_of_time_ignores_another_day_and_an_unpriced_time_line(M):
+    # the 0023 line is another day; the 0040 line has a time rule but no rate -> nothing to share
+    return _coded(M, _claim(M, lines=[_line(M, code="0023", qty=30.0, amount=600.0, svc=date(2026, 3, 2)),
+                                      _line(M, code="0040", qty=30.0, amount=100.0),
+                                      _line(M, code="0018", amount=300.0)]))
+
+
+@scenario
+def c2_time_block_without_a_length_defaults_to_the_half_hour(M):
+    b = _coded_book(M)
+    b.rpl["12"] = {"GP": 400.0}
+    return dict(c=_claim(M, lines=[_line(M, code="0012", qty=31.0, amount=900.0)]),
+                accidents=[], book=b, rs=_rs(M), today=TODAY)
+
+
+# billing signals — encounter-shaped screens (port of CIE's scorer signals) --------------------
+def _many(M, n, kind="TARIFF", code="0190", start=0):
+    return [_line(M, kind=kind, code=code, amount=100.0 + start + i) for i in range(n)]
+
+
+def _week_of_visits(M, days):
+    return [_line(M, amount=400.0, svc=date(2026, 3, d)) for d in days]
+
+
+@scenario
+def b1_twelve_lines_on_one_encounter_is_a_line_count_outlier(M):
+    return _std(M, _claim(M, lines=_many(M, 12)))
+
+
+@scenario
+def b1_eleven_lines_on_one_encounter_is_not(M):
+    return _std(M, _claim(M, lines=_many(M, 11)))
+
+
+@scenario
+def b1_twelve_lines_over_two_days_is_two_ordinary_encounters(M):
+    lines = _many(M, 6) + [_line(M, amount=200.0 + i, svc=date(2026, 3, 2)) for i in range(6)]
+    return _std(M, _claim(M, lines=lines))
+
+
+@scenario
+def b1_consumables_forming_most_of_an_encounter_is_material_padding(M):
+    # 12 NAPPI of 15 lines (80%) -> MATERIAL_PADDING + LINE_COUNT_OUTLIER, both advisory at launch
+    return _std(M, _claim(M, lines=_many(M, 12, kind="NAPPI", code="700101") + _many(M, 3)))
+
+
+@scenario
+def b1_many_consumables_under_the_share_is_not_padding(M):
+    # 12 NAPPI of 21 lines (57%) -> below the 60% share
+    return _std(M, _claim(M, lines=_many(M, 12, kind="NAPPI", code="700101") + _many(M, 9)))
+
+
+@scenario
+def b1_provider_billing_thirty_claimants_in_a_day_is_an_impossible_day(M):
+    act = M.Activity(provider_day={("PR1", date(2026, 3, 1)): 29})
+    return _std(M, _claim(M), activity=act)
+
+
+@scenario
+def b1_twenty_nine_claimants_in_a_day_is_not(M):
+    act = M.Activity(provider_day={("PR1", date(2026, 3, 1)): 28, ("PR1", date(2026, 3, 2)): 99})
+    return _std(M, _claim(M), activity=act)
+
+
+@scenario
+def b1_hospital_account_is_exempt_from_the_day_and_week_screens(M):
+    act = M.Activity(provider_day={("PR1", date(2026, 3, 1)): 500},
+                     claimant_encounters={("PR9", date(2026, 3, d)) for d in range(2, 9)})
+    return _std(M, _claim(M, facility=True), activity=act)
+
+
+@scenario
+def b1_eight_encounters_in_one_week_is_an_impossible_week(M):
+    # 2-8 March 2026 is one ISO week (Monday to Sunday): 3 visits here + 5 on other claims
+    act = M.Activity(claimant_encounters={("PR2", date(2026, 3, d)) for d in (2, 3, 4, 5, 6)})
+    return _std(M, _claim(M, lines=_week_of_visits(M, (6, 7, 8))), activity=act)
+
+
+@scenario
+def b1_same_encounter_on_two_claims_counts_once(M):
+    # the other claim's encounters are this claim's own provider and days -> still 3, not 6
+    act = M.Activity(claimant_encounters={("PR1", date(2026, 3, d)) for d in (6, 7, 8)})
+    return _std(M, _claim(M, lines=_week_of_visits(M, (6, 7, 8))), activity=act)
+
+
+@scenario
+def b1_visits_spread_over_two_weeks_are_not_an_impossible_week(M):
+    act = M.Activity(claimant_encounters={("PR2", date(2026, 3, d)) for d in (9, 10, 11, 12, 13)})
+    return _std(M, _claim(M, lines=_week_of_visits(M, (6, 7, 8))), activity=act)
+
+
+@scenario
+def b1_three_same_discipline_providers_is_shopping_in_shadow(M):
+    act = M.Activity(claimant_providers={"GP": {"PR2", "PR3"}, "Physiotherapy": {"PT1"}})
+    return _std(M, _claim(M), activity=act)
+
+
+@scenario
+def b1_provider_shopping_promoted_to_scored_bands_amber(M):
+    act = M.Activity(claimant_providers={"GP": {"PR2", "PR3"}})
+    return _std(M, _claim(M), activity=act,
+                mode_overrides={"PROVIDER_SHOPPING": M.SignalMode.SCORED})
+
+
+@scenario
+def b1_a_care_team_of_different_disciplines_is_not_shopping(M):
+    act = M.Activity(claimant_providers={"Physiotherapy": {"PT1", "PT2", "PT3"}, "GP": {"PR2"}})
+    return _std(M, _claim(M), activity=act,
+                mode_overrides={"PROVIDER_SHOPPING": M.SignalMode.SCORED})
+
+
+@scenario
+def b1_assigned_disciplines_can_never_be_shopping(M):
+    lines = [_line(M, provider=p, discipline="Radiology", amount=400.0) for p in ("RA1", "RA2", "RA3")]
+    return _std(M, _claim(M, lines=lines), mode_overrides={"PROVIDER_SHOPPING": M.SignalMode.SCORED})
+
+
+@scenario
+def b1_a_claim_with_no_lines_raises_no_billing_signal(M):
+    return _std(M, _claim(M, lines=[]), activity=M.Activity())
+
+
+# the billing signals launch ADVISORY; an ADMIN promotion makes them score (§11)
+def _promoted(M, *codes):
+    return {code: M.SignalMode.SCORED for code in codes}
+
+
+@scenario
+def b2_promoted_padding_and_line_count_band_amber(M):
+    # MATERIAL_PADDING 15 + LINE_COUNT_OUTLIER 15 (endogenous) = 30 points
+    return _std(M, _claim(M, lines=_many(M, 12, kind="NAPPI", code="700101") + _many(M, 3)),
+                mode_overrides=_promoted(M, "MATERIAL_PADDING", "LINE_COUNT_OUTLIER"))
+
+
+@scenario
+def b2_promoted_impossible_day_alone_routes_to_fraud_review(M):
+    act = M.Activity(provider_day={("PR1", date(2026, 3, 1)): 29})
+    return _std(M, _claim(M), activity=act, mode_overrides=_promoted(M, "IMPOSSIBLE_DAY"))
+
+
+@scenario
+def b2_promoted_impossible_week_scores_but_stays_green_alone(M):
+    act = M.Activity(claimant_encounters={("PR2", date(2026, 3, d)) for d in (2, 3, 4, 5, 6)})
+    return _std(M, _claim(M, lines=_week_of_visits(M, (6, 7, 8))), activity=act,
+                mode_overrides=_promoted(M, "IMPOSSIBLE_WEEK"))

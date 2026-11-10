@@ -8,6 +8,10 @@ from __future__ import annotations
 
 from .accidents import match_score, normalise_cas, resolve_accident
 from .adjudication import adjudicate_line, consume_authorisation, find_authorisation, line_key
+from .coding import (
+    ANAES_TIME_RULES, CODE_RULES, ONCE_PER_ENCOUNTER, PCT_OF_TIME, TIME_ANAES, TIME_BLOCK,
+    TIME_FIRST_HOUR, TIME_RULES, blocks, code_rule, encounter_key, line_reference, time_total,
+)
 from .corroboration import convergence, corroboration_signals
 from .disposition import disposition, dispositive
 from .gates import add_years, merits_gate, prescription_gates, s24_gates, standing_gates
@@ -16,14 +20,15 @@ from .heads import (
     head_loss_of_support, head_past_medical,
 )
 from .models import (
-    Accident, Assessment, Authorisation, Claim, Line, LineResult, Ruleset, Undertaking,
-    normalise_code,
+    Accident, Activity, Assessment, Authorisation, Claim, Line, LineResult, Ruleset,
+    Undertaking, normalise_code,
 )
 from .payments import eligible_to_pay
 from .pipeline import process_claim
-from .reasons import MODE, R
+from .reasons import LAUNCH_ADVISORY, MODE, R
 from .reference import RefBook, dispensing_fee, rate_on, resolve
 from .scoring import effective_mode, score_and_band
+from .signals import billing_signals, iso_week, padded
 from .vocab import (
     AMBER_AT, Band, Category, D, ENDOGENOUS_POINT_CAP, LegalStatus, Maturity,
     PAYMENT_RULE_STATUSES, RED_AT, ReasonMeta, SignalMode, money,
@@ -37,8 +42,12 @@ __all__ = [
     "prescription_gates", "add_years", "s24_gates", "standing_gates", "merits_gate",
     "apportion", "head_past_medical", "head_loss_of_earnings", "head_loss_of_support",
     "head_general_damages", "head_funeral",
-    "Claim", "Line", "Accident", "Authorisation", "Undertaking", "Ruleset", "LineResult",
-    "Assessment", "R", "MODE",
+    "code_rule", "encounter_key", "blocks", "time_total", "line_reference",
+    "ONCE_PER_ENCOUNTER", "TIME_BLOCK", "TIME_ANAES", "TIME_FIRST_HOUR", "PCT_OF_TIME",
+    "TIME_RULES", "ANAES_TIME_RULES", "CODE_RULES",
+    "billing_signals", "iso_week", "padded",
+    "Claim", "Line", "Accident", "Activity", "Authorisation", "Undertaking", "Ruleset",
+    "LineResult", "Assessment", "R", "MODE", "LAUNCH_ADVISORY",
     "LegalStatus", "Maturity", "SignalMode", "Category", "Band", "ReasonMeta",
     "PAYMENT_RULE_STATUSES", "AMBER_AT", "RED_AT", "ENDOGENOUS_POINT_CAP", "D", "money",
 ]

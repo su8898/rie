@@ -15,6 +15,10 @@ from sqlalchemy.orm import Session
 
 from . import models
 
+DRIFT_MIN_MONTHS = 6                                   # history needed before a trend is judged
+DRIFT_MIN_LINES = 5                                    # months thinner than this are ignored (noise)
+_PAYMENT_RULE = ("ENFORCEABLE", "ACCEPTED")            # references that are a real price, not a signal
+
 MIN_ROBUST = 20                                        # domain-logic §6 — small-n guard on cost bands
 _CONSERVATIVE_DISCIPLINES = {"", "GP"}                 # any other discipline => specialist-involved
 
@@ -150,3 +154,53 @@ def estimate(db: Session, injury_class: str, amount: float, min_robust: int = MI
            else "HIGH" if amount <= b["p90"] else "OUTLIER")
     return {"injury_class": injury_class, "n": len(totals), "robust": True,
             "classification": cls, "amount": amount, "bands": b}
+
+
+# ── price drift — the slow ratchet a cross-sectional outlier screen misses ─────
+def _ols_slope(points: list[tuple[float, float]]) -> Optional[float]:
+    """Least-squares slope of y over x; None when it cannot be fitted."""
+    n = len(points)
+    sx, sy = sum(p[0] for p in points), sum(p[1] for p in points)
+    denom = n * sum(p[0] * p[0] for p in points) - sx * sx
+    if n < 2 or denom == 0:
+        return None
+    return (n * sum(p[0] * p[1] for p in points) - sx * sy) / denom
+
+
+def price_drift(db: Session, min_months: int = DRIFT_MIN_MONTHS,
+                min_lines: int = DRIFT_MIN_LINES, limit: int = 40) -> dict:
+    """Per provider per service month: billed ÷ reference over the lines with an enforceable or
+    accepted reference, and the least-squares slope of that ratio over time (ported from CIE's
+    drift monitor). The reference on each stored line is the one in force on its service date, so
+    a tariff increase does not read as drift. The output is a worklist, never a verdict."""
+    billed: dict = defaultdict(float)
+    ref: dict = defaultdict(float)
+    n_lines: Counter = Counter()
+    L = models.BillingLineRecord
+    for r in db.scalars(select(L).where(L.reference.is_not(None), L.reference > 0,
+                                        L.service_date.is_not(None), L.provider_id != "",
+                                        L.legal_status.in_(_PAYMENT_RULE))):
+        key = (r.provider_id, f"{r.service_date:%Y-%m}")
+        billed[key] += r.billed
+        ref[key] += r.reference
+        n_lines[key] += 1
+    series: dict = defaultdict(list)
+    for (pid, month), b in billed.items():
+        if n_lines[(pid, month)] >= min_lines:
+            series[pid].append((month, b / ref[(pid, month)], n_lines[(pid, month)]))
+    rows = []
+    for pid, months in series.items():
+        months.sort()
+        slope = _ols_slope([(float(i), ratio) for i, (_m, ratio, _n) in enumerate(months)])
+        if len(months) < min_months or slope is None:
+            continue
+        rows.append({
+            "provider_id": pid, "n_months": len(months),
+            "first_month": months[0][0], "last_month": months[-1][0],
+            "first_ratio": round(months[0][1], 3), "last_ratio": round(months[-1][1], 3),
+            "slope_per_month": round(slope, 4),
+            "series": [{"month": m, "ratio": round(x, 3), "lines": n} for m, x, n in months],
+        })
+    rows.sort(key=lambda x: x["slope_per_month"], reverse=True)
+    return {"min_months": min_months, "min_lines": min_lines, "n_providers": len(rows),
+            "rising": [x for x in rows if x["slope_per_month"] > 0][:limit]}

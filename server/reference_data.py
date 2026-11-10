@@ -52,8 +52,11 @@ def build_refbook(db: Session, nappi_codes=None) -> engine.RefBook:
         rpl.setdefault(code, {}).update(by_disc)
     sep.update(dated["SEP"])
 
+    code_rules = {r.code: (r.rule, r.param) for r in db.scalars(select(models.RefCodeRule))}
+
     book = engine.RefBook(negotiated=negotiated, rpl=rpl, raf2022=raf2022,
-                          empirical=empirical, sep=sep, non_benchmarkable=non_bench)
+                          empirical=empirical, sep=sep, non_benchmarkable=non_bench,
+                          code_rules=code_rules)
     apply_crosswalk(book)         # activate SME-CONFIRMED COIDA→RAF equivalences (no-op until confirmed)
     return book
 

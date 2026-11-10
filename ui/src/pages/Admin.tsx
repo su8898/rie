@@ -2,7 +2,7 @@
 // data is edited. Nothing here is a code deploy — every change is effective-dated,
 // audit-logged reference data the engine reads live on the next determination.
 //
-// Seven tabs — six over the /api/admin surface, plus dated rates over /api/rates:
+// Eight tabs — seven over the /api/admin surface, plus dated rates over /api/rates:
 //   • users          — RBAC: create user, change role, activate/deactivate.
 //   • signal-modes   — the §11 promotion lifecycle as an effective-dated
 //                      SHADOW/ADVISORY/SCORED override (Grounded locked SCORED).
@@ -12,6 +12,8 @@
 //   • rates          — dated versions of the tariff / negotiated / NAPPI rates: the
 //                      engine prices each line at the version in force on its
 //                      service date (AdminRates.tsx).
+//   • code-rules     — the tariff's own billing rules per code: once per encounter,
+//                      time-modifier ladders, percentage of time (AdminCodeRules.tsx).
 //   • audit          — the append-only admin CUD log (§9), newest first.
 //
 // Everything mutating goes through `run(key, fn, okMsg)`: it disables all
@@ -38,6 +40,7 @@ import {
   usePaged,
 } from "../components/ui";
 import { rand } from "../format";
+import CodeRulesTab from "./AdminCodeRules";
 import RatesTab from "./AdminRates";
 import type {
   AdminAuditRow,
@@ -55,6 +58,7 @@ type Tab =
   | "preauth"
   | "negotiated"
   | "rates"
+  | "code-rules"
   | "audit";
 
 const TABS: { key: Tab; label: string }[] = [
@@ -64,6 +68,7 @@ const TABS: { key: Tab; label: string }[] = [
   { key: "preauth", label: "Pre-auth" },
   { key: "negotiated", label: "Negotiated" },
   { key: "rates", label: "Dated rates" },
+  { key: "code-rules", label: "Coding rules" },
   { key: "audit", label: "Audit" },
 ];
 
@@ -222,6 +227,7 @@ export default function AdminPage() {
         />
       )}
       {tab === "rates" && <RatesTab />}
+      {tab === "code-rules" && <CodeRulesTab />}
       {tab === "audit" && <AuditTab rows={audit} />}
 
       {toast && (

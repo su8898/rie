@@ -31,9 +31,9 @@ import {
   usePaged,
 } from "../components/ui";
 import { num, rand } from "../format";
-import type { CodeAgg, ConditionRow, CostEstimate } from "../types";
+import type { CodeAgg, ConditionRow, CostEstimate, DriftReport } from "../types";
 
-type Tab = "codes" | "targets" | "conditions";
+type Tab = "codes" | "targets" | "conditions" | "drift";
 type CodeKind = "" | "TARIFF" | "NAPPI";
 
 const th =
@@ -135,6 +135,7 @@ export default function CodingPage() {
             ["codes", "Codes"],
             ["targets", "Negotiation targets"],
             ["conditions", "Conditions"],
+            ["drift", "Price drift"],
           ] as [Tab, string][]
         ).map(([value, label]) => (
           <button
@@ -159,6 +160,8 @@ export default function CodingPage() {
         <CodesTab codes={codes} kind={kind} onKind={setKind} />
       ) : tab === "targets" ? (
         <TargetsTab targets={targets} />
+      ) : tab === "drift" ? (
+        <DriftTab />
       ) : (
         <ConditionsTab
           rows={conditions}
@@ -538,5 +541,72 @@ function ConditionsTab({
         )}
       </Card>
     </div>
+  );
+}
+
+// ── Price drift ──────────────────────────────────────────────────────────────
+// Per provider per service month: billed ÷ reference on the lines that have an
+// enforceable or accepted reference, and the trend of that ratio. Each line's
+// reference is the one in force on its service date, so a tariff increase does
+// not read as drift. A worklist for a human look, never a verdict.
+function DriftTab() {
+  const [report, setReport] = useState<DriftReport | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api
+      .priceDrift()
+      .then(setReport)
+      .catch((e) => setError(e instanceof ApiError ? e.message : "Failed to load price drift."));
+  }, []);
+
+  if (error) return <ErrorBox message={error} />;
+  if (report === null) return <Loading />;
+  return (
+    <Card
+      title="Price drift — providers whose billing is ratcheting up"
+      sub={`Providers with at least ${report.min_months} months of history (months with fewer than ${report.min_lines} priced lines are ignored), ranked by the monthly rise in billed ÷ reference. ${report.n_providers} provider${report.n_providers === 1 ? " has" : "s have"} enough history to judge.`}
+    >
+      {report.rising.length === 0 ? (
+        <Empty label="No provider shows a rising trend on enough history." />
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead className="bg-slate-50 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+              <tr>
+                <th className="px-3 py-2">Provider</th>
+                <th className="px-3 py-2">Months</th>
+                <th className="px-3 py-2">Period</th>
+                <th className="px-3 py-2 text-right">First ratio</th>
+                <th className="px-3 py-2 text-right">Last ratio</th>
+                <th className="px-3 py-2 text-right">Rise per month</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {report.rising.map((r) => (
+                <tr key={r.provider_id}>
+                  <td className="px-3 py-2">
+                    <CodePill>{r.provider_id}</CodePill>
+                  </td>
+                  <td className="px-3 py-2 tabular-nums text-slate-600">{r.n_months}</td>
+                  <td className="px-3 py-2 text-slate-600">
+                    {r.first_month} to {r.last_month}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums text-slate-600">
+                    {r.first_ratio.toFixed(2)}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums text-slate-800">
+                    {r.last_ratio.toFixed(2)}
+                  </td>
+                  <td className="px-3 py-2 text-right font-medium tabular-nums text-rose-700">
+                    +{r.slope_per_month.toFixed(3)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
   );
 }

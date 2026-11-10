@@ -9,8 +9,9 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Optional
 
+from .coding import ONCE_PER_ENCOUNTER, code_rule, encounter_key, line_reference
 from .models import Authorisation, Claim, Line, LineResult, Ruleset, Undertaking, normalise_code
-from .reference import RefBook, resolve
+from .reference import RefBook
 from .vocab import D, PAYMENT_RULE_STATUSES, money
 
 
@@ -62,6 +63,11 @@ def adjudicate_line(c: Claim, line: Line, book: RefBook, rs: Ruleset,
     if key in seen:                                   # §4f — pay the first occurrence only
         return LineResult(0.0, ["DUPLICATE_LINE"], "—")
     seen.add(key)
+    if code_rule(book, line)[0] == ONCE_PER_ENCOUNTER:           # §3b — the tariff's own limit
+        once = encounter_key(c.party_token, line)
+        if once in prior or once in seen:             # billed again at any amount, on any claim
+            return LineResult(0.0, ["UNBUNDLING_CONFLICT"], "—")
+        seen.add(once)
     if line.dx[:3] not in accident_dx_regions and accident_dx_regions:
         reasons.append("DX_ACCIDENT_MISMATCH")        # soft -> review, aggravation compensable
 
@@ -84,12 +90,11 @@ def adjudicate_line(c: Claim, line: Line, book: RefBook, rs: Ruleset,
         if nc in rs.preauth_required and not line.emergency:
             return LineResult(0.0, reasons + ["PREAUTH_MISSING"], "—")
 
-    # reference pricing — the payment rule (§3); resolve for the line's provider discipline
-    rate, src, status = resolve(book, line.kind, line.code, line.discipline or tier,
-                                line.service_date)
-    if rate is None:                                  # uncovered -> hard R&N review, never paid as billed
+    # reference pricing — the payment rule (§3, §3b); resolved for the line's provider
+    # discipline and service date, and priced by the code's own rule where it has one
+    expected, src, status = line_reference(c, line, book, tier)
+    if expected is None:                              # uncovered -> hard R&N review, never paid as billed
         return LineResult(line.amount, reasons + ["REFERENCE_UNRESOLVED"], src, needs_review=True)
-    expected = money(D(rate) * D(line.qty))
     if line.amount > expected:
         reasons.append("BILLED_OVER_REFERENCE")
         if status in PAYMENT_RULE_STATUSES:

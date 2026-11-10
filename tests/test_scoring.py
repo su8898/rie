@@ -1,6 +1,7 @@
 """Per-function unit tests for engine.scoring — concrete value assertions.
 
-Point sources (from reasons.R, all SCORED at launch except UNVALIDATED->SHADOW):
+Point sources (from reasons.R; SCORED at launch except UNVALIDATED->SHADOW and the four
+LAUNCH_ADVISORY billing signals, which these tests promote to SCORED via `PROMOTED`):
   IMPOSSIBLE_DAY 25 (non-endo), MATERIAL_PADDING 15 (non-endo), DX_ACCIDENT_MISMATCH 15 (non-endo),
   VALUE_OUTLIER 15 (endo), VALUE_OUTLIER_EXTREME 30 (endo), LINE_COUNT_OUTLIER 15 (endo),
   EARNINGS_OUTLIER 10 (endo). Bands: GREEN < 25 <= AMBER < 50 <= RED. ENDOGENOUS_POINT_CAP 45.
@@ -16,6 +17,8 @@ from engine.vocab import (
     AMBER_AT, Band, Category, ENDOGENOUS_POINT_CAP, Maturity, RED_AT, ReasonMeta, SignalMode,
 )
 
+PROMOTED = {code: SignalMode.SCORED for code in reasons.LAUNCH_ADVISORY}   # an ADMIN promotion (§11)
+
 
 # ── soft SCORED points sum & bands ───────────────────────────────────────────
 def test_single_soft_below_amber_is_green():
@@ -25,19 +28,19 @@ def test_single_soft_below_amber_is_green():
 
 
 def test_score_at_amber_threshold_is_amber():
-    a = score_and_band(["IMPOSSIBLE_DAY"])      # 25 non-endo -> AMBER (25 >= 25)
+    a = score_and_band(["IMPOSSIBLE_DAY"], PROMOTED)      # 25 non-endo -> AMBER (25 >= 25)
     assert a.score == 25 and a.band is Band.AMBER
 
 
 def test_soft_points_sum_across_codes():
     # MATERIAL_PADDING 15 + IMPOSSIBLE_DAY 25 = 40 -> AMBER
-    a = score_and_band(["MATERIAL_PADDING", "IMPOSSIBLE_DAY"])
+    a = score_and_band(["MATERIAL_PADDING", "IMPOSSIBLE_DAY"], PROMOTED)
     assert a.score == 40 and a.band is Band.AMBER
 
 
 def test_soft_points_reach_red():
     # MATERIAL_PADDING 15 + IMPOSSIBLE_DAY 25 + DX_ACCIDENT_MISMATCH 15 = 55 -> RED
-    a = score_and_band(["MATERIAL_PADDING", "IMPOSSIBLE_DAY", "DX_ACCIDENT_MISMATCH"])
+    a = score_and_band(["MATERIAL_PADDING", "IMPOSSIBLE_DAY", "DX_ACCIDENT_MISMATCH"], PROMOTED)
     assert a.score == 55 and a.band is Band.RED
 
 
@@ -50,20 +53,20 @@ def test_below_amber_stays_green():
 # ── endogenous cap ───────────────────────────────────────────────────────────
 def test_endogenous_points_capped_below_red():
     # 30 + 15 + 15 + 10 = 70 endo -> min(70, 45) = 45 -> AMBER, never RED
-    a = score_and_band(["VALUE_OUTLIER_EXTREME", "VALUE_OUTLIER", "LINE_COUNT_OUTLIER", "EARNINGS_OUTLIER"])
+    a = score_and_band(["VALUE_OUTLIER_EXTREME", "VALUE_OUTLIER", "LINE_COUNT_OUTLIER", "EARNINGS_OUTLIER"], PROMOTED)
     assert a.score == ENDOGENOUS_POINT_CAP == 45
     assert a.band is Band.AMBER
 
 
 def test_endogenous_plus_non_endogenous_can_exceed_cap():
     # endo VALUE_OUTLIER 15 (capped at 15) + non-endo IMPOSSIBLE_DAY 25 + non-endo DX 15 = 55 -> RED
-    a = score_and_band(["VALUE_OUTLIER", "IMPOSSIBLE_DAY", "DX_ACCIDENT_MISMATCH"])
+    a = score_and_band(["VALUE_OUTLIER", "IMPOSSIBLE_DAY", "DX_ACCIDENT_MISMATCH"], PROMOTED)
     assert a.score == 55 and a.band is Band.RED
 
 
 def test_endogenous_only_two_codes_within_cap():
     # 15 + 15 = 30 endo -> not capped -> AMBER
-    a = score_and_band(["VALUE_OUTLIER", "LINE_COUNT_OUTLIER"])
+    a = score_and_band(["VALUE_OUTLIER", "LINE_COUNT_OUTLIER"], PROMOTED)
     assert a.score == 30 and a.band is Band.AMBER
 
 
@@ -76,7 +79,7 @@ def test_shadow_reason_zero_points_goes_to_shadow_list():
 
 
 def test_shadow_does_not_contribute_even_with_visible_reasons():
-    a = score_and_band(["IMPOSSIBLE_DAY", "CONVERGENCE_THIN"])  # CONVERGENCE_THIN is SHADOW
+    a = score_and_band(["IMPOSSIBLE_DAY", "CONVERGENCE_THIN"], PROMOTED)  # CONVERGENCE_THIN is SHADOW
     assert a.reasons == ["IMPOSSIBLE_DAY"]
     assert a.shadow == ["CONVERGENCE_THIN"]
     assert a.score == 25
@@ -98,7 +101,7 @@ def test_hard_gate_reason_visible_no_points():
 
 # ── dedupe keeps order ───────────────────────────────────────────────────────
 def test_dedupe_keeps_first_order_and_counts_once():
-    a = score_and_band(["IMPOSSIBLE_DAY", "MATERIAL_PADDING", "IMPOSSIBLE_DAY"])
+    a = score_and_band(["IMPOSSIBLE_DAY", "MATERIAL_PADDING", "IMPOSSIBLE_DAY"], PROMOTED)
     assert a.reasons == ["IMPOSSIBLE_DAY", "MATERIAL_PADDING"]  # order preserved, deduped
     assert a.score == 40  # counted once each (25 + 15)
 
@@ -141,3 +144,16 @@ def test_effective_mode_without_meta_falls_back_to_default():
     assert effective_mode("RING_PARTIES", reasons.R["RING_PARTIES"], {}) is SignalMode.SHADOW
     assert effective_mode("RING_PARTIES", reasons.R["RING_PARTIES"],
                           {"RING_PARTIES": SignalMode.SCORED}) is SignalMode.SCORED
+
+
+# ── launch-advisory billing signals (§11) ────────────────────────────────────
+def test_launch_advisory_signals_are_visible_but_carry_no_points():
+    a = score_and_band(["IMPOSSIBLE_DAY", "MATERIAL_PADDING", "LINE_COUNT_OUTLIER", "IMPOSSIBLE_WEEK"])
+    assert a.reasons == a.advisory == ["IMPOSSIBLE_DAY", "MATERIAL_PADDING", "LINE_COUNT_OUTLIER",
+                                       "IMPOSSIBLE_WEEK"]
+    assert a.score == 0 and a.band is Band.GREEN and a.shadow == []
+
+
+def test_promoting_a_launch_advisory_signal_makes_it_score():
+    a = score_and_band(["IMPOSSIBLE_WEEK", "IMPOSSIBLE_DAY"], {"IMPOSSIBLE_WEEK": SignalMode.SCORED})
+    assert a.score == 20 and a.advisory == ["IMPOSSIBLE_DAY"]

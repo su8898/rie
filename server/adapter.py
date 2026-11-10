@@ -64,6 +64,7 @@ def json_to_claim(p: dict) -> engine.Claim:
         payee_verified=bool(p.get("payee_verified", False)),
         attorney_in_standing=bool(p.get("attorney_in_standing", True)),
         provider_registered=bool(p.get("provider_registered", True)),
+        facility=bool(p.get("facility", False)),
     )
 
 

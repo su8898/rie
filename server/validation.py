@@ -69,6 +69,7 @@ class ClaimSubmission(BaseModel):
     payee_verified: StrictBool = False
     attorney_in_standing: StrictBool = True
     provider_registered: StrictBool = True
+    facility: StrictBool = False
     hit_and_run: StrictBool = False
     prescription_suspended: StrictBool = False
     cohort_is_bus_taxi: StrictBool = False

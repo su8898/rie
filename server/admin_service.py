@@ -14,6 +14,7 @@ from typing import Optional
 from sqlalchemy import delete, desc, select
 from sqlalchemy.orm import Session
 
+from engine.coding import CODE_RULES, PCT_OF_TIME, TIME_BLOCK
 from engine.models import normalise_code
 from engine.reasons import MODE, R
 from engine.vocab import Maturity
@@ -171,6 +172,53 @@ def delete_negotiated(db: Session, user: dict, kind: str, code: str) -> None:
 
 
 # ── signal-mode overrides (§11 promotion lifecycle) ────────────────────────────
+# ── coding rules (§3b) — the tariff's own billing rules, as reference data ─────
+def _code_rule_out(r: "models.RefCodeRule") -> dict:
+    return {"code": r.code, "rule": r.rule, "param": r.param, "basis": r.basis, "origin": r.origin}
+
+
+def list_code_rules(db: Session) -> list[dict]:
+    return [_code_rule_out(r) for r in db.scalars(
+        select(models.RefCodeRule).order_by(models.RefCodeRule.rule, models.RefCodeRule.code))]
+
+
+def upsert_code_rule(db: Session, user: dict, code: str, rule: str, param=0.0, basis: str = "") -> dict:
+    """One rule per tariff code. TIME_BLOCK needs its block length in minutes; PCT_OF_TIME needs
+    its share (0–1]; the other rules take no parameter."""
+    nc = normalise_code("TARIFF", str(code or "").strip())
+    if not str(code or "").strip():
+        raise AdminError("code is required")
+    if rule not in CODE_RULES:
+        raise AdminError(f"rule must be one of {sorted(CODE_RULES)}")
+    try:
+        param = float(param or 0.0)
+    except (TypeError, ValueError):
+        raise AdminError("param must be a number") from None
+    if rule == TIME_BLOCK and not (0 < param <= 1440):
+        raise AdminError("TIME_BLOCK needs param = block length in minutes (1–1440)")
+    if rule == PCT_OF_TIME and not (0 < param <= 1):
+        raise AdminError("PCT_OF_TIME needs param = share of anaesthetic time (0–1], e.g. 0.5")
+    if rule not in (TIME_BLOCK, PCT_OF_TIME):
+        param = 0.0
+    row = db.get(models.RefCodeRule, nc)
+    if row is None:
+        row = models.RefCodeRule(code=nc, created_by=user["username"])
+        db.add(row)
+    row.rule, row.param, row.basis, row.origin = rule, param, str(basis or "")[:300], "manual"
+    _audit(db, user, "code_rule.upsert", nc, {"rule": rule, "param": param})
+    db.commit()
+    return _code_rule_out(row)
+
+
+def delete_code_rule(db: Session, user: dict, code: str) -> None:
+    nc = normalise_code("TARIFF", str(code or "").strip())
+    if db.get(models.RefCodeRule, nc) is None:
+        raise AdminError(f"no coding rule on code {code}")
+    db.execute(delete(models.RefCodeRule).where(models.RefCodeRule.code == nc))
+    _audit(db, user, "code_rule.delete", nc)
+    db.commit()
+
+
 def list_signal_modes(db: Session) -> list[dict]:
     overrides = {r.code: r for r in db.scalars(select(models.RefSignalMode))}
     recs = {r["signal"]: r for r in precision_service.precision_by_signal(db)}

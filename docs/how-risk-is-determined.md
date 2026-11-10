@@ -64,6 +64,8 @@ Risk is expressed entirely through **reasons** (also called signals). A reason i
    - Hard causation/date gates: `SERVICE_BEFORE_ACCIDENT`, `DUPLICATE_LINE` (pay-once across claim types).
    - Undertaking / pre-authorisation: `UNDERTAKING_NOT_ACTIVE`, `UNDERTAKING_SCOPE`, `PREAUTH_MISSING`, `PREAUTH_EXCEEDED`.
    - Reference pricing: `DX_ACCIDENT_MISMATCH` (diagnosis doesn't corroborate the accident's injury regions), `BILLED_OVER_REFERENCE` (billed above the reference rate).
+   - Coding rules (`engine/coding.py`, §3b): `UNBUNDLING_CONFLICT` (a code the tariff limits to once per encounter, billed again for the same claimant, provider and day — the repeat is not paid). Time modifiers are priced by their ladder and a percentage-of-time modifier as a share of the time line billed with it, so an over-billed modifier surfaces as `BILLED_OVER_REFERENCE`.
+   - Billing signals (`engine/signals.py`, §10) — evaluated once per claim over its encounters (one provider, one claimant, one day), with cross-claim counts supplied by the server: `LINE_COUNT_OUTLIER`, `MATERIAL_PADDING`, `IMPOSSIBLE_DAY`, `IMPOSSIBLE_WEEK` (all four launch **advisory**: visible, no points, until an ADMIN promotes them on measured precision) and `PROVIDER_SHOPPING` (shadow). Hospital accounts (`facility`) are exempt from the day and week screens.
 3. **Accident-graph corroboration (`engine/corroboration.py`, §6.0)** — computed once the claim is anchored to its accident: `CLAIMANT_SURGE` (more claimants than the accident report's occupants — a **low-confidence** input, since the occupant count is OAR-sourced; cohort-aware, so bus/taxi accidents are exempt; never a sole ground) and `CONVERGENCE_THIN` (too little independent evidence — see §7).
 
 Two adjudication nuances that live in family 2: **emergency lines** (per the regulations' definition) are exempt from pre-authorisation and carry a leniency margin on utilisation-type signals — they are authorised retrospectively; and **`UNDERTAKING_SCOPE` has dual behaviour** — on an undertaking whose scope is ICD-coded it is a hard out-of-scope reject, but on a legacy free-text (uncoded) scope it fires soft and routes to medical review, where the reviewer codes the scope for next time (the scope-capture worklist).
@@ -85,7 +87,7 @@ Every reason is declared once, with fixed attributes, in the **reason register**
 
 Because weight, category, maturity, and mode are **register data, not logic**, changing how much a signal counts (or whether it counts at all) is a reference-data edit, never a code change. The full register is in the Appendix.
 
-> **A note on breadth.** The register catalogues more signals than the live per-claim pipeline currently emits — behavioural and party-graph detectors (`MATERIAL_PADDING`, `VALUE_OUTLIER`, `IMPOSSIBLE_DAY`, `RING_PARTIES`, `CLAIMANT_RECURRENCE`, …) are **defined with calibrated weights and launched in `SHADOW`** (§4.1) so that promoting a detector from invisible to scoring is a governed reference-data change, not a scoring rewrite. Wherever a detector supplies one of these reasons, it scores exactly as its register entry says.
+> **A note on breadth.** The register catalogues more signals than the live per-claim pipeline currently emits — behavioural and party-graph detectors (`VALUE_OUTLIER`, `EARNINGS_OUTLIER`, `RING_PARTIES`, `CLAIMANT_RECURRENCE`, …) are **defined with calibrated weights and launched in `SHADOW`** (§4.1) so that promoting a detector from invisible to scoring is a governed reference-data change, not a scoring rewrite. Wherever a detector supplies one of these reasons, it scores exactly as its register entry says.
 
 ---
 
@@ -108,7 +110,7 @@ default mode = SHADOW  if maturity is UNVALIDATED
              = SCORED  otherwise   (GROUNDED and HEURISTIC signals score by default)
 ```
 
-So the four `UNVALIDATED` graph/collusion signals (`RING_PARTIES`, `CLAIMANT_SURGE`, `CLAIMANT_RECURRENCE`, `CONVERGENCE_THIN`) start **silent**, while law-cited gates and measured heuristics score from day one.
+So the five `UNVALIDATED` graph/collusion signals (`RING_PARTIES`, `PROVIDER_SHOPPING`, `CLAIMANT_SURGE`, `CLAIMANT_RECURRENCE`, `CONVERGENCE_THIN`) start **silent**, while law-cited gates and measured heuristics score from day one. The four billing signals whose thresholds were calibrated on another fund's claims (`LINE_COUNT_OUTLIER`, `MATERIAL_PADDING`, `IMPOSSIBLE_DAY`, `IMPOSSIBLE_WEEK` — the register's `LAUNCH_ADVISORY` set) start **advisory**: shown to the reviewer, zero points, never dispositive.
 
 A signal earns its way up the ladder **SHADOW → ADVISORY → SCORED** only on **measured precision**: the governance layer labels closed cases as ground truth, computes each signal's substantiation rate with a Wilson confidence interval, and a signal may be promoted to `SCORED` only when its **Wilson-lower bound ≥ 60%**. A `SCORED` signal that later drops below the floor is flagged for demotion. This is why weight is *earned*, not asserted.
 
@@ -317,6 +319,7 @@ Every signal the system can express, with its fixed attributes (`engine/reasons.
 | `SERVICE_BEFORE_ACCIDENT` | COMPLIANCE | date check |
 | `SUPPLIER_PRECLUSION` | ADJUSTED | s17(5) — pay once |
 | `DUPLICATE_LINE` | ADJUSTED | pay first occurrence |
+| `UNBUNDLING_CONFLICT` | ADJUSTED | §3b — the tariff limits the code to once per encounter; pay the first |
 | `PREAUTH_MISSING` | PREAUTH | §5f ruleset |
 | `PREAUTH_EXCEEDED` | ADJUSTED | §5f — reprice to ceiling |
 | `UNDERTAKING_NOT_ACTIVE` | COMPLIANCE | s17(4)(a) |
@@ -333,13 +336,14 @@ Every signal the system can express, with its fixed attributes (`engine/reasons.
 | `OAR_MISMATCH` | FRAUD | 5 | HEURISTIC | — | SAPS data quality (LOW, never sole ground) |
 | `EARNINGS_OUTLIER` | FRAUD | 10 | HEURISTIC | ✓ | sector band |
 | `VALUE_OUTLIER` | FRAUD | 15 | HEURISTIC | ✓ | condition band p90 |
-| `LINE_COUNT_OUTLIER` | FRAUD | 15 | HEURISTIC | ✓ | corpus percentile |
+| `LINE_COUNT_OUTLIER` | FRAUD | 15 | HEURISTIC | ✓ | corpus percentile (12 or more lines on one encounter) |
 | `MATERIAL_PADDING` | FRAUD | 15 | HEURISTIC | — | NAPPI-dominated encounter |
 | `DX_ACCIDENT_MISMATCH` | FRAUD | 15 | HEURISTIC | — | body region vs accident profile |
 | `INJURY_ESCALATION` | FRAUD | 15 | HEURISTIC | — | RAF1/4 vs first-contact records |
 | `OAR_REUSED` | FRAUD | 15 | HEURISTIC | — | conflicting accident records, one CAS |
 | `LATE_CLAIM_CLUSTER` | FRAUD | 15 | HEURISTIC | — | deadline clustering |
-| `IMPOSSIBLE_DAY` | FRAUD | 25 | HEURISTIC | — | billed minutes > plausible day |
+| `IMPOSSIBLE_WEEK` | FRAUD | 20 | HEURISTIC | — | encounters billed for one claimant in one week |
+| `IMPOSSIBLE_DAY` | FRAUD | 25 | HEURISTIC | — | claimants billed by one provider in one day |
 | `VALUE_OUTLIER_EXTREME` | FRAUD | 30 | HEURISTIC | ✓ | condition band, extreme |
 
 ### Graph / collusion signals (launch in `SHADOW`; `UNVALIDATED`)
@@ -350,6 +354,7 @@ Every signal the system can express, with its fixed attributes (`engine/reasons.
 | `CLAIMANT_SURGE` | FRAUD | 20 | claimants vs capacity, cohort-aware |
 | `CONVERGENCE_THIN` | FRAUD | 20 | evidence density/timing (§6.0) |
 | `RING_PARTIES` | FRAUD | 25 | party-graph recurrence |
+| `PROVIDER_SHOPPING` | FRAUD | 25 | same-discipline providers billing one claimant |
 
 **Designed, not yet in the register** (domain-logic §10): `TOUT_PATTERN`, `WPI_INFLATION`, `EXPERT_MILL`, `ATTORNEY_CONCENTRATION` — their detectors need data feeds (and, for the first two, the medico-legal-expert party type) that aren't live. Per the promotion doctrine, each enters the register **in `SHADOW`** when its detector lands — never directly at `SCORED`.
 
