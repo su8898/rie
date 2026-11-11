@@ -3,7 +3,7 @@
 # this Caddy's docker network and is proxied here; it runs no Caddy of its own.
 # `rie-app` is the network alias set in that stack's docker-compose.prod.yml
 # (NOT the compose service name, which is the generic `api`) — keep the two in
-# step. Deployed from the karaboit/rie repo to /opt/rie.
+# step. Deployed from the su8898/rie repo to /opt/rie.
 rie.devstg.win {
 	encode zstd gzip
 
