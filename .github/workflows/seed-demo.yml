@@ -1,0 +1,79 @@
+name: Load demo data
+
+# Manual only. Runs the four demo seed scripts (db/seed_demo.py, seed_intel.py, seed_payments.py,
+# seed_showcase.py) inside the deployed stack, so the console has claims, payment batches, audit
+# items and one fully worked claim to show. It refuses to run when the database already holds
+# claims: the payment and audit scripts are not repeatable, and demo claims must never be mixed
+# into real ones. There is no "unload" — removing the demo data means recreating the database.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "load demo data" to confirm'
+        required: true
+
+concurrency:
+  group: deploy-rie-production
+  cancel-in-progress: false
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the confirmation
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          [ "$CONFIRM" = "load demo data" ] || { echo 'x type exactly: load demo data'; exit 1; }
+
+      - name: Setup SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_PASSPHRASE: ${{ secrets.SSH_PASSPHRASE }}
+          DROPLET_HOST: ${{ secrets.DROPLET_HOST }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -H "$DROPLET_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          eval "$(ssh-agent -s)"
+          if [ -n "${SSH_PASSPHRASE:-}" ]; then
+            PASS_HELPER=~/.ssh/askpass.sh
+            printf '%s\n' '#!/usr/bin/env bash' 'echo "$SSH_PASSPHRASE"' > "$PASS_HELPER"
+            chmod 700 "$PASS_HELPER"
+            DISPLAY=:0 SSH_ASKPASS="$PASS_HELPER" setsid -f ssh-add ~/.ssh/id_deploy </dev/null
+          else
+            ssh-add ~/.ssh/id_deploy
+          fi
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+
+      - name: Load the demo data
+        env:
+          DROPLET_HOST: ${{ secrets.DROPLET_HOST }}
+          DROPLET_USER: ${{ secrets.DROPLET_USER }}
+        run: |
+          set -euo pipefail
+          USER_ON_HOST="${DROPLET_USER:-root}"
+          SSH_OPTS="-o StrictHostKeyChecking=no -o IdentitiesOnly=yes -i ~/.ssh/id_deploy"
+
+          ssh $SSH_OPTS "${USER_ON_HOST}@${DROPLET_HOST}" bash -s <<'ENDSSH'
+            set -euo pipefail
+            cd /opt/rie
+            COMPOSE="docker-compose.prod.yml"
+            PSQL="docker compose -f $COMPOSE exec -T db psql -U rie -d rie -tAc"
+
+            n="$($PSQL 'select count(*) from claims')"
+            if [ "$n" -gt 0 ]; then
+              echo "x the database already holds $n claims — demo data not loaded"
+              exit 1
+            fi
+
+            # In this order: the payment batches draw on the claims seed_demo creates.
+            for s in seed_demo seed_intel seed_payments seed_showcase; do
+              echo "-> db/$s.py"
+              docker compose -f "$COMPOSE" run --rm -T init python "db/$s.py" 2>&1 | tail -4
+            done
+
+            echo "ok  demo data loaded: $($PSQL 'select count(*) from claims') claims"
+          ENDSSH
