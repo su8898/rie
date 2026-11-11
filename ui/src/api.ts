@@ -52,6 +52,9 @@ import type {
   RemittanceSummary,
   MedicalReportSummary,
   RailsParty,
+  Practice,
+  PracticeList,
+  PracticeSummary,
   ClaimDocumentation,
   Reason,
   RecallEstimate,
@@ -590,6 +593,23 @@ export const api = {
     ),
   remittancePrintUrl: (ref: string) => `/api/remittances/${encodeURIComponent(ref)}/print`,
   remittanceXmlUrl: (ref: string) => `/api/remittances/${encodeURIComponent(ref)}/xml`,
+  practices: (q: string, status: string, page: number) =>
+    request<PracticeList>(
+      `/api/practices?${new URLSearchParams({ q, status, page: String(page) }).toString()}`,
+    ),
+  practiceSummary: () => request<PracticeSummary>("/api/practices/summary"),
+  upsertPractice: (body: Partial<Practice> & { provider_id: string }) =>
+    request<Practice>("/api/admin/practices", { method: "POST", body: JSON.stringify(body) }),
+  setPracticeStatus: (providerId: string, status: string, reason: string) =>
+    request<Practice>(`/api/admin/practices/${encodeURIComponent(providerId)}/status`, {
+      method: "POST",
+      body: JSON.stringify({ status, reason }),
+    }),
+  importPractices: (csv: string) =>
+    request<{ loaded: number; errors: { line: number; error: string }[] }>(
+      "/api/admin/practices/import",
+      { method: "POST", body: JSON.stringify({ csv }) },
+    ),
   railsParties: () => request<RailsParty[]>("/api/admin/rails-parties"),
   registerRailsParty: (body: {
     party_id: string;

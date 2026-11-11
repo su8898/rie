@@ -442,6 +442,27 @@ class MedicalReport(Base):
     received_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+class ProviderRegistry(Base):
+    """The practice register (port of CIE's provider identity registry — a local stand-in for the
+    BHF practice-number register until a live feed exists). Keyed on the practice number a
+    provider bills under. A row confirms who the practice is, its discipline and setting, and
+    whether it may bill the Fund; intake derives the claim's fund-side facts from it."""
+    __tablename__ = "provider_registry"
+    provider_id: Mapped[str] = mapped_column(String, primary_key=True)       # the practice number
+    practice_name: Mapped[str] = mapped_column(String, default="")
+    discipline: Mapped[str] = mapped_column(String, default="")              # as the tariff names it
+    practice_type: Mapped[str] = mapped_column(String, default="")           # INDIVIDUAL|GROUP|INSTITUTION|SUPPLIER
+    setting: Mapped[str] = mapped_column(String, default="")                 # ROOMS|HOSPITAL|ER|MIXED
+    professional_nr: Mapped[str] = mapped_column(String, default="")         # HPCSA / statutory council number
+    status: Mapped[str] = mapped_column(String, default="ACTIVE", index=True)   # ACTIVE|SUSPENDED|DEREGISTERED
+    status_reason: Mapped[str] = mapped_column(String, default="")
+    source: Mapped[str] = mapped_column(String, default="MANUAL")            # MANUAL | IMPORT | PCNS
+    verified: Mapped[bool] = mapped_column(default=True)
+    notes: Mapped[str] = mapped_column(String, default="")
+    updated_by: Mapped[str] = mapped_column(String, default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
 class RailsParty(Base):
     """A party allowed onto the rails channel (port of CIE's switch registry, with asymmetric
     keys): a provider's own system, or a switch acting for many providers. The Fund holds only

@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 import engine
 
-from . import adapter, models
+from . import adapter, models, provider_registry_service
 from .pseudonymise import RAW_SA_ID, pseudonymise_ingest
 from .reference_data import build_mode_overrides, build_refbook, build_ruleset
 
@@ -123,6 +123,8 @@ def assess_and_store(db: Session, payload: dict, today: Optional[date] = None,
     unless `rescore=True` — the explicit ADMIN re-determination path, which appends a new
     determination over the *stored* payload so the record and its lines never diverge."""
     payload = pseudonymise_ingest(payload)              # POPIA — derive P_* from a raw ID, strip PII (§2)
+    if not rescore:                                     # a rescore keeps the facts fixed at submission
+        payload = provider_registry_service.apply(db, payload)   # registration, discipline, setting
     claim = adapter.json_to_claim(payload)
     if RAW_SA_ID.match(claim.party_token.strip()):             # POPIA — a raw identity number is never stored
         raise ValueError("party_token looks like a raw national ID — send it as national_id")
