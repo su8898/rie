@@ -3,8 +3,8 @@
 // On small screens the sidebar becomes a drawer.
 
 import {
-  Banknote, Bell, Briefcase, Building2, Car, ClipboardList, Database, FileText, Gauge, LayoutDashboard, LogOut, Menu,
-  Radar, Scale, Search, Settings, ShieldAlert, Stethoscope, X, type LucideIcon,
+  Banknote, Bell, BookOpenText, Briefcase, Building2, Car, ClipboardList, Database, FileText, Gauge, LayoutDashboard, LogOut,
+  Menu, Radar, Scale, Search, Settings, ShieldAlert, Stethoscope, X, type LucideIcon,
 } from "lucide-react";
 import { Suspense, useState, type FormEvent } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
@@ -33,6 +33,7 @@ const NAV: { group: string; items: Item[] }[] = [
   ] },
   { group: "Reference", items: [
     { to: "/reference", label: "Reference data", icon: Database },
+    { to: "/price-lists", label: "Price lists", icon: BookOpenText },
     { to: "/reasons", label: "Reason catalogue", icon: ClipboardList },
   ] },
   { group: "Setup", items: [{ to: "/admin", label: "Administration", icon: Settings, role: "ADMIN" }] },

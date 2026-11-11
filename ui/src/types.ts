@@ -1038,3 +1038,92 @@ export interface WorkflowHistoryEntry extends HistoryEntry {
   area: string;
   ref: string;
 }
+
+// ── Price lists ──────────────────────────────────────────────────────────────
+export type PriceListState = "DRAFT" | "PUBLISHED" | "RETIRED";
+export type LegalStanding = "ENFORCEABLE" | "ACCEPTED" | "INTERDICTED";
+
+export interface PriceListCounts {
+  entries: number;
+  with_value: number;
+  units_only: number;
+  codes: number;
+  disciplines: number;
+}
+
+export interface PriceList {
+  id: number;
+  name: string;
+  edition: string;
+  source: string;
+  legal_status: LegalStanding;
+  status_note: string;
+  state: PriceListState;
+  effective_from: string | null;
+  effective_to: string | null;
+  notes: string;
+  copied_from: number | null;
+  created_by: string;
+  created_at: string | null;
+  published_by: string;
+  published_at: string | null;
+  retired_by: string;
+  retired_at: string | null;
+  counts: PriceListCounts;
+}
+
+export interface PriceListFactor { name: string; value: number }
+
+export interface PriceListDetail extends PriceList {
+  factors: PriceListFactor[];
+  disciplines: { discipline: string; entries: number; with_value: number; with_units: number }[];
+  columns: string[];
+  copied_from_name?: string | null;
+}
+
+export interface PriceListEntry {
+  id: number;
+  seq: number;
+  discipline: string;
+  code: string;
+  alt_code: string;
+  price_column: string;
+  description: string;
+  units: number | null;
+  units_suffix: string;
+  value_rand: number | null;
+  unit_of_issue: string;
+  source_page: string;
+  note: string;
+}
+
+export type PriceListEntryInput = Omit<PriceListEntry, "id" | "seq">;
+
+export interface PriceListHeaderInput {
+  name: string;
+  edition: string;
+  source: string;
+  legal_status: LegalStanding;
+  status_note: string;
+  effective_from: string | null;
+  effective_to: string | null;
+  notes: string;
+}
+
+export interface PriceListImportResult {
+  added: number;
+  removed: number;
+  failed: number;
+  duplicates: number;
+  errors: string[];
+  ignored_columns: string[];
+  mode: "append" | "replace";
+}
+
+export interface PriceListHistoryEntry {
+  id: number;
+  actor: string;
+  action: string;
+  detail: Record<string, unknown>;
+  at: string | null;
+}

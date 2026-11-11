@@ -285,6 +285,7 @@ export const AUDIT_AREAS: Record<string, string> = {
   signal_mode: "Signal modes",
   rails_party: "Channel access",
   provider_register: "Practice register",
+  price_list: "Price lists",
 };
 
 /** One audit entry in plain words: what was done, and the detail worth showing beside it. */
@@ -314,6 +315,10 @@ export function describeAudit(a: { action: string; target: string; detail: Recor
     case "provider_register.update": return { title: "Practice details changed", note: Object.keys(d).map((k) => PRACTICE_FIELDS[k] ?? k).join(", ") || undefined };
     case "provider_register.status": return { title: `Practice status changed to ${PRACTICE_STATUS[s("to")]?.label ?? s("to")}`, note: s("reason") || undefined };
     default: {
+      if (a.action.startsWith("price_list.")) {
+        const p = describePriceListChange(a);
+        return { title: `${p.title}${s("name") ? `: ${s("name")}` : ""}`, note: p.note };
+      }
       const [area, verb = ""] = a.action.split(".");
       return { title: `${AUDIT_AREAS[area] ?? area}: ${verb.replace(/_/g, " ")}` };
     }
@@ -405,3 +410,60 @@ export function workError(message: string): string {
   if (m.includes("no transition") || m.includes("illegal") || m.includes("not allowed from")) return "That step is not available from the current status. Reload the page to see the latest status.";
   return message;
 }
+
+// ── Price lists ──────────────────────────────────────────────────────────────
+export const PRICE_LIST_STATE: Record<string, { label: string; tone: Tone; help: string }> = {
+  DRAFT: { label: "Draft", tone: "warn", help: "Being put together. Its entries can still be changed." },
+  PUBLISHED: { label: "Published", tone: "ok", help: "Fixed. A correction is made by issuing a new edition." },
+  RETIRED: { label: "Retired", tone: "neutral", help: "Kept for the record. No longer current." },
+};
+
+export const LEGAL_STANDING: Record<string, { label: string; tone: Tone; help: string }> = {
+  ENFORCEABLE: { label: "Enforceable", tone: "ok", help: "The Fund may hold providers to these prices: a contract, or a price set by law." },
+  ACCEPTED: { label: "Accepted", tone: "info", help: "Providers accept these prices as the going rate. The Fund may pay up to them." },
+  INTERDICTED: { label: "Interdicted", tone: "bad", help: "A court has stopped the Fund from applying this list. It is kept for comparison only." },
+};
+
+export const PRICE_LIST_FIELDS: Record<string, string> = {
+  name: "Name", edition: "Edition", source: "Published in", legal_status: "Legal standing", status_note: "Reason for the standing",
+  effective_from: "In effect from", effective_to: "In effect to", notes: "Notes", discipline: "Discipline", code: "Code",
+  alt_code: "Second code", price_column: "Price column", description: "Description", units: "Units", units_suffix: "Units marker",
+  value_rand: "Rand value", unit_of_issue: "Unit of issue", source_page: "Page", note: "Note",
+};
+
+/** The period a price list is in effect, in words. */
+export function inEffect(pl: { effective_from: string | null; effective_to: string | null }): string {
+  if (!pl.effective_from) return "No start date set";
+  return pl.effective_to ? `${shortDate(pl.effective_from)} to ${shortDate(pl.effective_to)}` : `From ${shortDate(pl.effective_from)}`;
+}
+
+/** One change to a price list in plain words. */
+export function describePriceListChange(h: { action: string; detail: Record<string, unknown> }): { title: string; note?: string } {
+  const d = h.detail ?? {};
+  const s = (k: string) => (d[k] === undefined || d[k] === null ? "" : String(d[k]));
+  const n = (k: string) => Number(d[k] ?? 0).toLocaleString("en-ZA");
+  const entry = [s("code"), s("discipline"), s("price_column") && s("price_column") !== "standard" ? s("price_column") : ""].filter(Boolean).join(" · ");
+  const fields = d.changed && typeof d.changed === "object" ? Object.keys(d.changed as object).map((k) => PRICE_LIST_FIELDS[k] ?? k).join(", ") : "";
+  switch (h.action) {
+    case "price_list.create": return { title: "Price list created", note: s("edition") ? `Edition ${s("edition")}` : undefined };
+    case "price_list.update": return { title: "Details changed", note: fields || undefined };
+    case "price_list.legal_status":
+      return { title: `Legal standing changed from ${LEGAL_STANDING[s("from")]?.label ?? s("from")} to ${LEGAL_STANDING[s("to")]?.label ?? s("to")}`, note: s("reason") || undefined };
+    case "price_list.factors": return { title: "Conversion factors changed" };
+    case "price_list.publish": return { title: "Published", note: `${n("entries")} entries, in effect from ${shortDate(s("effective_from"))}` };
+    case "price_list.retire": return { title: "Retired", note: [`In effect to ${shortDate(s("effective_to"))}`, s("note")].filter(Boolean).join(". ") };
+    case "price_list.copy": return { title: "New edition started", note: `From ${s("from_name")}, ${n("entries")} entries` };
+    case "price_list.delete": return { title: "Draft deleted", note: `${n("entries")} entries` };
+    case "price_list.entry.add": return { title: "Entry added", note: entry || undefined };
+    case "price_list.entry.update": return { title: "Entry changed", note: [entry, fields].filter(Boolean).join(": ") || undefined };
+    case "price_list.entry.delete": return { title: "Entry removed", note: entry || undefined };
+    case "price_list.import": {
+      const parts = [`${n("added")} added`];
+      if (Number(d.removed)) parts.push(`${n("removed")} removed first`);
+      if (Number(d.failed)) parts.push(`${n("failed")} rows could not be read`);
+      return { title: "Entries loaded from a file", note: parts.join(", ") };
+    }
+    default: return { title: h.action.replace("price_list.", "").replace(/[._]/g, " ") };
+  }
+}
+

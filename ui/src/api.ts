@@ -44,6 +44,14 @@ import type {
   OfferHeadsInput,
   PaymentSource,
   PrecisionRow,
+  PriceList,
+  PriceListDetail,
+  PriceListEntry,
+  PriceListEntryInput,
+  PriceListFactor,
+  PriceListHeaderInput,
+  PriceListHistoryEntry,
+  PriceListImportResult,
   Provider,
   QueueRow,
   RateImportResult,
@@ -682,6 +690,35 @@ export const api = {
       "/api/admin/practices/import",
       { method: "POST", body: JSON.stringify({ csv }) },
     ),
+  // Price lists: whole tariff editions held as reference data.
+  priceLists: () => request<PriceList[]>("/api/price-lists"),
+  priceList: (id: number) => request<PriceListDetail>(`/api/price-lists/${id}`),
+  priceListEntries: (id: number, params: Record<string, string | number | boolean | undefined>) =>
+    request<{ total: number; rows: PriceListEntry[] }>(`/api/price-lists/${id}/entries${qs(params)}`),
+  priceListHistory: (id: number) => request<PriceListHistoryEntry[]>(`/api/price-lists/${id}/history`),
+  priceListExportUrl: (id: number) => `/api/price-lists/${id}/export`,
+  createPriceList: (body: PriceListHeaderInput) =>
+    request<PriceListDetail>("/api/price-lists", { method: "POST", body: JSON.stringify(body) }),
+  updatePriceList: (id: number, body: Partial<PriceListHeaderInput>) =>
+    request<PriceListDetail>(`/api/price-lists/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  setPriceListStanding: (id: number, legal_status: string, reason: string) =>
+    request<PriceListDetail>(`/api/price-lists/${id}/legal-status`, { method: "POST", body: JSON.stringify({ legal_status, reason }) }),
+  setPriceListFactors: (id: number, factors: PriceListFactor[]) =>
+    request<PriceListDetail>(`/api/price-lists/${id}/factors`, { method: "PUT", body: JSON.stringify({ factors }) }),
+  publishPriceList: (id: number) => request<PriceListDetail>(`/api/price-lists/${id}/publish`, { method: "POST" }),
+  retirePriceList: (id: number, effective_to: string | null, note: string) =>
+    request<PriceListDetail>(`/api/price-lists/${id}/retire`, { method: "POST", body: JSON.stringify({ effective_to, note }) }),
+  copyPriceList: (id: number, name: string, edition: string) =>
+    request<PriceListDetail>(`/api/price-lists/${id}/copy`, { method: "POST", body: JSON.stringify({ name, edition }) }),
+  deletePriceList: (id: number) => request<{ deleted: number; entries: number }>(`/api/price-lists/${id}`, { method: "DELETE" }),
+  addPriceListEntry: (id: number, body: PriceListEntryInput) =>
+    request<PriceListEntry>(`/api/price-lists/${id}/entries`, { method: "POST", body: JSON.stringify(body) }),
+  updatePriceListEntry: (id: number, entryId: number, body: Partial<PriceListEntryInput>) =>
+    request<PriceListEntry>(`/api/price-lists/${id}/entries/${entryId}`, { method: "PATCH", body: JSON.stringify(body) }),
+  deletePriceListEntry: (id: number, entryId: number) =>
+    request<{ deleted: number }>(`/api/price-lists/${id}/entries/${entryId}`, { method: "DELETE" }),
+  importPriceListEntries: (id: number, csv: string, mode: "append" | "replace") =>
+    request<PriceListImportResult>(`/api/price-lists/${id}/import`, { method: "POST", body: JSON.stringify({ csv, mode }) }),
   railsParties: () => request<RailsParty[]>("/api/admin/rails-parties"),
   registerRailsParty: (body: {
     party_id: string;
