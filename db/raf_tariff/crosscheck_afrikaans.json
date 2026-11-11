@@ -1,0 +1,91 @@
+{
+ "coded_rows_compared": 5882,
+ "agree": 5877,
+ "differ": 5,
+ "english_rows_with_figures_not_matched": 0,
+ "amount_runs": {
+  "orthotics_prosthetics": {
+   "english_amounts": 1588,
+   "found_in_same_order_in_afrikaans": 1588,
+   "not_found": 0
+  },
+  "pharmacy": {
+   "english_amounts": 19,
+   "found_in_same_order_in_afrikaans": 19,
+   "not_found": 0
+  }
+ },
+ "differences": [
+  {
+   "discipline": "medical_practitioners",
+   "code": "0545",
+   "english_pdf_page": 126,
+   "afrikaans_pdf_page": 508,
+   "english": [
+    "96.00",
+    "96.00"
+   ],
+   "afrikaans": [],
+   "description": ""
+  },
+  {
+   "discipline": "medical_practitioners",
+   "code": "2880",
+   "english_pdf_page": 219,
+   "afrikaans_pdf_page": 550,
+   "english": [
+    "29.00"
+   ],
+   "afrikaans": [],
+   "description": "Haemodynamic and authonomic nervous system testing with 'Task Force'system - PROFESSIONAL "
+  },
+  {
+   "discipline": "radiology",
+   "code": "39920",
+   "english_pdf_page": 381,
+   "afrikaans_pdf_page": 674,
+   "english": [
+    "18.040",
+    "2492.97"
+   ],
+   "afrikaans": [
+    "18.040",
+    "31.450",
+    "2492.97",
+    "4346.14"
+   ],
+   "description": "Nuclear medicine study - Infection localisation planar, static"
+  },
+  {
+   "discipline": "speech_therapy_audiology",
+   "code": "1615",
+   "english_pdf_page": 408,
+   "afrikaans_pdf_page": 699,
+   "english": [
+    "35",
+    "635.71"
+   ],
+   "afrikaans": [
+    "35",
+    "516.69",
+    "635.71"
+   ],
+   "description": "Eye Visualization – spontaneous and positional nystagmus – binocular"
+  },
+  {
+   "discipline": "speech_therapy_audiology",
+   "code": "1625",
+   "english_pdf_page": 408,
+   "afrikaans_pdf_page": 699,
+   "english": [
+    "25",
+    "516.69"
+   ],
+   "afrikaans": [
+    "25"
+   ],
+   "description": "Oculo-motor/central tests using video-nystagmography (VNG). Cannot be used with item 1620."
+  }
+ ],
+ "unmatched": []
+}
