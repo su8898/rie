@@ -1,15 +1,19 @@
-name: Load demo data
+name: Load database snapshot
 
-# Manual only. Runs the four demo seed scripts (db/seed_demo.py, seed_intel.py, seed_payments.py,
-# seed_showcase.py) inside the deployed stack, so the console has claims, payment batches, audit
-# items and one fully worked claim to show. It refuses to run when the database already holds
-# claims: the payment and audit scripts are not repeatable, and demo claims must never be mixed
-# into real ones. There is no "unload" — removing the demo data means recreating the database.
+# Manual only. Copies the working data of a local SQLite rie.db into the deployed PostgreSQL
+# database (db/copy_sqlite.py) — claims, determinations, cases, payments, workflow history.
+# Users and the reference tables loaded from reference.db are not touched.
+#
+# First copy the file up, from your machine:
+#     scp rie.db USER@SERVER:/opt/rie/refdata/rie.db
+#
+# It refuses to run when the deployed database already holds claims, and the copy is a single
+# transaction, so it lands completely or not at all.
 on:
   workflow_dispatch:
     inputs:
       confirm:
-        description: 'Type "load demo data" to confirm'
+        description: 'Type "load snapshot" to confirm'
         required: true
 
 concurrency:
@@ -17,14 +21,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  seed:
+  load:
     runs-on: ubuntu-latest
     steps:
       - name: Check the confirmation
         env:
           CONFIRM: ${{ inputs.confirm }}
         run: |
-          [ "$CONFIRM" = "load demo data" ] || { echo 'x type exactly: load demo data'; exit 1; }
+          [ "$CONFIRM" = "load snapshot" ] || { echo 'x type exactly: load snapshot'; exit 1; }
 
       - name: Setup SSH
         env:
@@ -48,7 +52,7 @@ jobs:
           fi
           echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
 
-      - name: Load the demo data
+      - name: Copy the snapshot into the database
         env:
           DROPLET_HOST: ${{ secrets.DROPLET_HOST }}
           DROPLET_USER: ${{ secrets.DROPLET_USER }}
@@ -61,19 +65,15 @@ jobs:
             set -euo pipefail
             cd /opt/rie
             COMPOSE="docker-compose.prod.yml"
-            PSQL="docker compose -f $COMPOSE exec -T db psql -U rie -d rie -tAc"
 
-            n="$($PSQL 'select count(*) from claims')"
-            if [ "$n" -gt 0 ]; then
-              echo "x the database already holds $n claims — demo data not loaded"
+            if [ ! -f refdata/rie.db ]; then
+              echo "x /opt/rie/refdata/rie.db is not on the server. Copy it up first:"
+              echo "      scp rie.db USER@SERVER:/opt/rie/refdata/rie.db"
               exit 1
             fi
 
-            # In this order: the payment batches draw on the claims seed_demo creates.
-            for s in seed_demo seed_intel seed_payments seed_showcase; do
-              echo "-> db/$s.py"
-              docker compose -f "$COMPOSE" run --rm -T init python "db/$s.py" 2>&1 | tail -4
-            done
+            # The script itself refuses if the database already holds claims.
+            docker compose -f "$COMPOSE" run --rm -T init python db/copy_sqlite.py /refdata/rie.db
 
-            echo "ok  demo data loaded: $($PSQL 'select count(*) from claims') claims"
+            echo "ok  claims now in the database: $(docker compose -f "$COMPOSE" exec -T db                  psql -U rie -d rie -tAc 'select count(*) from claims')"
           ENDSSH
