@@ -13,11 +13,12 @@ from fastapi.responses import FileResponse, JSONResponse
 from starlette.middleware.sessions import SessionMiddleware
 
 from .admin_service import AdminError
+from .price_list_service import PriceListError
 from .rates_service import RateError
 from .api import (
     accidents, admin, audit, auth, cases, claims, coding, dashboard, disputes, governance, health,
     leakage, lifecycle, litigation, medical_reports, merits, notifications, offers, parties,
-    payments, practices, rails,
+    payments, practices, price_lists, rails,
     rates, reasons, reference, remittances, serious_injury, undertakings,
 )
 from .config import IS_DEV, SECRET_KEY, check_secrets
@@ -62,13 +63,19 @@ async def _rate_err(request: Request, exc: RateError) -> JSONResponse:
     return JSONResponse(status_code=exc.status, content={"detail": exc.detail})
 
 
+@app.exception_handler(PriceListError)
+async def _price_list_err(request: Request, exc: PriceListError) -> JSONResponse:
+    return JSONResponse(status_code=exc.status, content={"detail": exc.detail})
+
+
 app.include_router(health.router)
 for r in (auth.router, claims.router, offers.router, reasons.router, dashboard.router,
           accidents.router, leakage.router, lifecycle.router, merits.router,
           serious_injury.router, undertakings.router, litigation.router, payments.router,
           parties.router, audit.router, cases.router, disputes.router, governance.router,
           admin.router, coding.router, notifications.router, reference.router, rates.router,
-          remittances.router, medical_reports.router, practices.router):
+          remittances.router, medical_reports.router, practices.router,
+          price_lists.router):
     app.include_router(r, prefix="/api")
 
 app.include_router(rails.router)          # provider->fund rails: /rails/v1/... (JWS-authenticated)

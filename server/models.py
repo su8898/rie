@@ -620,3 +620,63 @@ class PaymentEvent(Base):
     amount: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     detail: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+# ── price lists (administrator-maintained reference data) ─────────────────────
+class RefPriceList(Base):
+    """A named price list: one edition of a tariff, held whole. It carries its own source,
+    edition and legal status, so a tariff the Fund may not enforce is recorded as such instead
+    of being left out. Entries are edited while the list is a DRAFT; a PUBLISHED list is fixed
+    and a correction is made by issuing a new edition from it. Holding a list here prices
+    nothing: the engine still reads its rates from the dated rate store."""
+    __tablename__ = "ref_price_list"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String, unique=True)
+    edition: Mapped[str] = mapped_column(String, default="")
+    source: Mapped[str] = mapped_column(String, default="")           # where it was published
+    legal_status: Mapped[str] = mapped_column(String, default="ACCEPTED")   # engine LegalStatus name
+    status_note: Mapped[str] = mapped_column(String, default="")      # why it has that standing
+    state: Mapped[str] = mapped_column(String, default="DRAFT", index=True)  # DRAFT|PUBLISHED|RETIRED
+    effective_from: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    effective_to: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    notes: Mapped[str] = mapped_column(String, default="")
+    copied_from: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)   # the edition it was issued from
+    created_by: Mapped[str] = mapped_column(String, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime)
+    published_by: Mapped[str] = mapped_column(String, default="")
+    published_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    retired_by: Mapped[str] = mapped_column(String, default="")
+    retired_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class RefPriceListFactor(Base):
+    """A conversion factor a price list prints for turning units into rand (for example a
+    consultation factor). Recorded with the list; applied to nothing on its own."""
+    __tablename__ = "ref_price_list_factor"
+    __table_args__ = (UniqueConstraint("list_id", "name", name="uq_ref_price_list_factor_name"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    list_id: Mapped[int] = mapped_column(ForeignKey("ref_price_list.id"), index=True)
+    name: Mapped[str] = mapped_column(String)
+    value: Mapped[float] = mapped_column(Float)
+
+
+class RefPriceListEntry(Base):
+    """One figure in a price list: a code, in a discipline, under one price column. A code that
+    prints several columns (specialist and general practitioner, or one per practice type) has
+    one entry per column. Units and rand value are both optional, because some lists print units
+    only and some rows print no fee at all. Codes are kept exactly as the list prints them."""
+    __tablename__ = "ref_price_list_entry"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    list_id: Mapped[int] = mapped_column(ForeignKey("ref_price_list.id"), index=True)
+    seq: Mapped[int] = mapped_column(Integer, default=0)              # order within the list
+    discipline: Mapped[str] = mapped_column(String, default="", index=True)
+    code: Mapped[str] = mapped_column(String, default="", index=True)
+    alt_code: Mapped[str] = mapped_column(String, default="")
+    price_column: Mapped[str] = mapped_column(String, default="standard")
+    description: Mapped[str] = mapped_column(String, default="")
+    units: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    units_suffix: Mapped[str] = mapped_column(String, default="")
+    value_rand: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    unit_of_issue: Mapped[str] = mapped_column(String, default="")
+    source_page: Mapped[str] = mapped_column(String, default="")
+    note: Mapped[str] = mapped_column(String, default="")

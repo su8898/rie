@@ -90,6 +90,28 @@ percentage increase (one key or every key in a filter), correct, retire, CSV imp
 Maintenance is forward-only and every change writes `ref_rate_log` and the admin audit log.
 Existing databases need `alembic upgrade head` (migration `d4b7e2a91c35`).
 
+### Price lists
+
+A **price list** is one edition of a tariff held whole, as reference data an administrator creates
+and maintains (`ref_price_list`, `ref_price_list_entry`, `ref_price_list_factor`). It records the
+list's name, edition, where it was published and its **legal standing** (`ENFORCEABLE`, `ACCEPTED`
+or `INTERDICTED`, the engine's own vocabulary). An entry is one figure: a code, in a discipline,
+under one price column, with a description, units and a rand value. Either figure may be absent,
+because some lists print units only. The conversion factors a list prints are recorded with it.
+
+A list is a `DRAFT` until it is published. Entries are added one by one or loaded from a CSV file
+(`code`, plus any of `discipline, alt_code, price_column, description, units, units_suffix,
+value_rand, unit_of_issue, source_page, note`). A `PUBLISHED` list is fixed: a correction is a new
+edition issued from it (`/copy`), so what was published stays on the books. Its legal standing can
+still change, with a reason, because standing changes after publication. Every change is written
+to the admin audit log.
+
+**Holding a price list prices nothing.** The engine reads the dated rate store above; nothing in
+`server/price_list_service.py` writes to it, and a test asserts that. Browse and maintain lists
+under **Reference → Price lists** or over `/api/price-lists`. The RAF tariff extract in
+`db/raf_tariff/` loads through the same import. Existing databases need `alembic upgrade head`
+(migration `a7e1c5d9f468`).
+
 ## Coding rules and billing signals
 
 Ported from CIE's coding rules and scorer signals; specified first in `spec/rie_engine.py` (§4b, §7b).
@@ -265,6 +287,10 @@ is the seam for a live feed and is inert today. Existing databases need `alembic
 | GET | `/api/dashboard` | band/disposition mix, exposure, eligibility |
 | GET | `/api/rates?source=&q=&on=` · `/versions` · `/log` · `/export` | rate in force on a date, version history, change trail, CSV |
 | POST | `/api/rates` · `/increase` · `/bulk-increase` · `/import` · `/{id}/adjust` · `/{id}/retire` | dated rate maintenance (ADMIN) |
+| GET | `/api/price-lists` · `/{id}` · `/{id}/entries?q=&discipline=&column=&priced=` · `/{id}/export` · `/{id}/history` | price lists: all lists, one list with its factors and disciplines, its entries, CSV, change history |
+| POST · PATCH · DELETE | `/api/price-lists` · `/{id}` | create a draft, edit its details, delete a draft (ADMIN) |
+| POST · PATCH · DELETE | `/api/price-lists/{id}/entries` · `/entries/{entry_id}` · `/import` | add, edit, remove or load the entries of a draft (ADMIN) |
+| POST · PUT | `/api/price-lists/{id}/publish` · `/retire` · `/copy` · `/legal-status` · `/factors` | publish, retire, issue a new edition, change legal standing, set conversion factors (ADMIN) |
 | GET · POST · DELETE | `/api/admin/code-rules` · `/api/admin/code-rules/{code}` | coding rules per tariff code (ADMIN) |
 | GET | `/api/coding/drift?min_months=&min_lines=` | providers whose billing ratio is rising |
 | GET | `/api/payments/queue` | claims cleared for payment and not yet paid, with how each would be paid and why one cannot be added (`blocked`) |

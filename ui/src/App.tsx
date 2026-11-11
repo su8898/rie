@@ -35,6 +35,8 @@ const NotificationsPage = lazy(() => import("./pages/Notifications"));
 const PaymentsPage = lazy(() => import("./pages/Payments"));
 const PracticesPage = lazy(() => import("./pages/Practices"));
 const PracticeRecordPage = lazy(() => import("./pages/PracticeRecord"));
+const PriceListsPage = lazy(() => import("./pages/PriceLists"));
+const PriceListRecordPage = lazy(() => import("./pages/PriceListRecord"));
 const PaymentRunPage = lazy(() => import("./pages/PaymentRun"));
 const RemittanceAdvicePage = lazy(() => import("./pages/RemittanceAdvice"));
 const ReasonsPage = lazy(() => import("./pages/Reasons"));
@@ -73,6 +75,8 @@ export default function App() {
         <Route path="/governance" element={<GovernancePage />} />
         <Route path="/notifications" element={<NotificationsPage />} />
         <Route path="/reference" element={<ReferencePage />} />
+        <Route path="/price-lists" element={<PriceListsPage />} />
+        <Route path="/price-lists/:id" element={<PriceListRecordPage />} />
         <Route path="/reasons" element={<ReasonsPage />} />
         <Route path="/admin" element={<AdminLayout />}>
           <Route index element={<Navigate to="users" replace />} />
