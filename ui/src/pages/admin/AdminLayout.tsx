@@ -13,6 +13,10 @@ export const ADMIN_SECTIONS: { group: string; items: { to: string; label: string
     { to: "cap", label: "Statutory cap" }, { to: "preauth", label: "Pre-authorisation codes" },
     { to: "coding-rules", label: "Coding rules" }, { to: "signals", label: "Signal modes" },
   ] },
+  { group: "Reference data", items: [
+    { to: "diagnosis-codes", label: "Diagnosis codes" }, { to: "exclusions", label: "Flat-rate exclusions" },
+    { to: "crosswalk", label: "Code crosswalk" },
+  ] },
   { group: "Oversight", items: [{ to: "audit", label: "Audit log" }] },
 ];
 

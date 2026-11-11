@@ -154,9 +154,11 @@ def _load_non_benchmarkable(db) -> int:
     """Add the flat-rate exclusions that are not already listed (codes stored normalised). Rows
     an operator added are left alone; nothing is removed."""
     have = set(db.scalars(select(models.RefNonBench.code)))
-    new = sorted({_norm(c) for c in NON_BENCHMARKABLE} - {_norm(c) for c in have})
+    reasons = {_norm(c): why for c, why in NON_BENCHMARKABLE.items()}
+    new = sorted(set(reasons) - {_norm(c) for c in have})
     if new:
-        _bulk(db, models.RefNonBench, [{"code": c} for c in new])
+        _bulk(db, models.RefNonBench,
+              [{"code": c, "reason": reasons[c], "origin": "loader", "created_by": ""} for c in new])
     return len(new)
 
 

@@ -13,6 +13,9 @@ const AdminLayout = lazy(() => import("./pages/admin/AdminLayout"));
 const AuditLogAdmin = lazy(() => import("./pages/admin/AuditLog"));
 const ChannelAccessAdmin = lazy(() => import("./pages/admin/ChannelAccess"));
 const CodingRulesAdmin = lazy(() => import("./pages/admin/CodingRules"));
+const CrosswalkAdmin = lazy(() => import("./pages/admin/Crosswalk"));
+const DiagnosisCodesAdmin = lazy(() => import("./pages/admin/DiagnosisCodes"));
+const ExclusionsAdmin = lazy(() => import("./pages/admin/Exclusions"));
 const DatedRatesAdmin = lazy(() => import("./pages/admin/DatedRates"));
 const NegotiatedRatesAdmin = lazy(() => import("./pages/admin/NegotiatedRates"));
 const PreauthCodesAdmin = lazy(() => import("./pages/admin/PreauthCodes"));
@@ -88,6 +91,9 @@ export default function App() {
           <Route path="preauth" element={<PreauthCodesAdmin />} />
           <Route path="coding-rules" element={<CodingRulesAdmin />} />
           <Route path="signals" element={<SignalModesAdmin />} />
+          <Route path="diagnosis-codes" element={<DiagnosisCodesAdmin />} />
+          <Route path="exclusions" element={<ExclusionsAdmin />} />
+          <Route path="crosswalk" element={<CrosswalkAdmin />} />
           <Route path="audit" element={<AuditLogAdmin />} />
         </Route>
       </Route>

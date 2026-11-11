@@ -1,0 +1,331 @@
+name: Deploy to server
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+env:
+  REMOTE_DIR: /opt/rie
+  COMPOSE: docker-compose.prod.yml
+  DEFAULT_DOMAIN: rie.devstg.win
+
+# This stack shares a server with /opt/cie. Never let two of its deploys build at once.
+concurrency:
+  group: deploy-rie-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check the required secrets are set
+        env:
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          RIE_SECRET_KEY: ${{ secrets.RIE_SECRET_KEY }}
+          RIE_RAILS_SECRET: ${{ secrets.RIE_RAILS_SECRET }}
+          RIE_PSEUDONYM_SECRET: ${{ secrets.RIE_PSEUDONYM_SECRET }}
+          RIE_BOOTSTRAP_ADMIN_PASSWORD: ${{ secrets.RIE_BOOTSTRAP_ADMIN_PASSWORD }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          DROPLET_HOST: ${{ secrets.DROPLET_HOST }}
+        run: |
+          set -euo pipefail
+          ok=1
+          for v in SSH_PRIVATE_KEY DROPLET_HOST POSTGRES_PASSWORD RIE_BOOTSTRAP_ADMIN_PASSWORD; do
+            [ -n "${!v:-}" ] || { echo "x the repository secret $v is not set"; ok=0; }
+          done
+          # The API refuses to start in prod with a secret shorter than 32 characters, which
+          # would show up as an unhealthy container after the old one was already replaced.
+          for v in RIE_SECRET_KEY RIE_RAILS_SECRET RIE_PSEUDONYM_SECRET; do
+            val="${!v:-}"
+            [ "${#val}" -ge 32 ] || { echo "x the repository secret $v is unset or shorter than 32 characters (openssl rand -hex 32)"; ok=0; }
+          done
+          # Values are written to the server's .env single-quoted (see "Write .env").
+          for v in RIE_SECRET_KEY RIE_RAILS_SECRET RIE_PSEUDONYM_SECRET RIE_BOOTSTRAP_ADMIN_PASSWORD; do
+            case "${!v:-}" in
+              *"'"*|*'\'*) echo "x the repository secret $v must not contain a single quote or a backslash"; ok=0;;
+            esac
+          done
+          # The password is embedded in the database URL unquoted.
+          case "${POSTGRES_PASSWORD:-}" in
+            *[!A-Za-z0-9_.~-]*)
+              echo "x POSTGRES_PASSWORD may contain only letters, digits, '-', '_', '.' and '~'"; ok=0;;
+          esac
+          if [ "$ok" -ne 1 ]; then
+            echo ""
+            echo "See .env.prod.example for what each secret holds."
+            echo "(Deploy aborted before any change — the server is untouched.)"
+            exit 1
+          fi
+          echo "ok  secrets present"
+
+      - name: Setup SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_PASSPHRASE: ${{ secrets.SSH_PASSPHRASE }}
+          DROPLET_HOST: ${{ secrets.DROPLET_HOST }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -H "$DROPLET_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+          # Only needed if the key has a passphrase; an unencrypted key just works.
+          eval "$(ssh-agent -s)"
+          if [ -n "${SSH_PASSPHRASE:-}" ]; then
+            PASS_HELPER=~/.ssh/askpass.sh
+            printf '%s\n' '#!/usr/bin/env bash' 'echo "$SSH_PASSPHRASE"' > "$PASS_HELPER"
+            chmod 700 "$PASS_HELPER"
+            DISPLAY=:0 SSH_ASKPASS="$PASS_HELPER" setsid -f ssh-add ~/.ssh/id_deploy </dev/null
+          else
+            ssh-add ~/.ssh/id_deploy
+          fi
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+
+      - name: Check the server is ready for this stack
+        env:
+          DROPLET_HOST: ${{ secrets.DROPLET_HOST }}
+          DROPLET_USER: ${{ secrets.DROPLET_USER }}
+          EDGE_NETWORK: ${{ secrets.EDGE_NETWORK }}
+        run: |
+          set -euo pipefail
+          USER_ON_HOST="${DROPLET_USER:-root}"
+          SSH_OPTS="-o StrictHostKeyChecking=no -o IdentitiesOnly=yes -i ~/.ssh/id_deploy"
+          NET="${EDGE_NETWORK:-cie-prod_default}"
+
+          # /opt/cie's deploy/bootstrap-server.sh already installed docker+rsync and put the
+          # deploy user in the docker group, so nothing here needs sudo.
+          ssh $SSH_OPTS "${USER_ON_HOST}@${DROPLET_HOST}" \
+              REMOTE_DIR="${{ env.REMOTE_DIR }}" NET="$NET" LOGIN="${USER_ON_HOST}@SERVER" bash -s <<'ENDSSH'
+            set -e
+            ok=1
+
+            command -v rsync >/dev/null 2>&1 || { echo "x rsync is not installed"; ok=0; }
+            docker info >/dev/null 2>&1     || { echo "x cannot run docker as $(id -un) (not in the docker group?)"; ok=0; }
+
+            # /opt is root-owned, so the deploy user cannot create a sibling of /opt/cie by
+            # itself. Try the plain way, then passwordless sudo, then a one-shot container
+            # (docker-group membership is what this whole workflow already rests on).
+            if [ ! -d "$REMOTE_DIR" ]; then
+              if mkdir -p "$REMOTE_DIR" 2>/dev/null; then
+                echo "ok  created $REMOTE_DIR"
+              elif sudo -n mkdir -p "$REMOTE_DIR" 2>/dev/null && sudo -n chown "$(id -u):$(id -g)" "$REMOTE_DIR" 2>/dev/null; then
+                echo "ok  created $REMOTE_DIR with sudo"
+              elif docker run --rm -v /opt:/opt alpine sh -c "mkdir -p $REMOTE_DIR && chown $(id -u):$(id -g) $REMOTE_DIR"; then
+                echo "ok  created $REMOTE_DIR via a docker one-shot (no sudo available)"
+              fi
+            fi
+            if [ ! -w "$REMOTE_DIR" ]; then
+              echo "x $REMOTE_DIR is missing or not writable by $(id -un). On the server, once:"
+              echo "      sudo mkdir -p $REMOTE_DIR && sudo chown -R \$(id -un):\$(id -gn) $REMOTE_DIR"
+              ok=0
+            else
+              mkdir -p "$REMOTE_DIR/refdata"
+            fi
+
+            # THE EDGE NETWORK IS THE WHOLE INTEGRATION. This stack publishes no ports; it is
+            # reachable only because api joins the network the CIE stack's Caddy is on.
+            if ! docker network inspect "$NET" >/dev/null 2>&1; then
+              echo "x the edge network '$NET' does not exist on this server."
+              echo "  It is created by the CIE stack in /opt/cie. Confirm the name with"
+              echo "      docker network ls | grep -i cie"
+              echo "  and, if it differs, set the EDGE_NETWORK repository secret to it."
+              ok=0
+            fi
+
+            # reference.db (59 MB) is not in git. It is needed exactly once: to fill an empty
+            # database. Once the database volume exists the file is no longer required.
+            if ! docker volume inspect rie-prod_rie_pgdata >/dev/null 2>&1 \
+               && [ ! -f "$REMOTE_DIR/refdata/reference.db" ]; then
+              echo "x first deploy: $REMOTE_DIR/refdata/reference.db is not on the server."
+              echo "  Copy it up once, from a checkout on YOUR machine:"
+              echo ""
+              echo "      scp reference.db $LOGIN:$REMOTE_DIR/refdata/reference.db"
+              echo ""
+              echo "  then re-run this workflow."
+              ok=0
+            fi
+
+            [ "$ok" -eq 1 ] || exit 1
+            echo "ok  server ready — docker usable, $REMOTE_DIR writable, '$NET' present"
+          ENDSSH
+
+      - name: Sync repository to server
+        env:
+          DROPLET_HOST: ${{ secrets.DROPLET_HOST }}
+          DROPLET_USER: ${{ secrets.DROPLET_USER }}
+        run: |
+          set -euo pipefail
+          USER_ON_HOST="${DROPLET_USER:-root}"
+          SSH_OPTS="-o StrictHostKeyChecking=no -o IdentitiesOnly=yes -i ~/.ssh/id_deploy"
+
+          # --delete keeps the server a mirror of master. Two things live only on the server
+          # and must survive it: .env (written in the next step from secrets) and refdata/
+          # (the reference snapshot copied up by hand). The database is a docker volume.
+          rsync -az --delete \
+            --exclude ".git" \
+            --exclude ".env" \
+            --exclude "refdata" \
+            --exclude "__pycache__" \
+            --exclude ".pytest_cache" \
+            -e "ssh $SSH_OPTS" \
+            ./ "${USER_ON_HOST}@${DROPLET_HOST}:${{ env.REMOTE_DIR }}/"
+
+      - name: Write .env from secrets
+        env:
+          DROPLET_HOST: ${{ secrets.DROPLET_HOST }}
+          DROPLET_USER: ${{ secrets.DROPLET_USER }}
+          EDGE_NETWORK: ${{ secrets.EDGE_NETWORK }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          RIE_SECRET_KEY: ${{ secrets.RIE_SECRET_KEY }}
+          RIE_RAILS_SECRET: ${{ secrets.RIE_RAILS_SECRET }}
+          RIE_PSEUDONYM_SECRET: ${{ secrets.RIE_PSEUDONYM_SECRET }}
+          RIE_BOOTSTRAP_ADMIN_PASSWORD: ${{ secrets.RIE_BOOTSTRAP_ADMIN_PASSWORD }}
+          RIE_RAILS_SIGNING_KEY: ${{ secrets.RIE_RAILS_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          USER_ON_HOST="${DROPLET_USER:-root}"
+          SSH_OPTS="-o StrictHostKeyChecking=no -o IdentitiesOnly=yes -i ~/.ssh/id_deploy"
+
+          # docker compose reads '$' in a .env file as the start of a variable, and an unquoted
+          # value ends at whitespace. Single-quote each value (compose takes it literally) —
+          # which also carries a multi-line PEM intact. The first step has already refused
+          # values containing a single quote or a backslash, the two things this cannot carry.
+          q() { printf "%s='%s'\n" "$1" "$2"; }
+
+          # Built on the runner and piped over stdin, so the values never appear in argv or in
+          # a process list on the server.
+          {
+            echo "EDGE_NETWORK=${EDGE_NETWORK:-cie-prod_default}"
+            echo "RIE_APP_ENV=prod"
+            echo "TZ=Africa/Johannesburg"
+            q POSTGRES_PASSWORD "$POSTGRES_PASSWORD"
+            q RIE_SECRET_KEY "$RIE_SECRET_KEY"
+            q RIE_RAILS_SECRET "$RIE_RAILS_SECRET"
+            q RIE_PSEUDONYM_SECRET "$RIE_PSEUDONYM_SECRET"
+            q RIE_BOOTSTRAP_ADMIN_PASSWORD "$RIE_BOOTSTRAP_ADMIN_PASSWORD"
+            if [ -n "${RIE_RAILS_SIGNING_KEY:-}" ]; then q RIE_RAILS_SIGNING_KEY "$RIE_RAILS_SIGNING_KEY"; fi
+          } | ssh $SSH_OPTS "${USER_ON_HOST}@${DROPLET_HOST}" \
+                "umask 077 && cat > ${{ env.REMOTE_DIR }}/.env && echo 'ok  wrote .env'"
+
+      - name: Deploy
+        env:
+          DROPLET_HOST: ${{ secrets.DROPLET_HOST }}
+          DROPLET_USER: ${{ secrets.DROPLET_USER }}
+        run: |
+          set -euo pipefail
+          USER_ON_HOST="${DROPLET_USER:-root}"
+          SSH_OPTS="-o StrictHostKeyChecking=no -o IdentitiesOnly=yes -i ~/.ssh/id_deploy"
+
+          ssh $SSH_OPTS "${USER_ON_HOST}@${DROPLET_HOST}" bash -s <<'ENDSSH'
+            set -euo pipefail
+            cd /opt/rie
+            COMPOSE="docker-compose.prod.yml"
+
+            # Build first, separately, so a broken Dockerfile fails here with the running site
+            # untouched rather than halfway through a recreate.
+            docker compose -f "$COMPOSE" build
+
+            # `init` runs to completion before the api is replaced: it applies pending Alembic
+            # migrations and loads reference.db only into an empty database, so a redeploy never
+            # overwrites data. If it fails, compose stops here and says so.
+            if ! docker compose -f "$COMPOSE" up -d --remove-orphans; then
+              echo "x  the stack did not come up — init output:"
+              docker compose -f "$COMPOSE" logs --tail=60 init
+              exit 1
+            fi
+            docker compose -f "$COMPOSE" logs --tail=10 init
+
+            echo "-> waiting for the api to report healthy"
+            CID="$(docker compose -f "$COMPOSE" ps -q api)"
+            for i in $(seq 1 40); do
+              STATUS="$(docker inspect --format='{{.State.Health.Status}}' "$CID" 2>/dev/null || echo unknown)"
+              if [ "$STATUS" = "healthy" ]; then echo "ok  api healthy"; break; fi
+              if [ "$i" -eq 40 ]; then
+                echo "x  api did not become healthy — last 60 log lines:"
+                docker compose -f "$COMPOSE" logs --tail=60 api
+                exit 1
+              fi
+              echo "   ($i/40) api: $STATUS"
+              sleep 5
+            done
+
+            # Prove the reference data is there, not merely that a process is up.
+            echo "-> tariff rows: $(docker compose -f "$COMPOSE" exec -T db \
+                 psql -U rie -d rie -tAc 'select count(*) from ref_rpl' 2>/dev/null || echo '?')"
+
+            docker image prune -f >/dev/null 2>&1 || true
+            echo ""
+            docker compose -f "$COMPOSE" ps
+          ENDSSH
+
+      - name: Make sure the CIE edge is serving this hostname
+        env:
+          DROPLET_HOST: ${{ secrets.DROPLET_HOST }}
+          DROPLET_USER: ${{ secrets.DROPLET_USER }}
+          APP_DOMAIN: ${{ secrets.APP_DOMAIN }}
+        run: |
+          set -euo pipefail
+          USER_ON_HOST="${DROPLET_USER:-root}"
+          SSH_OPTS="-o StrictHostKeyChecking=no -o IdentitiesOnly=yes -i ~/.ssh/id_deploy"
+          DOMAIN="${APP_DOMAIN:-${{ env.DEFAULT_DOMAIN }}}"
+
+          # The site block for this hostname lives in the CIE repo's deploy/Caddyfile and only
+          # takes effect when Caddy is reloaded. That repo's deploy does the reload; do it from
+          # here too so the order the two repos deploy in does not matter. It is idempotent,
+          # and Caddy refuses a bad file and keeps serving the old one.
+          ssh $SSH_OPTS "${USER_ON_HOST}@${DROPLET_HOST}" DOMAIN="$DOMAIN" bash -s <<'ENDSSH'
+            set -euo pipefail
+            CIE=/opt/cie
+            if [ ! -f "$CIE/deploy/Caddyfile" ]; then
+              echo "note: $CIE/deploy/Caddyfile not found — nothing to reload"; exit 0
+            fi
+            if ! grep -q "^$DOMAIN" "$CIE/deploy/Caddyfile"; then
+              echo "x  $CIE/deploy/Caddyfile has no site block for $DOMAIN."
+              echo "   Add deploy/caddy-block.txt from this repo to the CIE repo and push it."
+              exit 0
+            fi
+            cd "$CIE"
+            docker compose -f docker-compose.prod.yml exec -T caddy \
+              caddy reload --config /etc/caddy/Caddyfile
+            echo "ok  CIE caddy reloaded with the block for $DOMAIN"
+          ENDSSH
+
+      - name: Confirm the edge is actually serving it
+        env:
+          APP_DOMAIN: ${{ secrets.APP_DOMAIN }}
+        run: |
+          set -euo pipefail
+          DOMAIN="${APP_DOMAIN:-${{ env.DEFAULT_DOMAIN }}}"
+
+          # Healthy containers say nothing about whether Caddy knows this stack exists. Ask
+          # from outside. Right after a reload Caddy still has to obtain the certificate, so
+          # keep asking for up to three minutes.
+          code=000
+          for i in $(seq 1 18); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "https://${DOMAIN}/healthz" || echo 000)"
+            echo "  ($i/18) https://${DOMAIN}/healthz -> $code"
+            [ "$code" = "200" ] && break
+            sleep 10
+          done
+
+          if [ "$code" != "200" ]; then
+            echo ""
+            echo "The stack is up and healthy on the server, but the public hostname did not"
+            echo "answer. The usual causes, in order:"
+            echo ""
+            echo "  1. deploy/Caddyfile in the CIE repo has no block for ${DOMAIN} (it is in"
+            echo "     deploy/caddy-block.txt here), or that repo has not deployed since."
+            echo "  2. No A record for ${DOMAIN} pointing at this server, so Caddy cannot"
+            echo "     complete the ACME challenge and has no certificate."
+            echo "  3. The network alias changed. docker-compose.prod.yml sets 'rie-app'; the"
+            echo "     Caddyfile must name the same thing."
+            echo ""
+            echo "The deployment itself succeeded — this step only reports reachability."
+            exit 1
+          fi
+          echo "ok  ${DOMAIN} is serving"

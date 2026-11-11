@@ -75,6 +75,50 @@ NAPPI Traumeel → R43.54 SEP+fee. Browse it at `/api/reference/{tariffs,nappi,i
 To load reference data into any target DB directly (SQLite or Postgres):
 `RIE_DATABASE_URL=... python3 db/load_reference.py`.
 
+## Production deployment (GitHub Actions → the shared server)
+
+A push to `master` runs [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml), which
+rsyncs the repo to `/opt/rie` on the server that hosts the CIE (COIDA) stack and brings up
+[`docker-compose.prod.yml`](docker-compose.prod.yml): PostgreSQL 16, a one-shot `init`
+([`db/deploy_init.py`](db/deploy_init.py)) and the API. The stack publishes no ports — the `api`
+container joins the CIE stack's Caddy network as `rie-app`, and Caddy serves it at
+`https://rie.devstg.win` with an automatic certificate.
+
+`init` runs before the API on every deploy: it applies pending Alembic migrations, loads
+`reference.db` **only into an empty database** (a redeploy never overwrites reference data
+maintained in the app), and seeds the bootstrap admin and statutory config. The database lives in
+the `rie-prod_rie_pgdata` volume and survives deploys.
+
+One-time setup:
+
+1. **DNS** — an A record for `rie.devstg.win` pointing at the server.
+2. **Caddy** — add [`deploy/caddy-block.txt`](deploy/caddy-block.txt) to `deploy/Caddyfile` in the
+   CIE repo and push it (that repo's deploy reloads Caddy; this one reloads it too).
+3. **Reference data** — `reference.db` is not in git. Copy it up once:
+   `scp reference.db USER@SERVER:/opt/rie/refdata/reference.db` (the first workflow run creates
+   `/opt/rie/refdata` and stops with this instruction if the file is missing).
+4. **Repository secrets** (Settings → Secrets and variables → Actions) — see
+   [`.env.prod.example`](.env.prod.example):
+
+   | Secret | Value |
+   |---|---|
+   | `SSH_PRIVATE_KEY`, `DROPLET_HOST`, `DROPLET_USER` | the same server login the CIE repo deploys with (`SSH_PASSPHRASE` if the key has one) |
+   | `POSTGRES_PASSWORD` | letters, digits, `-_.~` only; fixed once the volume exists |
+   | `RIE_SECRET_KEY`, `RIE_RAILS_SECRET`, `RIE_PSEUDONYM_SECRET` | `openssl rand -hex 32` each; keep `RIE_PSEUDONYM_SECRET` forever |
+   | `RIE_BOOTSTRAP_ADMIN_PASSWORD` | password of the first `admin` user |
+   | `APP_DOMAIN`, `EDGE_NETWORK`, `RIE_RAILS_SIGNING_KEY` | optional — default `rie.devstg.win`, `cie-prod_default`, a key generated per restart |
+
+To reload the reference snapshot on purpose (this replaces the tariff, NAPPI and ICD-10 tables):
+`cd /opt/rie && RIE_RELOAD_REFERENCE=1 docker compose -f docker-compose.prod.yml run --rm init`.
+
+**Run the same stack locally** (app on http://localhost:8021, nothing else published):
+
+```bash
+cp .env.prod.example .env.local            # fill in the secrets
+mkdir -p refdata && cp reference.db refdata/
+docker compose -p rie-local --env-file .env.local   -f docker-compose.prod.yml -f docker-compose.local.yml up -d --build
+```
+
 ## Dated reference rates
 
 The payment-rule rates — the tariff by discipline (`RPL`), negotiated rates and the NAPPI single
@@ -89,6 +133,29 @@ Maintain them under **Administration → Dated rates** or over `/api/rates` (ADM
 percentage increase (one key or every key in a filter), correct, retire, CSV import and export.
 Maintenance is forward-only and every change writes `ref_rate_log` and the admin audit log.
 Existing databases need `alembic upgrade head` (migration `d4b7e2a91c35`).
+
+### Reference data maintained on screen
+
+Three more data sets are maintained under **Administration → Reference data** instead of by a
+script or in the program (`server/reference_admin_service.py`). Every change is audit-logged.
+
+- **Diagnosis codes** (`ref_icd10`): add a code, correct its wording, change whether it may be
+  coded and whether it may be a primary diagnosis, remove it, or load an edition from a CSV file
+  (`code, description`, optionally `code3_desc, chapter_desc, valid_primary, valid_clinical`). A
+  file updates the codes it names and leaves the rest alone. Naming the edition stamps
+  `ref_edition`. Diagnosis codes are a lookup: a change alters no claim already decided.
+- **Flat-rate exclusions** (`ref_non_bench`): the tariff codes that are not compared with a flat
+  rate, each with the reason. A line under one goes to review (`REFERENCE_UNRESOLVED`). Adding or
+  removing a code takes effect on the next claim assessed.
+- **Code crosswalk** (`ref_crosswalk`): a code billed under another tariff is paid at the rate of
+  a code in the loaded price list. The crosswalk was a constant in `server/crosswalk.py`; that
+  list now only fills a new, untouched database. `build_refbook` reads the table, and **only a
+  `CONFIRMED` entry changes what is paid**. Confirming is a sign-off that needs a reason and
+  records who gave it. Changing the target of a confirmed entry returns it to `PROPOSED`. The
+  page shows what each entry does today: in use, not signed off, ignored because the billed code
+  has a rate of its own, or no effect because the target has no rate.
+
+Existing databases need `alembic upgrade head` (migration `b9d2f6a3e715`).
 
 ### Price lists
 
@@ -292,6 +359,9 @@ is the seam for a live feed and is inert today. Existing databases need `alembic
 | POST · PATCH · DELETE | `/api/price-lists/{id}/entries` · `/entries/{entry_id}` · `/import` | add, edit, remove or load the entries of a draft (ADMIN) |
 | POST · PUT | `/api/price-lists/{id}/publish` · `/retire` · `/copy` · `/legal-status` · `/factors` | publish, retire, issue a new edition, change legal standing, set conversion factors (ADMIN) |
 | GET · POST · DELETE | `/api/admin/code-rules` · `/api/admin/code-rules/{code}` | coding rules per tariff code (ADMIN) |
+| GET · POST · DELETE | `/api/admin/icd10?q=&use=` · `/icd10/summary` · `/icd10/import` · `/icd10/{code}` | diagnosis codes: search, counts and edition, add or correct one, load an edition by file, remove (ADMIN) |
+| GET · POST | `/api/admin/exclusions` · `/exclusions/remove` | tariff codes not priced at a flat rate, each with its reason (ADMIN) |
+| GET · POST | `/api/admin/crosswalk` · `/crosswalk/status` · `/crosswalk/remove` | the code crosswalk: entries with their effect on pricing, add or edit, sign off or withdraw, remove (ADMIN) |
 | GET | `/api/coding/drift?min_months=&min_lines=` | providers whose billing ratio is rising |
 | GET | `/api/payments/queue` | claims cleared for payment and not yet paid, with how each would be paid and why one cannot be added (`blocked`) |
 | GET | `/api/payments/runs?status=&q=&direction=` | payment-run worklist: `{rows, total, counts}` |

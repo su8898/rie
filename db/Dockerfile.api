@@ -21,4 +21,8 @@ COPY db ./db
 COPY alembic.ini ./alembic.ini
 COPY --from=ui /ui/dist ./ui/dist
 EXPOSE 8021
-CMD ["uvicorn", "server.main:app", "--host", "0.0.0.0", "--port", "8021"]
+# Healthy means the process answers AND it can reach its database (/healthz reports both).
+HEALTHCHECK --interval=10s --timeout=5s --start-period=20s --retries=6   CMD python -c "import json,sys,urllib.request as u; sys.exit(0 if json.load(u.urlopen('http://127.0.0.1:8021/healthz', timeout=4)).get('db') == 'up' else 1)"
+# --proxy-headers: in production the app sits behind a TLS-terminating reverse proxy on a private
+# docker network, so trust its X-Forwarded-* headers (scheme and client address).
+CMD ["uvicorn", "server.main:app", "--host", "0.0.0.0", "--port", "8021", "--proxy-headers", "--forwarded-allow-ips", "*"]

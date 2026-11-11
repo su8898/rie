@@ -286,6 +286,9 @@ export const AUDIT_AREAS: Record<string, string> = {
   rails_party: "Channel access",
   provider_register: "Practice register",
   price_list: "Price lists",
+  icd10: "Diagnosis codes",
+  non_bench: "Flat-rate exclusions",
+  crosswalk: "Code crosswalk",
 };
 
 /** One audit entry in plain words: what was done, and the detail worth showing beside it. */
@@ -314,6 +317,18 @@ export function describeAudit(a: { action: string; target: string; detail: Recor
     case "provider_register.add": return { title: "Practice added to the register" };
     case "provider_register.update": return { title: "Practice details changed", note: Object.keys(d).map((k) => PRACTICE_FIELDS[k] ?? k).join(", ") || undefined };
     case "provider_register.status": return { title: `Practice status changed to ${PRACTICE_STATUS[s("to")]?.label ?? s("to")}`, note: s("reason") || undefined };
+    case "icd10.add": return { title: "Diagnosis code added", note: s("description") || undefined };
+    case "icd10.update": return { title: "Diagnosis code changed", note: changedFields(d, DIAGNOSIS_FIELDS) };
+    case "icd10.remove": return { title: "Diagnosis code removed", note: s("description") || undefined };
+    case "icd10.import":
+      return { title: "Diagnosis codes loaded from a file", note: `${Number(d.added ?? 0).toLocaleString("en-ZA")} added, ${Number(d.updated ?? 0).toLocaleString("en-ZA")} updated${Number(d.failed) ? `, ${Number(d.failed).toLocaleString("en-ZA")} rows could not be read` : ""}` };
+    case "non_bench.add": return { title: "Code excluded from flat-rate pricing", note: s("reason") || undefined };
+    case "non_bench.remove": return { title: "Exclusion removed", note: s("reason") || undefined };
+    case "crosswalk.add": return { title: "Crosswalk entry added", note: s("target_code") ? `Paid at ${s("target_code")}` : "No target named" };
+    case "crosswalk.update": return { title: "Crosswalk entry changed", note: changedFields(d, CROSSWALK_FIELDS) };
+    case "crosswalk.status":
+      return { title: s("to") === "CONFIRMED" ? "Match signed off" : s("from") === "CONFIRMED" ? `Sign-off withdrawn: now ${(CROSSWALK_STATUS[s("to")]?.label ?? s("to")).toLowerCase()}` : `Status changed to ${(CROSSWALK_STATUS[s("to")]?.label ?? s("to")).toLowerCase()}`, note: s("reason") || undefined };
+    case "crosswalk.remove": return { title: "Crosswalk entry removed", note: s("target_code") ? `Was paid at ${s("target_code")}` : undefined };
     default: {
       if (a.action.startsWith("price_list.")) {
         const p = describePriceListChange(a);
@@ -466,4 +481,39 @@ export function describePriceListChange(h: { action: string; detail: Record<stri
     default: return { title: h.action.replace("price_list.", "").replace(/[._]/g, " ") };
   }
 }
+
+// ── Reference maintenance ────────────────────────────────────────────────────
+const DIAGNOSIS_FIELDS: Record<string, string> = {
+  description: "Description", code3_desc: "Category", chapter_desc: "Chapter", valid_primary: "Use as a primary diagnosis", valid_clinical: "Use on a claim",
+};
+const CROSSWALK_FIELDS: Record<string, string> = {
+  target_code: "Code it is paid at", status: "Status", family: "Family", description: "Description", evidence: "Evidence",
+};
+
+function changedFields(d: Record<string, unknown>, names: Record<string, string>): string | undefined {
+  const changed = d.changed && typeof d.changed === "object" ? Object.keys(d.changed as object) : [];
+  return changed.length ? changed.map((k) => names[k] ?? k).join(", ") : undefined;
+}
+
+/** How a diagnosis code may be used on a claim. */
+export const DIAGNOSIS_USE: Record<string, { label: string; tone: Tone; help: string }> = {
+  primary: { label: "Primary diagnosis", tone: "ok", help: "May be coded, including as the main diagnosis." },
+  secondary: { label: "Secondary only", tone: "info", help: "May be coded, but not as the main diagnosis." },
+  heading: { label: "Not coded", tone: "neutral", help: "A heading, or a code withdrawn from use. It may not be coded on a claim." },
+};
+export const diagnosisUse = (c: { valid_primary: boolean; valid_clinical: boolean }) => (c.valid_primary ? "primary" : c.valid_clinical ? "secondary" : "heading");
+
+export const CROSSWALK_STATUS: Record<string, { label: string; tone: Tone; help: string }> = {
+  CONFIRMED: { label: "Signed off", tone: "ok", help: "The match is approved. Lines under the billed code are paid up to the rate of the code it is matched to." },
+  PROPOSED: { label: "Proposed", tone: "info", help: "A match is suggested and waits for sign-off. It changes nothing yet." },
+  NEEDS_SME: { label: "Needs a specialist", tone: "warn", help: "No match has been chosen. A tariff specialist must pick one." },
+  NO_RAF_EQUIVALENT: { label: "No equivalent", tone: "neutral", help: "The loaded price list has no equivalent. Lines under this code stay unpriced." },
+};
+
+export const CROSSWALK_EFFECT: Record<string, { label: string; tone: Tone; help: string }> = {
+  IN_USE: { label: "In use", tone: "ok", help: "Lines under the billed code are paid up to this rate." },
+  NOT_SIGNED_OFF: { label: "Not in use", tone: "neutral", help: "Changes nothing until it is signed off." },
+  OWN_RATE: { label: "Ignored", tone: "warn", help: "The billed code has a rate of its own, which is used instead." },
+  TARGET_UNPRICED: { label: "No effect", tone: "warn", help: "The code it is matched to has no rate loaded." },
+};
 

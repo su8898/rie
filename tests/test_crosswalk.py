@@ -65,19 +65,23 @@ def test_every_entry_is_well_formed():
         assert e.evidence and e.corpus_desc
 
 
-def test_build_refbook_applies_confirmed_crosswalk(monkeypatch):
-    # end-to-end wiring: a CONFIRMED equivalence must flow through build_refbook into pricing.
+def test_build_refbook_applies_confirmed_crosswalk():
+    # end-to-end wiring: a CONFIRMED entry in the stored crosswalk (ref_crosswalk) must flow
+    # through build_refbook into pricing, and a PROPOSED one must not.
     from server import models
     from server.db import Base, SessionLocal, engine as db_engine
     from server.reference_data import build_refbook
 
     Base.metadata.create_all(db_engine)
     with SessionLocal() as db:
-        db.merge(models.RefRpl(code="88888", discipline="GP", rate=123.45))    # a RAF target
+        db.merge(models.RefRpl(code="88888", discipline="GP", rate=123.45))    # a priced target
+        db.merge(models.RefCrosswalk(code="77777", billed_as="77777", target_code="88888",
+                                     status=xw.CONFIRMED, evidence="unit-test equivalence"))
+        db.merge(models.RefCrosswalk(code="77778", billed_as="77778", target_code="88888",
+                                     status=xw.PROPOSED, evidence="not signed off"))
         db.commit()
-        confirmed = xw.XW("77777", "test", "unit", "88888", xw.CONFIRMED, "unit-test equivalence")
-        monkeypatch.setattr(xw, "CROSSWALK", [confirmed])
         book = build_refbook(db, nappi_codes=set())
 
     rate, src, status = resolve(book, "TARIFF", "77777")     # aliased onto 88888 by build_refbook
     assert rate == 123.45 and status.name == "ACCEPTED"
+    assert resolve(book, "TARIFF", "77778")[0] is None       # proposed only: prices nothing

@@ -1127,3 +1127,62 @@ export interface PriceListHistoryEntry {
   detail: Record<string, unknown>;
   at: string | null;
 }
+
+// ── Reference maintenance: diagnosis codes, flat-rate exclusions, crosswalk ──
+export interface DiagnosisCode {
+  code: string;
+  description: string;
+  code3_desc: string;
+  chapter_desc: string;
+  valid_primary: boolean;
+  valid_clinical: boolean;
+}
+
+export interface DiagnosisSummary {
+  total: number;
+  valid_primary: number;
+  valid_clinical: number;
+  headings: number;
+  edition: string;
+  edition_loaded_at: string | null;
+}
+
+export interface DiagnosisImportResult {
+  added: number;
+  updated: number;
+  unchanged: number;
+  failed: number;
+  errors: string[];
+  edition: string;
+}
+
+export interface Exclusion {
+  code: string;
+  reason: string;
+  origin: string;
+  created_by: string;
+  created_at: string | null;
+  has_rate: boolean;
+}
+
+export type CrosswalkStatus = "CONFIRMED" | "PROPOSED" | "NEEDS_SME" | "NO_RAF_EQUIVALENT";
+export type CrosswalkEffect = "IN_USE" | "NOT_SIGNED_OFF" | "OWN_RATE" | "TARGET_UNPRICED";
+
+export interface CrosswalkEntry {
+  code: string;
+  billed_as: string;
+  family: string;
+  description: string;
+  target_code: string | null;
+  status: CrosswalkStatus;
+  evidence: string;
+  origin: string;
+  updated_by: string;
+  updated_at: string | null;
+  confirmed_by: string;
+  confirmed_at: string | null;
+  effect: CrosswalkEffect;
+  target_rates: { discipline: string; rate: number }[];
+  own_rate: boolean;
+}
+

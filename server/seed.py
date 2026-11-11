@@ -120,10 +120,13 @@ def seed_awards(db: Session) -> None:
 
 
 def seed(db: Session) -> None:
+    from .reference_admin_service import seed_crosswalk   # imported here: it imports the admin layer
+
     seed_users(db)
     seed_statutory(db)
     seed_demo_pricing(db)
     seed_awards(db)
+    seed_crosswalk(db)
     db.commit()
 
 

@@ -1,0 +1,20 @@
+# ── RIE — RAF Integrity Engine, on its own hostname ───────────────────────────
+# Separate A record (rie.devstg.win) on this same server. The stack joins
+# this Caddy's docker network and is proxied here; it runs no Caddy of its own.
+# `rie-app` is the network alias set in that stack's docker-compose.prod.yml
+# (NOT the compose service name, which is the generic `api`) — keep the two in
+# step. Deployed from the karaboit/rie repo to /opt/rie.
+rie.devstg.win {
+	encode zstd gzip
+
+	reverse_proxy rie-app:8021
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		# Operational system behind a login — keep it out of search results.
+		X-Robots-Tag "noindex, nofollow"
+	}
+}

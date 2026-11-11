@@ -1,0 +1,19 @@
+# Run the production stack on your own machine — same images, same init step, but with the app
+# published on a local port and no dependency on the CIE server's Caddy network.
+#
+#   cp .env.prod.example .env.local        # then fill in the secrets (openssl rand -hex 32)
+#   mkdir -p refdata && cp reference.db refdata/
+#   docker compose -p rie-local --env-file .env.local \
+#     -f docker-compose.prod.yml -f docker-compose.local.yml up -d --build
+#   open http://localhost:8021             # login: admin / RIE_BOOTSTRAP_ADMIN_PASSWORD
+#
+# It runs with RIE_APP_ENV=prod, so the session cookie is Secure. Chrome, Edge and Firefox still
+# accept it on http://localhost; curl and other plain-http clients will not hold a session.
+services:
+  api:
+    ports:
+      - "127.0.0.1:${RIE_PORT:-8021}:8021"
+
+networks:
+  edge: !override
+    name: rie-local-edge

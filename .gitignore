@@ -11,3 +11,10 @@ ui/dist/
 .coverage
 htmlcov/
 *.tsbuildinfo
+
+# local/prod environment files and the reference snapshot staged for docker
+.env
+.env.*
+!.env.example
+!.env.prod.example
+refdata/

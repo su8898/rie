@@ -12,3 +12,9 @@ tests
 spec
 .venv
 *.tsbuildinfo
+refdata
+.env
+.env.*
+*.zip
+.github
+docs

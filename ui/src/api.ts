@@ -43,6 +43,11 @@ import type {
   Offer,
   OfferHeadsInput,
   PaymentSource,
+  CrosswalkEntry,
+  DiagnosisCode,
+  DiagnosisImportResult,
+  DiagnosisSummary,
+  Exclusion,
   PrecisionRow,
   PriceList,
   PriceListDetail,
@@ -690,6 +695,28 @@ export const api = {
       "/api/admin/practices/import",
       { method: "POST", body: JSON.stringify({ csv }) },
     ),
+  // Reference maintenance (ADMIN): diagnosis codes, flat-rate exclusions, the code crosswalk.
+  adminDiagnosisCodes: (params: Record<string, string | number | undefined>) =>
+    request<{ total: number; rows: DiagnosisCode[] }>(`/api/admin/icd10${qs(params)}`),
+  adminDiagnosisSummary: () => request<DiagnosisSummary>("/api/admin/icd10/summary"),
+  saveDiagnosisCode: (body: Partial<DiagnosisCode> & { code: string }) =>
+    request<DiagnosisCode>("/api/admin/icd10", { method: "POST", body: JSON.stringify(body) }),
+  removeDiagnosisCode: (code: string) =>
+    request<{ removed: string }>(`/api/admin/icd10/${code.split("/").map(encodeURIComponent).join("/")}`, { method: "DELETE" }),
+  importDiagnosisCodes: (csv: string, edition: string) =>
+    request<DiagnosisImportResult>("/api/admin/icd10/import", { method: "POST", body: JSON.stringify({ csv, edition }) }),
+  adminExclusions: () => request<Exclusion[]>("/api/admin/exclusions"),
+  addExclusion: (code: string, reason: string) =>
+    request<Exclusion>("/api/admin/exclusions", { method: "POST", body: JSON.stringify({ code, reason }) }),
+  removeExclusion: (code: string, reason: string) =>
+    request<{ removed: string }>("/api/admin/exclusions/remove", { method: "POST", body: JSON.stringify({ code, reason }) }),
+  adminCrosswalk: () => request<CrosswalkEntry[]>("/api/admin/crosswalk"),
+  saveCrosswalkEntry: (body: { code: string; target_code: string | null; family: string; description: string; evidence: string }) =>
+    request<CrosswalkEntry>("/api/admin/crosswalk", { method: "POST", body: JSON.stringify(body) }),
+  setCrosswalkStatus: (code: string, status: string, reason: string) =>
+    request<CrosswalkEntry>("/api/admin/crosswalk/status", { method: "POST", body: JSON.stringify({ code, status, reason }) }),
+  removeCrosswalkEntry: (code: string) =>
+    request<{ removed: string }>("/api/admin/crosswalk/remove", { method: "POST", body: JSON.stringify({ code }) }),
   // Price lists: whole tariff editions held as reference data.
   priceLists: () => request<PriceList[]>("/api/price-lists"),
   priceList: (id: number) => request<PriceListDetail>(`/api/price-lists/${id}`),

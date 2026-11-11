@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 import engine
 
 from . import models, rates_service
-from .crosswalk import apply_crosswalk
+from .crosswalk import XW, apply_crosswalk
 
 
 def _norm(code: str) -> str:
@@ -57,7 +57,11 @@ def build_refbook(db: Session, nappi_codes=None) -> engine.RefBook:
     book = engine.RefBook(negotiated=negotiated, rpl=rpl, raf2022=raf2022,
                           empirical=empirical, sep=sep, non_benchmarkable=non_bench,
                           code_rules=code_rules)
-    apply_crosswalk(book)         # activate SME-CONFIRMED COIDA→RAF equivalences (no-op until confirmed)
+    # The crosswalk is reference data (ref_crosswalk, maintained under Administration): only
+    # entries an administrator has signed off (CONFIRMED) alias a billed code onto a priced one.
+    crosswalk = [XW(r.code, r.family, r.description, r.target_code, r.status, r.evidence)
+                 for r in db.scalars(select(models.RefCrosswalk))]
+    apply_crosswalk(book, entries=crosswalk)
     return book
 
 

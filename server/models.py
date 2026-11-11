@@ -117,8 +117,34 @@ class RefRateLog(Base):
 
 
 class RefNonBench(Base):
+    """A tariff code that is not compared with a flat rate: a percentage of another fee, a
+    cost-of-material code, or not a priced service. A line under one goes to review."""
     __tablename__ = "ref_non_bench"
     code: Mapped[str] = mapped_column(String, primary_key=True)
+    reason: Mapped[str] = mapped_column(String, default="")
+    origin: Mapped[str] = mapped_column(String, default="loader")    # loader | manual
+    created_by: Mapped[str] = mapped_column(String, default="")
+    created_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class RefCrosswalk(Base):
+    """One crosswalk entry: a code billed under another tariff is paid at the rate of a code in
+    the loaded price list. Only a CONFIRMED entry changes what is paid, so confirming one is a
+    sign-off and is recorded with who gave it. `code` is the normalised billed code (the key the
+    engine prices under); `billed_as` keeps it as entered."""
+    __tablename__ = "ref_crosswalk"
+    code: Mapped[str] = mapped_column(String, primary_key=True)
+    billed_as: Mapped[str] = mapped_column(String, default="")
+    family: Mapped[str] = mapped_column(String, default="")
+    description: Mapped[str] = mapped_column(String, default="")
+    target_code: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    status: Mapped[str] = mapped_column(String, default="PROPOSED", index=True)
+    evidence: Mapped[str] = mapped_column(String, default="")
+    origin: Mapped[str] = mapped_column(String, default="manual")    # seed | manual
+    updated_by: Mapped[str] = mapped_column(String, default="")
+    updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    confirmed_by: Mapped[str] = mapped_column(String, default="")
+    confirmed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
 
 class RefCodeRule(Base):

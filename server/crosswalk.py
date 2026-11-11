@@ -125,8 +125,13 @@ CROSSWALK: list[XW] = [
 ]
 
 
-def apply_crosswalk(book, *, what_if: bool = False) -> list[tuple[XW, dict]]:
+def apply_crosswalk(book, *, what_if: bool = False, entries=None) -> list[tuple[XW, dict]]:
     """Additively alias each applicable COIDA code onto its RAF target's rate in book.rpl.
+
+    `entries` is the crosswalk to apply: the stored table when the application prices a claim
+    (reference_data.build_refbook reads ref_crosswalk), or the built-in list below when none is
+    given. The built-in list is what a new database starts from; after that the table is
+    maintained under Administration and this list is not read again.
 
     Applies CONFIRMED entries only, unless what_if=True (then PROPOSED too — for impact modelling).
     Skips codes already covered (never overwrites a real reference rate) or whose RAF target is
@@ -134,7 +139,7 @@ def apply_crosswalk(book, *, what_if: bool = False) -> list[tuple[XW, dict]]:
     """
     statuses = {CONFIRMED, PROPOSED} if what_if else {CONFIRMED}
     applied: list[tuple[XW, dict]] = []
-    for e in CROSSWALK:
+    for e in (CROSSWALK if entries is None else entries):
         if e.status not in statuses or not e.raf:
             continue
         src, tgt = _norm(e.coida), _norm(e.raf)

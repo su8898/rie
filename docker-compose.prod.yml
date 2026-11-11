@@ -1,0 +1,108 @@
+# RIE — production stack. Deployed to /opt/rie by .github/workflows/deploy.yml.
+#
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# THIS STACK PUBLISHES NO PORTS. It shares a server with the CIE (COIDA) deployment at /opt/cie,
+# and that stack's Caddy is the only thing on 80/443. `api` joins that Caddy's network under the
+# alias `rie-app`, and the CIE repo's deploy/Caddyfile proxies the RIE hostname to it — the same
+# arrangement ncls, cmms, elections and passerelle use. The alias is what the Caddyfile names,
+# NOT the compose service name; keep the two in step (deploy/caddy-block.txt has the block).
+#
+# To run this same stack on your own machine: see docker-compose.local.yml.
+name: rie-prod
+
+x-app-env: &app-env
+  # `rie-db`, never plain `db`: api is also on the CIE network, where CIE's own postgres is
+  # called `db`, and docker's DNS may answer a bare `db` from either network.
+  RIE_DATABASE_URL: postgresql+psycopg2://rie:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@rie-db:5432/rie
+  # Outside dev/test the app refuses to start with a default or short (<32 char) secret, and the
+  # username==password dev logins are not seeded.
+  RIE_APP_ENV: ${RIE_APP_ENV:-prod}
+  RIE_SECRET_KEY: ${RIE_SECRET_KEY:?set RIE_SECRET_KEY in .env (>=32 random chars)}
+  RIE_RAILS_SECRET: ${RIE_RAILS_SECRET:?set RIE_RAILS_SECRET in .env (>=32 random chars)}
+  RIE_PSEUDONYM_SECRET: ${RIE_PSEUDONYM_SECRET:?set RIE_PSEUDONYM_SECRET in .env (>=32 random chars)}
+  RIE_BOOTSTRAP_ADMIN_PASSWORD: ${RIE_BOOTSTRAP_ADMIN_PASSWORD:?set RIE_BOOTSTRAP_ADMIN_PASSWORD in .env}
+  # Optional. Unset, the Fund's receipt-signing key is regenerated on every restart.
+  RIE_RAILS_SIGNING_KEY: ${RIE_RAILS_SIGNING_KEY:-}
+  TZ: ${TZ:-Africa/Johannesburg}
+
+services:
+  # PostgreSQL 16. Internal network only — no host port. For admin:
+  #   docker compose -f docker-compose.prod.yml exec db psql -U rie -d rie
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: rie
+      # Sets the password only when the volume is FIRST created. Changing it later needs an
+      # ALTER USER in psql as well.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: rie
+    volumes:
+      - rie_pgdata:/var/lib/postgresql/data
+    networks:
+      internal:
+        aliases:
+          - rie-db
+    healthcheck:
+      # Over TCP on purpose: during first-boot initialisation postgres listens on a unix socket
+      # only, and a socket pg_isready would report "ready" while TCP still refuses connections.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U rie -d rie"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # One-shot, runs to completion before the api starts, on every deploy: applies pending Alembic
+  # migrations, loads reference.db ONLY into an empty database (a redeploy never overwrites
+  # reference data maintained in the app), and seeds users + statutory config. See
+  # db/deploy_init.py.
+  init:
+    build: &app-build
+      context: .
+      dockerfile: db/Dockerfile.api
+    image: rie-app:latest
+    command: ["python", "db/deploy_init.py"]
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      <<: *app-env
+      RIE_REFERENCE_DB: /refdata/reference.db
+      RIE_RELOAD_REFERENCE: ${RIE_RELOAD_REFERENCE:-}
+    volumes:
+      # The DIRECTORY, not the file: reference.db (59 MB, not in git) is only needed on first
+      # boot, and a missing single-file bind source would be created by docker as a directory.
+      - ./refdata:/refdata:ro
+    networks:
+      - internal
+
+  # The app: built SPA + JSON API + provider rails on one origin, :8021. Single process.
+  api:
+    build: *app-build
+    image: rie-app:latest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      init:
+        condition: service_completed_successfully
+    environment:
+      <<: *app-env
+    networks:
+      internal:
+      edge:
+        aliases:
+          # ── The name deploy/Caddyfile in the CIE repo proxies to. ──
+          - rie-app
+
+networks:
+  # The CIE stack's default network (`name: cie-prod`, no networks block → `cie-prod_default`).
+  # Its Caddy lives there. Overridable in .env for a different edge.
+  edge:
+    external: true
+    name: ${EDGE_NETWORK:-cie-prod_default}
+  internal:
+
+volumes:
+  rie_pgdata:
