@@ -12,16 +12,17 @@ orders and interim payments go to claimants and are not remittances.
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
 from typing import Optional
 from xml.sax.saxutils import escape, quoteattr
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from engine.vocab import D, money
 
+from .clock import utcnow
 from . import models
 
 PROVIDER_SOURCES = {"SUPPLIER", "UNDERTAKING_INVOICE"}
@@ -186,11 +187,38 @@ def list_remittances(db: Session, provider_id: Optional[str] = None,
     return [summary(r) for r in db.scalars(stmt)]
 
 
+def search(db: Session, *, provider_id: Optional[str] = None, status: Optional[str] = None,
+           batch_id: Optional[int] = None, q: Optional[str] = None,
+           date_from: Optional[date] = None, date_to: Optional[date] = None,
+           limit: int = 25, offset: int = 0) -> tuple[list[dict], int]:
+    """The operator's remittance worklist: newest first, filtered, with a total for paging.
+    `q` matches the advice reference, the practice number or a claim on the advice."""
+    stmt = select(models.Remittance)
+    if provider_id:
+        stmt = stmt.where(models.Remittance.provider_id == provider_id)
+    if status:
+        stmt = stmt.where(models.Remittance.status == status)
+    if batch_id is not None:
+        stmt = stmt.where(models.Remittance.batch_id == batch_id)
+    if date_from:
+        stmt = stmt.where(models.Remittance.period_to >= date_from)
+    if date_to:
+        stmt = stmt.where(models.Remittance.period_from <= date_to)
+    if q and (q := q.strip()):
+        like = f"%{q}%"
+        on_advice = select(models.RemittanceLine.remittance_id).where(models.RemittanceLine.claim_id.ilike(like))
+        stmt = stmt.where(or_(models.Remittance.ref.ilike(like), models.Remittance.provider_id.ilike(like),
+                              models.Remittance.id.in_(on_advice)))
+    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    rows = db.scalars(stmt.order_by(models.Remittance.id.desc()).limit(limit).offset(offset))
+    return [summary(r) for r in rows], total
+
+
 def acknowledge(db: Session, ref: str) -> dict:
     """The provider's system confirms it received and reconciled the advice. Idempotent."""
     r = _by_ref(db, ref)
     if r.status != "ACKNOWLEDGED":
-        r.status, r.acknowledged_at = "ACKNOWLEDGED", datetime.now()
+        r.status, r.acknowledged_at = "ACKNOWLEDGED", utcnow()
         db.commit()
     return summary(r)
 

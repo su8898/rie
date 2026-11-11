@@ -96,7 +96,7 @@ def _clean(fields: dict) -> dict:
         if key in fields:
             value = str(fields.get(key) or "").strip().upper()
             if value not in allowed:
-                raise AdminError(f"{label} must be one of {sorted(x for x in allowed if x)}")
+                raise AdminError(f"{label} must be one of {', '.join(sorted(x for x in allowed if x))}")
             out[key] = value
     if "verified" in fields:
         out["verified"] = bool(fields["verified"])
@@ -119,10 +119,13 @@ def upsert(db: Session, user: dict, provider_id, source: str = "MANUAL", commit:
     if created:
         row = models.ProviderRegistry(provider_id=pid, status="ACTIVE")
         db.add(row)
-    for k, v in clean.items():
-        setattr(row, k, v)
-    row.source, row.updated_by = source, user["username"]
-    _audit(db, user, "provider_register.add" if created else "provider_register.update", pid, clean)
+    # an update records only what actually changed; an unchanged row is left alone (no audit noise)
+    changed = clean if created else {k: v for k, v in clean.items() if getattr(row, k) != v}
+    if created or changed:
+        for k, v in changed.items():
+            setattr(row, k, v)
+        row.source, row.updated_by = source, user["username"]
+        _audit(db, user, "provider_register.add" if created else "provider_register.update", pid, changed)
     if commit:
         db.commit()
     return _out(row)
@@ -134,7 +137,7 @@ def set_status(db: Session, user: dict, provider_id, status: str, reason: str = 
     if row is None:
         raise AdminError(f"practice {provider_id} is not in the register")
     if status not in STATUSES:
-        raise AdminError(f"status must be one of {sorted(STATUSES)}")
+        raise AdminError(f"status must be one of {', '.join(sorted(STATUSES))}")
     reason = str(reason or "").strip()[:300]
     if status != "ACTIVE" and not reason:
         raise AdminError("a reason is required to suspend or deregister a practice")
@@ -144,26 +147,105 @@ def set_status(db: Session, user: dict, provider_id, status: str, reason: str = 
     return _out(row)
 
 
-def list_practices(db: Session, q: str = "", status: str = "", page: int = 1, page_size: int = 25) -> dict:
+SORTS = {"number": models.ProviderRegistry.provider_id, "name": models.ProviderRegistry.practice_name,
+         "discipline": models.ProviderRegistry.discipline, "updated": models.ProviderRegistry.updated_at}
+
+
+def list_practices(db: Session, q: str = "", status: str = "", page: int = 1, page_size: int = 25,
+                   discipline: str = "", setting: str = "", practice_type: str = "",
+                   verified: Optional[bool] = None, sort: str = "number", direction: str = "asc") -> dict:
     stmt = select(models.ProviderRegistry)
     if q:
         like = f"%{q.strip()}%"
         stmt = stmt.where(or_(models.ProviderRegistry.provider_id.ilike(like),
                               models.ProviderRegistry.practice_name.ilike(like),
-                              models.ProviderRegistry.discipline.ilike(like)))
+                              models.ProviderRegistry.discipline.ilike(like),
+                              models.ProviderRegistry.professional_nr.ilike(like)))
     if status:
         stmt = stmt.where(models.ProviderRegistry.status == status)
+    if discipline:
+        stmt = stmt.where(models.ProviderRegistry.discipline == discipline)
+    if setting:
+        stmt = stmt.where(models.ProviderRegistry.setting == setting)
+    if practice_type:
+        stmt = stmt.where(models.ProviderRegistry.practice_type == practice_type)
+    if verified is not None:
+        stmt = stmt.where(models.ProviderRegistry.verified.is_(verified))
     total = db.scalar(select(func.count()).select_from(stmt.subquery()))
-    rows = db.scalars(stmt.order_by(models.ProviderRegistry.provider_id)
+    col = SORTS.get(sort, models.ProviderRegistry.provider_id)
+    order = col.desc() if direction == "desc" else col.asc()
+    rows = db.scalars(stmt.order_by(order, models.ProviderRegistry.provider_id)
                       .limit(page_size).offset((max(page, 1) - 1) * page_size))
     return {"total": total, "page": max(page, 1), "page_size": page_size, "items": [_out(r) for r in rows]}
+
+
+def _unregistered_stmt(q: str = ""):
+    """Practice numbers that have billed the Fund but have no register row."""
+    line = models.BillingLineRecord
+    stmt = (select(line.provider_id, func.count(func.distinct(line.claim_id)).label("n_claims"),
+                   func.sum(line.billed).label("billed"), func.max(line.service_date).label("last_service"))
+            .where(line.provider_id != "",
+                   line.provider_id.not_in(select(models.ProviderRegistry.provider_id)))
+            .group_by(line.provider_id))
+    if q and q.strip():
+        stmt = stmt.where(line.provider_id.ilike(f"%{q.strip()}%"))
+    return stmt
+
+
+def unregistered(db: Session, q: str = "", page: int = 1, page_size: int = 25) -> dict:
+    """Who is billing without being in the register, the largest biller first."""
+    stmt = _unregistered_stmt(q)
+    total = db.scalar(select(func.count()).select_from(stmt.subquery()))
+    rows = db.execute(stmt.order_by(func.sum(models.BillingLineRecord.billed).desc(),
+                                    models.BillingLineRecord.provider_id)
+                      .limit(page_size).offset((max(page, 1) - 1) * page_size))
+    return {"total": total, "page": max(page, 1), "page_size": page_size,
+            "items": [{"provider_id": pid, "n_claims": n, "billed": round(billed or 0.0, 2),
+                       "last_service": last.isoformat() if last else None} for pid, n, billed, last in rows]}
 
 
 def summary(db: Session) -> dict:
     by_status = dict(db.execute(select(models.ProviderRegistry.status, func.count())
                                 .group_by(models.ProviderRegistry.status)).all())
     return {"total": sum(by_status.values()), "by_status": by_status,
+            "unregistered": db.scalar(select(func.count()).select_from(_unregistered_stmt().subquery())) or 0,
             "enforced": config.PROVIDER_REGISTER_ENFORCED}
+
+
+def disciplines(db: Session) -> list[str]:
+    """The disciplines in use in the register (for the filter)."""
+    return sorted(d for d in db.scalars(select(models.ProviderRegistry.discipline).distinct()) if d)
+
+
+def activity(db: Session, provider_id: str) -> dict:
+    """What a practice has done with the Fund: what it billed and was paid, who may sign for it
+    on the provider channel, and every change made to its register entry."""
+    line = models.BillingLineRecord
+    n_claims, n_lines, billed, payable, first, last = db.execute(
+        select(func.count(func.distinct(line.claim_id)), func.count(), func.sum(line.billed),
+               func.sum(line.payable), func.min(line.service_date), func.max(line.service_date))
+        .where(line.provider_id == provider_id)).one()
+    n_advices, paid, reduced = db.execute(
+        select(func.count(), func.sum(models.Remittance.total_paid), func.sum(models.Remittance.total_reduced))
+        .where(models.Remittance.provider_id == provider_id)).one()
+    parties = [{"party_id": p.party_id, "name": p.name, "kind": p.kind, "status": p.status,
+                "all_providers": "*" in (p.providers or [])}
+               for p in db.scalars(select(models.RailsParty).order_by(models.RailsParty.party_id))
+               if provider_id in (p.providers or []) or "*" in (p.providers or [])]
+    history = [{"action": a.action.removeprefix("provider_register."), "actor": a.actor,
+                "at": a.at.isoformat() if a.at else None, "detail": a.detail or {}}
+               for a in db.scalars(select(models.AdminAudit)
+                                   .where(models.AdminAudit.target == provider_id,
+                                          models.AdminAudit.action.like("provider_register.%"))
+                                   .order_by(models.AdminAudit.id.desc()).limit(200))]
+    return {"provider_id": provider_id,
+            "billing": {"n_claims": n_claims or 0, "n_lines": n_lines or 0, "billed": round(billed or 0.0, 2),
+                        "payable": round(payable or 0.0, 2),
+                        "first_service": first.isoformat() if first else None,
+                        "last_service": last.isoformat() if last else None},
+            "payments": {"n_advices": n_advices or 0, "paid": round(paid or 0.0, 2),
+                         "reduced": round(reduced or 0.0, 2)},
+            "parties": parties, "history": history}
 
 
 def import_csv(db: Session, user: dict, text: str) -> dict:

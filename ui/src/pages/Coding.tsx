@@ -1,612 +1,250 @@
-// Coding intelligence — billing behaviour read against the reference (domain-logic §11).
-//
-// The pricing rule is payable = min(billed, reference); this page aggregates that
-// per code and per condition, then reads the gap:
-//   • Codes       — the leakage map per tariff/NAPPI code: billed vs payable, the
-//     repricing saving captured over an ENFORCEABLE/ACCEPTED reference, the
-//     over-reference SIGNAL where billing sits above an INTERDICTED/ENDOGENOUS
-//     source, and uncovered spend with no reference to price against (§11 decomposition).
-//   • Negotiation targets — the codes where a negotiated ENFORCEABLE rate would
-//     control currently-uncaptured spend; potential saving is the lever (§5).
-//   • Conditions  — per-claimant medical totals by ICD-10 3-char injury class, the
-//     p25–p90 band under the MIN_ROBUST small-n guard, plus an estimate tool that
-//     classifies an amount against the band (§6).
-//
-// Read-only (three GET aggregations + one GET estimate); no mutations.
+// Coding analysis. Where the money goes by billing code: what was reduced on assessment, what
+// was paid above the reference price, and what has no reference price at all. Also the usual
+// cost of treating each injury, and the practices whose prices are creeping up.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { api, ApiError } from "../api";
+import { X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { ApiError, api } from "../api";
 import { useAuth } from "../auth";
-import {
-  Card,
-  CodePill,
-  Empty,
-  ErrorBox,
-  Loading,
-  LowNTag,
-  Pagination,
-  SearchInput,
-  Toast,
-  matchQ,
-  usePaged,
-} from "../components/ui";
-import { num, rand } from "../format";
-import type { CodeAgg, ConditionRow, CostEstimate, DriftReport } from "../types";
+import { DataTable, Pager, type Column, type Sort } from "../ds/DataTable";
+import { humanise } from "../ds/labels";
+import { Dialog } from "../ds/overlays";
+import { Badge, Button, EmptyState, ErrorBlock, Field, Input, PageHeader, Panel, Ref, Select, Stat, Tabs } from "../ds/primitives";
+import type { Tone } from "../ds/labels";
+import { rand } from "../format";
+import type { CodeAgg, ConditionRow, CostEstimate, DriftReport, DriftRow } from "../types";
+import { useListParams } from "./work/shared";
 
-type Tab = "codes" | "targets" | "conditions" | "drift";
-type CodeKind = "" | "TARIFF" | "NAPPI";
-
-const th =
-  "px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500";
-
-const INPUT =
-  "rounded-md border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-slate-500 focus:ring-1 focus:ring-slate-500";
-const PRIMARY_BTN =
-  "rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-40";
-
-// classification → chip palette for the estimate result.
-const CLASS_STYLE: Record<string, string> = {
-  BELOW_TYPICAL: "bg-slate-100 text-slate-700 ring-slate-500/20",
-  TYPICAL: "bg-emerald-100 text-emerald-800 ring-emerald-600/20",
-  HIGH: "bg-amber-100 text-amber-800 ring-amber-600/20",
-  OUTLIER: "bg-rose-100 text-rose-800 ring-rose-600/20",
-  UNKNOWN: "bg-slate-100 text-slate-600 ring-slate-500/20",
+type Tab = "codes" | "targets" | "injuries" | "drift";
+const KINDS: Record<string, string> = { TARIFF: "Tariff code", NAPPI: "Medicine or material" };
+const VERDICTS: Record<string, { label: string; tone: Tone }> = {
+  BELOW_TYPICAL: { label: "Below the usual range", tone: "info" }, TYPICAL: { label: "Within the usual range", tone: "ok" },
+  HIGH: { label: "High", tone: "warn" }, OUTLIER: { label: "Far above the usual range", tone: "bad" },
+  UNKNOWN: { label: "No comparison available", tone: "neutral" },
 };
+const message = (e: unknown, fallback: string) => (e instanceof ApiError ? e.message : fallback);
+const money = (v: number) => (v > 0 ? rand(v) : "—");
+
+function useData<T>(loader: () => Promise<T>, fallback: string) {
+  const [data, setData] = useState<T | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => { loader().then(setData).catch((e) => setError(message(e, fallback))); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  return { data, error };
+}
 
 export default function CodingPage() {
-  const { user } = useAuth();
-  const [tab, setTab] = useState<Tab>("codes");
-
-  const [codes, setCodes] = useState<CodeAgg[] | null>(null);
-  const [targets, setTargets] = useState<CodeAgg[] | null>(null);
-  const [conditions, setConditions] = useState<ConditionRow[] | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-
-  // CODES tab kind filter (re-loads codingCodes on change).
-  const [kind, setKind] = useState<CodeKind>("");
-
-  // Estimate tool (CONDITIONS tab).
-  const [estClass, setEstClass] = useState("");
-  const [estAmount, setEstAmount] = useState("");
-  const [estimate, setEstimate] = useState<CostEstimate | null>(null);
-  const [estimating, setEstimating] = useState(false);
-
-  const [toast, setToast] = useState<string | null>(null);
-
-  const load = useCallback(async () => {
-    setLoadError(null);
-    try {
-      const [c, t, cond] = await Promise.all([
-        api.codingCodes(kind || undefined),
-        api.negotiationTargets(),
-        api.conditions(),
-      ]);
-      setCodes(c);
-      setTargets(t);
-      setConditions(cond);
-    } catch (e) {
-      setLoadError(e instanceof ApiError ? e.message : "Failed to load coding intelligence.");
-    }
-  }, [kind]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  async function runEstimate() {
-    const amount = Number(estAmount);
-    if (!estClass.trim() || !isFinite(amount)) {
-      setToast("Enter an injury class and a numeric amount.");
-      return;
-    }
-    setEstimating(true);
-    try {
-      const res = await api.estimateCondition(estClass.trim(), amount);
-      setEstimate(res);
-    } catch (e) {
-      setToast(e instanceof ApiError ? e.message : "Estimate failed.");
-    } finally {
-      setEstimating(false);
-    }
-  }
-
-  const loading = codes === null || targets === null || conditions === null;
-
+  const { value, reset } = useListParams();
+  const t = value("tab");
+  const tab: Tab = t === "targets" || t === "injuries" || t === "drift" ? t : "codes";
   return (
-    <div className="space-y-4">
-      <header>
-        <h1 className="text-xl font-semibold text-slate-900">Coding intelligence</h1>
-        <p className="mt-0.5 max-w-3xl text-sm text-slate-500">
-          Where billing behaviour is read against the reference. Payable ={" "}
-          min(billed, reference), so the gap between billed and reference is
-          captured leakage and a negotiation lever: repricing saving over an
-          enforceable rate, an over-reference{" "}
-          <span className="font-medium text-slate-600">signal</span> where an
-          interdicted source is billed above, and{" "}
-          <span className="font-medium text-slate-600">uncovered</span> spend
-          with no reference to price against. Condition cost bands benchmark
-          per-injury spend (§11, §6).
-        </p>
-      </header>
-
-      <div className="flex flex-wrap gap-1 border-b border-slate-200">
-        {(
-          [
-            ["codes", "Codes"],
-            ["targets", "Negotiation targets"],
-            ["conditions", "Conditions"],
-            ["drift", "Price drift"],
-          ] as [Tab, string][]
-        ).map(([value, label]) => (
-          <button
-            key={value}
-            onClick={() => setTab(value)}
-            className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium transition ${
-              tab === value
-                ? "border-slate-900 text-slate-900"
-                : "border-transparent text-slate-500 hover:text-slate-800"
-            }`}
-          >
-            {label}
-          </button>
-        ))}
+    <div>
+      <PageHeader
+        crumbs={[{ label: "Integrity" }, { label: "Coding analysis" }]}
+        title="Coding analysis"
+        subtitle="Where the money goes by billing code, what treating each injury usually costs, and which practices' prices are creeping up. Read-only: nothing here changes a claim."
+      />
+      <Tabs<Tab>
+        tabs={[{ key: "codes", label: "Codes" }, { key: "targets", label: "Rates worth negotiating" }, { key: "injuries", label: "Cost by injury" }, { key: "drift", label: "Rising prices" }]}
+        value={tab} onChange={(k) => reset(k === "codes" ? {} : { tab: k })}
+      />
+      <div className="mt-4">
+        {tab === "codes" && <Codes />}
+        {tab === "targets" && <Targets />}
+        {tab === "injuries" && <Injuries />}
+        {tab === "drift" && <Drift />}
       </div>
-
-      {loadError ? (
-        <ErrorBox message={loadError} />
-      ) : loading ? (
-        <Loading />
-      ) : tab === "codes" ? (
-        <CodesTab codes={codes} kind={kind} onKind={setKind} />
-      ) : tab === "targets" ? (
-        <TargetsTab targets={targets} />
-      ) : tab === "drift" ? (
-        <DriftTab />
-      ) : (
-        <ConditionsTab
-          rows={conditions}
-          estClass={estClass}
-          estAmount={estAmount}
-          estimate={estimate}
-          estimating={estimating}
-          onEstClass={setEstClass}
-          onEstAmount={setEstAmount}
-          onRun={runEstimate}
-          note={user?.role === "ADMIN" ? "Admin view — bands are read-only here." : null}
-        />
-      )}
-
-      {toast && <Toast message={toast} onClose={() => setToast(null)} />}
     </div>
   );
 }
 
-// ── Codes ────────────────────────────────────────────────────────────────────
-function CodesTab({
-  codes,
-  kind,
-  onKind,
-}: {
-  codes: CodeAgg[];
-  kind: CodeKind;
-  onKind: (k: CodeKind) => void;
-}) {
-  const [q, setQ] = useState("");
-  const filtered = useMemo(
-    () => codes.filter((r) => matchQ(q, r.code, r.kind)),
-    [codes, q],
-  );
-  const { page, setPage, pageCount, total, slice } = usePaged(filtered, 25);
+function Codes() {
+  const { value, page, pageSize, set } = useListParams();
+  const { data, error } = useData<CodeAgg[]>(() => api.codingCodes(), "The codes could not be loaded.");
+  const sort: Sort = { key: value("sort") || "billed", direction: value("dir") === "asc" ? "asc" : "desc" };
+  const all = data ?? [];
+  const shown = useMemo(() => {
+    const needle = value("q").trim().toLowerCase();
+    const list = all.filter((c) => (!value("kind") || c.kind === value("kind")) && c.code.toLowerCase().includes(needle));
+    const key = (c: CodeAgg) => sort.key === "reduced" ? c.repricing_captured : sort.key === "above" ? c.over_reference_signal : sort.key === "none" ? c.uncovered_billed : sort.key === "lines" ? c.n_lines : c.billed;
+    return [...list].sort((a, b) => (key(a) - key(b)) * (sort.direction === "asc" ? 1 : -1));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [all, value("q"), value("kind"), sort.key, sort.direction]);
+  const sum = (f: (c: CodeAgg) => number) => all.reduce((s, c) => s + f(c), 0);
+  const columns: Column<CodeAgg>[] = [
+    { key: "code", header: "Code", render: (c) => <div><Ref className="font-medium text-ink-900">{c.code}</Ref><div className="text-xs text-ink-500">{KINDS[c.kind] ?? c.kind}</div></div> },
+    { key: "lines", header: "Lines", align: "right", sortable: true, render: (c) => <div><div className="tnum">{c.n_lines}</div><div className="tnum text-xs text-ink-500">{c.n_providers} practice{c.n_providers === 1 ? "" : "s"}</div></div> },
+    { key: "billed", header: "Billed", align: "right", sortable: true, render: (c) => <span className="tnum text-ink-800">{rand(c.billed)}</span> },
+    { key: "payable", header: "Payable", align: "right", render: (c) => <span className="tnum font-medium text-ink-900">{rand(c.payable)}</span> },
+    { key: "reduced", header: "Reduced on assessment", align: "right", sortable: true, render: (c) => <span className="tnum text-ok-fg">{money(c.repricing_captured)}</span> },
+    { key: "above", header: "Paid above reference", align: "right", sortable: true, render: (c) => <span className="tnum text-warn-fg">{money(c.over_reference_signal)}</span> },
+    { key: "none", header: "No reference price", align: "right", sortable: true, render: (c) => <span className="tnum text-warn-fg">{money(c.uncovered_billed)}</span> },
+  ];
+  if (error) return <ErrorBlock message={error} />;
   return (
-    <Card
-      title="Codes — the leakage map"
-      sub="One row per tariff/NAPPI code: how much it moves (lines / claims / providers), billed vs payable = min(billed, reference), and where the gap goes — repriced saving already captured over an enforceable reference, the over-reference signal (billed above an interdicted/endogenous source, amber when live), and uncovered spend with no reference to price against (§11 decomposition). Src is the reference source most lines priced against."
-      right={
-        <div className="flex items-end gap-2">
-          <div>
-            <label className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-slate-400">
-              Kind
-            </label>
-            <select
-              value={kind}
-              onChange={(e) => onKind(e.target.value as CodeKind)}
-              className={INPUT}
-              aria-label="Filter by code kind"
-            >
-              <option value="">All kinds</option>
-              <option value="TARIFF">TARIFF</option>
-              <option value="NAPPI">NAPPI</option>
-            </select>
-          </div>
-          <div>
-            <label className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-slate-400">
-              Search
-            </label>
-            <SearchInput
-              value={q}
-              onChange={setQ}
-              placeholder="Search code…"
-              className="w-44"
-            />
-          </div>
-        </div>
-      }
-    >
-      {filtered.length === 0 ? (
-        <Empty label={q || kind ? "No codes match the current filter." : "No codes."} />
-      ) : (
-        <div className="overflow-hidden rounded-md border border-slate-100">
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-slate-100 text-sm">
-              <thead className="bg-slate-50">
-                <tr>
-                  <th className={`${th} text-left`}>Kind</th>
-                  <th className={`${th} text-left`}>Code</th>
-                  <th className={`${th} text-right`}>Lines</th>
-                  <th className={`${th} text-right`}>Claims</th>
-                  <th className={`${th} text-right`}>Providers</th>
-                  <th className={`${th} text-right`}>Billed</th>
-                  <th className={`${th} text-right`}>Payable</th>
-                  <th className={`${th} text-right`}>Repriced saving</th>
-                  <th className={`${th} text-right`}>Over-ref signal</th>
-                  <th className={`${th} text-right`}>Uncovered</th>
-                  <th className={`${th} text-left`}>Src</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {slice.map((r) => (
-                  <tr key={`${r.kind}:${r.code}`} className="hover:bg-slate-50">
-                    <td className="px-3 py-2 text-slate-500">{r.kind}</td>
-                    <td className="px-3 py-2">
-                      <CodePill>{r.code}</CodePill>
-                    </td>
-                    <td className="tnum px-3 py-2 text-right text-slate-700">
-                      {num(r.n_lines)}
-                    </td>
-                    <td className="tnum px-3 py-2 text-right text-slate-700">
-                      {num(r.n_claims)}
-                    </td>
-                    <td className="tnum px-3 py-2 text-right text-slate-700">
-                      {num(r.n_providers)}
-                    </td>
-                    <td className="tnum px-3 py-2 text-right text-slate-700">
-                      {rand(r.billed)}
-                    </td>
-                    <td className="tnum px-3 py-2 text-right text-slate-700">
-                      {rand(r.payable)}
-                    </td>
-                    <td className="tnum px-3 py-2 text-right text-slate-700">
-                      {rand(r.repricing_captured)}
-                    </td>
-                    <td
-                      className={`tnum px-3 py-2 text-right ${
-                        r.over_reference_signal > 0 ? "text-amber-700" : "text-slate-700"
-                      }`}
-                    >
-                      {rand(r.over_reference_signal)}
-                    </td>
-                    <td className="tnum px-3 py-2 text-right text-slate-500">
-                      {rand(r.uncovered_billed)}
-                    </td>
-                    <td className="px-3 py-2 text-slate-500">{r.top_src ?? "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <Pagination
-            page={page}
-            pageCount={pageCount}
-            total={total}
-            onPage={setPage}
-            unit="codes"
-          />
-        </div>
-      )}
-    </Card>
+    <>
+      <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Stat label="Billed" value={data ? rand(sum((c) => c.billed)) : "…"} hint={data ? `${all.length} codes` : undefined} />
+        <Stat label="Reduced on assessment" value={data ? rand(sum((c) => c.repricing_captured)) : "…"} tone="ok" hint="Billed above an enforceable price and cut back" />
+        <Stat label="Paid above reference" value={data ? rand(sum((c) => c.over_reference_signal)) : "…"} tone="warn" hint="The reference could not be enforced" />
+        <Stat label="No reference price" value={data ? rand(sum((c) => c.uncovered_billed)) : "…"} tone="warn" hint="Paid as billed" />
+      </div>
+      <div className="mb-3 grid gap-2 rounded-lg border border-line bg-white p-3 shadow-panel sm:grid-cols-4">
+        <Input className="sm:col-span-2 font-mono" placeholder="Code" aria-label="Search codes" value={value("q")} onChange={(e) => set({ q: e.target.value })} />
+        <Select aria-label="Kind" value={value("kind")} onChange={(e) => set({ kind: e.target.value })}>
+          <option value="">Any kind</option>
+          {Object.entries(KINDS).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+        </Select>
+        {(value("q") || value("kind")) && <div className="flex items-center"><Button size="sm" variant="ghost" icon={X} onClick={() => set({ q: null, kind: null })}>Clear filters</Button></div>}
+      </div>
+      <DataTable
+        columns={columns} rows={shown.slice((page - 1) * pageSize, page * pageSize)} rowKey={(c) => `${c.kind}:${c.code}`} loading={data === null}
+        sort={sort} onSort={(s) => set({ sort: s.key === "billed" ? null : s.key, dir: s.direction === "asc" ? "asc" : null }, true)}
+        empty={<EmptyState title={value("q") || value("kind") ? "No code matches" : "Nothing has been billed yet"} body={value("q") || value("kind") ? "Change or clear the filters." : "Codes appear here once claims are assessed."} />}
+        footer={<Pager page={page} pageSize={pageSize} total={shown.length} unit="codes" onPage={(p) => set({ page: p > 1 ? String(p) : null }, true)} onPageSize={(n) => set({ size: n === 25 ? null : String(n) })} />}
+      />
+    </>
   );
 }
 
-// ── Negotiation targets ──────────────────────────────────────────────────────
-function TargetsTab({ targets }: { targets: CodeAgg[] }) {
-  const [q, setQ] = useState("");
-  const filtered = useMemo(
-    () => targets.filter((r) => matchQ(q, r.code, r.kind)),
-    [targets, q],
-  );
-  const { page, setPage, pageCount, total, slice } = usePaged(filtered, 25);
+function Targets() {
+  const { user } = useAuth();
+  const { data, error } = useData<CodeAgg[]>(api.negotiationTargets, "The list could not be loaded.");
+  const all = data ?? [];
+  const columns: Column<CodeAgg>[] = [
+    { key: "code", header: "Code", render: (c) => <div><Ref className="font-medium text-ink-900">{c.code}</Ref><div className="text-xs text-ink-500">{KINDS[c.kind] ?? c.kind}</div></div> },
+    { key: "lines", header: "Lines", align: "right", render: (c) => <div><div className="tnum">{c.n_lines}</div><div className="tnum text-xs text-ink-500">{c.n_providers} practice{c.n_providers === 1 ? "" : "s"}</div></div> },
+    { key: "billed", header: "Billed", align: "right", render: (c) => <span className="tnum text-ink-800">{rand(c.billed)}</span> },
+    { key: "above", header: "Paid above reference", align: "right", render: (c) => <span className="tnum">{money(c.over_reference_signal)}</span> },
+    { key: "none", header: "No reference price", align: "right", render: (c) => <span className="tnum">{money(c.uncovered_billed)}</span> },
+    { key: "saving", header: "Spend a rate would control", align: "right", render: (c) => <span className="tnum font-semibold text-ink-900">{rand(c.potential_saving ?? 0)}</span> },
+  ];
+  if (error) return <ErrorBlock message={error} />;
   return (
-    <Card
-      title="Negotiation targets — where a rate would bite"
-      sub="Codes where today there is no enforceable reference to price against, so the spend can't be repriced at adjudication — the over-reference signal (billed above an interdicted/endogenous source) plus uncovered lines. A negotiated ENFORCEABLE rate would let the pay-min rule capture it; potential saving is that lever, ranked highest-first (§5)."
-      right={
-        <SearchInput
-          value={q}
-          onChange={setQ}
-          placeholder="Search code…"
-          className="w-44"
-        />
-      }
-    >
-      {filtered.length === 0 ? (
-        <Empty
-          label={
-            q
-              ? "No targets match your search."
-              : "No negotiation targets — everything is benchmarked or already negotiated."
-          }
-        />
-      ) : (
-        <div className="overflow-hidden rounded-md border border-slate-100">
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-slate-100 text-sm">
-              <thead className="bg-slate-50">
-                <tr>
-                  <th className={`${th} text-left`}>Code</th>
-                  <th className={`${th} text-right`}>Lines</th>
-                  <th className={`${th} text-right`}>Providers</th>
-                  <th className={`${th} text-right`}>Over-ref signal</th>
-                  <th className={`${th} text-right`}>Uncovered</th>
-                  <th className={`${th} text-right`}>Potential saving</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {slice.map((r) => (
-                  <tr key={`${r.kind}:${r.code}`} className="hover:bg-slate-50">
-                    <td className="px-3 py-2">
-                      <CodePill>{r.code}</CodePill>
-                    </td>
-                    <td className="tnum px-3 py-2 text-right text-slate-700">
-                      {num(r.n_lines)}
-                    </td>
-                    <td className="tnum px-3 py-2 text-right text-slate-700">
-                      {num(r.n_providers)}
-                    </td>
-                    <td className="tnum px-3 py-2 text-right text-slate-700">
-                      {rand(r.over_reference_signal)}
-                    </td>
-                    <td className="tnum px-3 py-2 text-right text-slate-700">
-                      {rand(r.uncovered_billed)}
-                    </td>
-                    <td className="tnum px-3 py-2 text-right font-semibold text-slate-900">
-                      {rand(r.potential_saving ?? 0)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <Pagination
-            page={page}
-            pageCount={pageCount}
-            total={total}
-            onPage={setPage}
-            unit="targets"
-          />
-        </div>
-      )}
-    </Card>
+    <>
+      <div className="mb-3 rounded-lg border border-info-line bg-info-bg px-4 py-3 text-sm text-info-fg">
+        These codes are paid in full today, either because the reference price cannot be enforced or because there is none. Agreeing a rate for a code brings that spend under control. Codes that already have a negotiated rate are left out.
+        {user?.role === "ADMIN" && <> Rates are added under <Link to="/admin/negotiated" className="font-medium underline">Negotiated rates</Link>.</>}
+      </div>
+      <DataTable
+        columns={columns} rows={all} rowKey={(c) => `${c.kind}:${c.code}`} loading={data === null}
+        empty={<EmptyState title="No code stands out" body="Every code with spend is already priced against an enforceable reference or a negotiated rate." />}
+        footer={<span className="text-[13px] text-ink-500">{all.length} codes, largest first. {rand(all.reduce((s, c) => s + (c.potential_saving ?? 0), 0))} in total.</span>}
+      />
+    </>
   );
 }
 
-// ── Conditions ───────────────────────────────────────────────────────────────
-function ConditionsTab({
-  rows,
-  estClass,
-  estAmount,
-  estimate,
-  estimating,
-  onEstClass,
-  onEstAmount,
-  onRun,
-  note,
-}: {
-  rows: ConditionRow[];
-  estClass: string;
-  estAmount: string;
-  estimate: CostEstimate | null;
-  estimating: boolean;
-  onEstClass: (v: string) => void;
-  onEstAmount: (v: string) => void;
-  onRun: () => void;
-  note: string | null;
-}) {
-  const [q, setQ] = useState("");
-  const filtered = useMemo(
-    () => rows.filter((r) => matchQ(q, r.injury_class)),
-    [rows, q],
-  );
-  const { page, setPage, pageCount, total, slice } = usePaged(filtered, 25);
+function Injuries() {
+  const { data, error } = useData<ConditionRow[]>(api.conditions, "The cost ranges could not be loaded.");
+  const [open, setOpen] = useState<ConditionRow | null>(null);
+  const [check, setCheck] = useState({ injury: "", amount: "" });
+  const [result, setResult] = useState<CostEstimate | null>(null);
+  const [checkError, setCheckError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const all = data ?? [];
+
+  async function run() {
+    if (!check.injury.trim() || !(Number(check.amount) > 0)) { setCheckError("Enter the injury code and an amount."); return; }
+    setBusy(true);
+    setCheckError(null);
+    try {
+      setResult(await api.estimateCondition(check.injury.trim().toUpperCase(), Number(check.amount)));
+    } catch (e) {
+      setCheckError(message(e, "The amount could not be checked."));
+    } finally {
+      setBusy(false);
+    }
+  }
+  const columns: Column<ConditionRow>[] = [
+    { key: "injury", header: "Injury", render: (r) => <Ref className="font-medium text-ink-900">{r.injury_class}</Ref> },
+    { key: "n", header: "Claims", align: "right", render: (r) => <span className="tnum">{r.n}</span> },
+    { key: "usual", header: "Usual range", align: "right", render: (r) => r.bands ? <span className="tnum text-ink-900">{rand(r.bands.p25)} to {rand(r.bands.p75)}</span> : <span className="text-ink-400">—</span> },
+    { key: "mid", header: "Middle", align: "right", render: (r) => r.bands ? <span className="tnum font-medium text-ink-900">{rand(r.bands.p50)}</span> : <span className="text-ink-400">—</span> },
+    { key: "high", header: "High mark", align: "right", render: (r) => r.bands ? <span className="tnum text-ink-700">{rand(r.bands.p90)}</span> : <span className="text-ink-400">—</span> },
+    { key: "robust", header: "", render: (r) => r.robust ? <Badge tone="ok">Reliable</Badge> : <Badge>Too few claims</Badge> },
+  ];
+  if (error) return <ErrorBlock message={error} />;
   return (
     <div className="space-y-4">
-      <Card
-        title="Estimate against a band"
-        sub="Enter an ICD-10 3-char injury class and a rand amount to classify it against that class's per-claimant medical band: BELOW_TYPICAL / TYPICAL / HIGH / OUTLIER, or UNKNOWN when the class is below MIN_ROBUST and has no published band. A quick check on whether a claimant's medical total sits inside the benchmark (§6)."
-      >
+      <Panel title="Check an amount" description="Compare a claim's medical total with what treating that injury usually costs.">
         <div className="flex flex-wrap items-end gap-3">
-          <div className="flex flex-col gap-1">
-            <label className="text-xs font-medium text-slate-500">Injury class</label>
-            <input
-              value={estClass}
-              onChange={(e) => onEstClass(e.target.value)}
-              placeholder="e.g. S72"
-              className={INPUT}
-            />
-          </div>
-          <div className="flex flex-col gap-1">
-            <label className="text-xs font-medium text-slate-500">Amount (R)</label>
-            <input
-              type="number"
-              value={estAmount}
-              onChange={(e) => onEstAmount(e.target.value)}
-              placeholder="0"
-              className={`${INPUT} tnum w-40`}
-            />
-          </div>
-          <button onClick={onRun} disabled={estimating} className={PRIMARY_BTN}>
-            {estimating ? "Estimating…" : "Estimate"}
-          </button>
-
-          {estimate && (
-            <div className="flex items-center gap-2 pb-0.5">
-              <span
-                className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-semibold ring-1 ring-inset ${
-                  CLASS_STYLE[estimate.classification] ??
-                  "bg-slate-100 text-slate-600 ring-slate-500/20"
-                }`}
-              >
-                {estimate.classification}
-              </span>
-              <span className="text-xs text-slate-500">
-                {estimate.injury_class} · n={num(estimate.n)}
-                {estimate.robust && estimate.bands
-                  ? ` · ${rand(estimate.bands.p25)}–${rand(estimate.bands.p90)}`
-                  : ""}
-              </span>
+          <Field label="Injury (first three characters of the ICD-10 code)"><Input className="w-40 font-mono" value={check.injury} onChange={(e) => setCheck({ ...check, injury: e.target.value })} placeholder="S72" /></Field>
+          <Field label="Medical total (R)"><Input type="number" min={0} className="w-44" value={check.amount} onChange={(e) => setCheck({ ...check, amount: e.target.value })} onKeyDown={(e) => { if (e.key === "Enter") void run(); }} /></Field>
+          <Button variant="primary" loading={busy} onClick={run}>Check</Button>
+          {result && (
+            <div className="flex items-center gap-2 text-sm">
+              <Badge tone={VERDICTS[result.classification]?.tone ?? "neutral"} dot>{VERDICTS[result.classification]?.label ?? humanise(result.classification)}</Badge>
+              <span className="text-ink-600">{result.bands ? `Usual range ${rand(result.bands.p25)} to ${rand(result.bands.p75)}, from ${result.n} claims${result.robust ? "" : " (too few to rely on)"}.` : `Only ${result.n} claim${result.n === 1 ? "" : "s"} for this injury.`}</span>
             </div>
           )}
         </div>
-        {note && <div className="mt-2 text-xs text-slate-400">{note}</div>}
-      </Card>
-
-      <Card
-        title="Condition cost bands"
-        sub="Per-claimant medical totals summed by ICD-10 3-char injury class, then reduced to percentiles: p25–p90 is the typical spread, with the full range beside it. A class needs ≥MIN_ROBUST (20) claimants before a band is published — below that it shows low-n and no percentiles, guarding against reading a benchmark off too few claims (§6)."
-        right={
-          <SearchInput
-            value={q}
-            onChange={setQ}
-            placeholder="Search injury class…"
-            className="w-52"
-          />
-        }
-      >
-        {filtered.length === 0 ? (
-          <Empty label={q ? "No conditions match your search." : "No conditions."} />
-        ) : (
-          <div className="overflow-hidden rounded-md border border-slate-100">
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-slate-100 text-sm">
-                <thead className="bg-slate-50">
-                  <tr>
-                    <th className={`${th} text-left`}>Injury class</th>
-                    <th className={`${th} text-right`}>n</th>
-                    <th className={`${th} text-right`}>p25</th>
-                    <th className={`${th} text-right`}>p50</th>
-                    <th className={`${th} text-right`}>p75</th>
-                    <th className={`${th} text-right`}>p90</th>
-                    <th className={`${th} text-right`}>Range</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {slice.map((r) => (
-                    <tr key={r.injury_class} className="hover:bg-slate-50">
-                      <td className="px-3 py-2 font-medium text-slate-800">
-                        {r.injury_class}
-                      </td>
-                      <td className="tnum px-3 py-2 text-right text-slate-700">
-                        <span className="inline-flex items-center gap-1.5">
-                          {num(r.n)}
-                          {!r.robust && <LowNTag />}
-                        </span>
-                      </td>
-                      <td className="tnum px-3 py-2 text-right text-slate-700">
-                        {r.bands ? rand(r.bands.p25) : "—"}
-                      </td>
-                      <td className="tnum px-3 py-2 text-right text-slate-700">
-                        {r.bands ? rand(r.bands.p50) : "—"}
-                      </td>
-                      <td className="tnum px-3 py-2 text-right text-slate-700">
-                        {r.bands ? rand(r.bands.p75) : "—"}
-                      </td>
-                      <td className="tnum px-3 py-2 text-right text-slate-700">
-                        {r.bands ? rand(r.bands.p90) : "—"}
-                      </td>
-                      <td className="tnum px-3 py-2 text-right text-slate-500">
-                        {r.bands ? `${rand(r.bands.min)}–${rand(r.bands.max)}` : "—"}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <Pagination
-              page={page}
-              pageCount={pageCount}
-              total={total}
-              onPage={setPage}
-              unit="conditions"
-            />
-          </div>
-        )}
-      </Card>
-    </div>
-  );
-}
-
-// ── Price drift ──────────────────────────────────────────────────────────────
-// Per provider per service month: billed ÷ reference on the lines that have an
-// enforceable or accepted reference, and the trend of that ratio. Each line's
-// reference is the one in force on its service date, so a tariff increase does
-// not read as drift. A worklist for a human look, never a verdict.
-function DriftTab() {
-  const [report, setReport] = useState<DriftReport | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    api
-      .priceDrift()
-      .then(setReport)
-      .catch((e) => setError(e instanceof ApiError ? e.message : "Failed to load price drift."));
-  }, []);
-
-  if (error) return <ErrorBox message={error} />;
-  if (report === null) return <Loading />;
-  return (
-    <Card
-      title="Price drift — providers whose billing is ratcheting up"
-      sub={`Providers with at least ${report.min_months} months of history (months with fewer than ${report.min_lines} priced lines are ignored), ranked by the monthly rise in billed ÷ reference. ${report.n_providers} provider${report.n_providers === 1 ? " has" : "s have"} enough history to judge.`}
-    >
-      {report.rising.length === 0 ? (
-        <Empty label="No provider shows a rising trend on enough history." />
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-sm">
-            <thead className="bg-slate-50 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-              <tr>
-                <th className="px-3 py-2">Provider</th>
-                <th className="px-3 py-2">Months</th>
-                <th className="px-3 py-2">Period</th>
-                <th className="px-3 py-2 text-right">First ratio</th>
-                <th className="px-3 py-2 text-right">Last ratio</th>
-                <th className="px-3 py-2 text-right">Rise per month</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {report.rising.map((r) => (
-                <tr key={r.provider_id}>
-                  <td className="px-3 py-2">
-                    <CodePill>{r.provider_id}</CodePill>
-                  </td>
-                  <td className="px-3 py-2 tabular-nums text-slate-600">{r.n_months}</td>
-                  <td className="px-3 py-2 text-slate-600">
-                    {r.first_month} to {r.last_month}
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums text-slate-600">
-                    {r.first_ratio.toFixed(2)}
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums text-slate-800">
-                    {r.last_ratio.toFixed(2)}
-                  </td>
-                  <td className="px-3 py-2 text-right font-medium tabular-nums text-rose-700">
-                    +{r.slope_per_month.toFixed(3)}
-                  </td>
+        {checkError && <p className="mt-2 text-[13px] text-bad-fg" role="alert">{checkError}</p>}
+      </Panel>
+      <DataTable
+        columns={columns} rows={all} rowKey={(r) => r.injury_class} loading={data === null} onRowClick={setOpen}
+        empty={<EmptyState title="No cost ranges yet" body="Ranges appear once enough claims for an injury have been assessed." />}
+        footer={<span className="text-[13px] text-ink-500">The usual range is the middle half of claims. A range is reliable from 20 claims.</span>}
+      />
+      <Dialog open={open !== null} onClose={() => setOpen(null)} wide title={open ? `Cost of treating ${open.injury_class}` : ""} description="Split by whether a specialist was involved, since that changes what treatment costs.">
+        {open && (
+          <table className="min-w-full border-collapse text-sm">
+            <thead><tr className="border-b border-line text-left text-xs text-ink-500"><th className="py-2 pr-3 font-medium">Treatment</th><th className="px-3 py-2 text-right font-medium">Claims</th><th className="px-3 py-2 text-right font-medium">Usual range</th><th className="px-3 py-2 text-right font-medium">Middle</th><th className="py-2 pl-3 text-right font-medium">Lowest to highest</th></tr></thead>
+            <tbody className="divide-y divide-line">
+              {[["All claims", open] as const, ...Object.entries(open.by_intensity).map(([k, v]) => [humanise(k), v] as const)].map(([label, v]) => (
+                <tr key={label}>
+                  <td className="py-2 pr-3 text-ink-900">{label}</td>
+                  <td className="tnum px-3 py-2 text-right">{v.n}{!v.robust && <span className="text-ink-400"> (few)</span>}</td>
+                  <td className="tnum px-3 py-2 text-right">{v.bands ? `${rand(v.bands.p25)} to ${rand(v.bands.p75)}` : "—"}</td>
+                  <td className="tnum px-3 py-2 text-right font-medium">{v.bands ? rand(v.bands.p50) : "—"}</td>
+                  <td className="tnum py-2 pl-3 text-right text-ink-600">{v.bands ? `${rand(v.bands.min)} to ${rand(v.bands.max)}` : "—"}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-        </div>
-      )}
-    </Card>
+        )}
+      </Dialog>
+    </div>
+  );
+}
+
+function Drift() {
+  const navigate = useNavigate();
+  const { data, error } = useData<DriftReport>(api.priceDrift, "The trends could not be loaded.");
+  const [open, setOpen] = useState<DriftRow | null>(null);
+  const pct = (r: number) => `${Math.round(r * 100)}%`;
+  const columns: Column<DriftRow>[] = [
+    { key: "practice", header: "Practice", render: (r) => <Ref className="font-medium text-brand-700">{r.provider_id}</Ref> },
+    { key: "period", header: "Period", render: (r) => <span className="text-ink-700">{r.first_month} to {r.last_month}</span> },
+    { key: "months", header: "Months", align: "right", render: (r) => <span className="tnum">{r.n_months}</span> },
+    { key: "from", header: "Billed against reference", align: "right", render: (r) => <span className="tnum text-ink-800">{pct(r.first_ratio)} → <span className="font-semibold text-ink-900">{pct(r.last_ratio)}</span></span> },
+    { key: "slope", header: "Rise a month", align: "right", render: (r) => <span className="tnum text-warn-fg">+{(r.slope_per_month * 100).toFixed(1)} points</span> },
+    { key: "more", header: "", align: "right", render: (r) => <Button size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); setOpen(r); }}>Month by month</Button> },
+  ];
+  if (error) return <ErrorBlock message={error} />;
+  return (
+    <>
+      <div className="mb-3 rounded-lg border border-info-line bg-info-bg px-4 py-3 text-sm text-info-fg">
+        Each practice's billing is compared with the reference price, month by month. 100% means it bills exactly at the reference. A practice is listed when that figure has risen steadily over at least {data?.min_months ?? 6} months{data ? `, counting only months with ${data.min_lines} or more lines` : ""}.
+      </div>
+      <DataTable
+        columns={columns} rows={data?.rising ?? []} rowKey={(r) => r.provider_id} loading={data === null} onRowClick={(r) => navigate(`/practices/${encodeURIComponent(r.provider_id)}`)}
+        empty={<EmptyState title="No practice's prices are rising" body={data ? `${data.n_providers} practice${data.n_providers === 1 ? " has" : "s have"} enough history to judge. None shows a steady rise.` : undefined} />}
+        footer={data ? <span className="text-[13px] text-ink-500">{data.rising.length} of {data.n_providers} practices with enough history</span> : undefined}
+      />
+      <Dialog open={open !== null} onClose={() => setOpen(null)} title={open ? `Practice ${open.provider_id}, month by month` : ""} description="Billed as a share of the reference price.">
+        {open && (
+          <ul className="space-y-1.5">
+            {open.series.map((m) => (
+              <li key={m.month} className="grid grid-cols-[5.5rem_1fr_3.5rem] items-center gap-2 text-sm">
+                <span className="tnum text-ink-600">{m.month}</span>
+                <span className="h-1.5 overflow-hidden rounded-full bg-ink-100"><span className="block h-full rounded-full bg-ink-700" style={{ width: `${Math.min(100, (m.ratio / Math.max(...open.series.map((x) => x.ratio), 1)) * 100)}%` }} /></span>
+                <span className="tnum text-right font-medium text-ink-900">{pct(m.ratio)}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Dialog>
+    </>
   );
 }

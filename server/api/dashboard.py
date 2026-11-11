@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
+from .. import work_query
 from ..db import get_db
 from ..models import Determination, latest_determination_ids
 from .deps import current_user
@@ -39,3 +40,9 @@ def dashboard(db: Session = Depends(get_db), user: dict = Depends(current_user))
         "net_payable_total": round(float(net), 2),
         "medical_payable_total": round(float(medical), 2),
     }
+
+
+@router.get("/work")
+def work(db: Session = Depends(get_db), user: dict = Depends(current_user)) -> dict:
+    """What is waiting in each queue, for the signed-in user."""
+    return work_query.work_summary(db, user)

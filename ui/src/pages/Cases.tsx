@@ -1,786 +1,167 @@
-// Cases — the investigation / review case machine (domain-logic §8e).
-//
-// Where a flagged claim becomes a unit of human work with an owner and a clock.
-// A lane routes the work (REVIEW → HANDLER; BLOCK / CLAWBACK → INVESTIGATOR),
-// priority starts the SLA clock (P1=1d … P5=14d), and rand-at-stake sizes the
-// exposure. The case runs a state machine — OPEN → IN_REVIEW → ESCALATED →
-// CLOSED — and closing records a verdict + root cause + recovered/prevented.
-// That verdict is the point: it becomes a ground-truth label the engine's
-// precision and recall are measured against (§11) — this page is the far end
-// of the close-the-loop that Governance reads from.
-//
-// Top: analytics (open / at-stake / recovered / prevented / overdue) plus
-// by-lane and by-status breakdowns. A filter row (lane + status) re-queries the
-// list; a search box filters the loaded page. An "Open case" inline form
-// creates a REVIEW / BLOCK / CLAWBACK case. The table drives each case through
-// its transitions via `item.actions` (assign / escalate / close): assign and
-// escalate are one-click, close opens an inline verdict form.
-//
-// The backend is authoritative: it owns role gating (REVIEW → HANDLER,
-// BLOCK/CLAWBACK → INVESTIGATOR) and legal transitions, so we don't pre-block
-// beyond disabling in-flight buttons — its 403/409 {detail} is surfaced
-// verbatim via Toast. Analytics + list re-fetch on every success.
+// Cases. Review and investigation work: a pricing question for a handler, a fraud hold or a
+// recovery for an investigator. The worklist opens on what is still open; each case is a record.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Plus, X } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { ApiError, api } from "../api";
-import { useAuth } from "../auth";
-import {
-  Card,
-  Empty,
-  ErrorBox,
-  Loading,
-  Pagination,
-  SearchInput,
-  Stat,
-  StateChip,
-  Toast,
-  matchQ,
-  usePaged,
-} from "../components/ui";
-import { num, rand } from "../format";
-import type {
-  CaseAnalytics,
-  CaseItem,
-  CaseLane,
-  CaseVerdict,
-} from "../types";
+import { DataTable, Pager, type Column, type Sort } from "../ds/DataTable";
+import { CASE_LANES, CASE_PRIORITIES, CASE_STATUS, CASE_VERDICTS, dueText, workError } from "../ds/labels";
+import { Dialog, useToast } from "../ds/overlays";
+import { Badge, Button, EmptyState, ErrorBlock, Field, Input, PageHeader, Ref, Select, Stat, Textarea, cx } from "../ds/primitives";
+import { rand } from "../format";
+import type { CaseAnalytics, CaseItem, CaseSearch } from "../types";
+import { ViewPills, useListParams } from "./work/shared";
 
-const LANES: CaseLane[] = ["REVIEW", "BLOCK", "CLAWBACK"];
-const STATUSES = ["OPEN", "IN_REVIEW", "ESCALATED", "CLOSED"] as const;
-const VERDICTS: CaseVerdict[] = [
-  "CONFIRMED_FRAUD",
-  "CLEARED",
-  "ADJUSTED",
-  "NO_ACTION",
-  "REFERRED_LEGAL",
-];
-const PRIORITIES = [1, 2, 3, 4, 5] as const;
-// Priority → SLA days (mirrors the backend ladder).
-const SLA_DAYS: Record<number, number> = { 1: 1, 2: 3, 3: 7, 4: 10, 5: 14 };
-
-const th =
-  "px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500";
-const inputCls =
-  "rounded-md border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-slate-500 focus:ring-1 focus:ring-slate-500";
-const primaryBtn =
-  "rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed";
-const smallBtn =
-  "rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-40";
-
-interface ToastState {
-  message: string;
-  tone: "error" | "success";
-}
+const VIEW_PARAMS: Record<string, Record<string, string | boolean>> = {
+  "": { open_only: true }, mine: { mine: true }, unassigned: { status: "OPEN" }, overdue: { overdue: true },
+  escalated: { status: "ESCALATED" }, closed: { status: "CLOSED" }, all: {},
+};
+const message = (e: unknown, fallback: string) => (e instanceof ApiError ? workError(e.message) : fallback);
 
 export default function CasesPage() {
-  const { user } = useAuth();
-
+  const navigate = useNavigate();
+  const toast = useToast();
+  const { value, page, pageSize, set, reset, query } = useListParams();
+  const [data, setData] = useState<CaseSearch | null>(null);
   const [analytics, setAnalytics] = useState<CaseAnalytics | null>(null);
-  const [cases, setCases] = useState<CaseItem[] | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [opening, setOpening] = useState(false);
+  const [form, setForm] = useState({ lane: "REVIEW", reason: "", claim_id: "", priority: "3", stake: "" });
+  const [attempted, setAttempted] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
-  const [laneFilter, setLaneFilter] = useState("");
-  const [statusFilter, setStatusFilter] = useState("");
+  const view = value("view") in VIEW_PARAMS ? value("view") : "";
+  const sort: Sort = { key: value("sort") || "opened", direction: value("dir") === "asc" ? "asc" : "desc" };
+  const filtered = Boolean(value("q") || value("lane"));
 
-  const [busyKey, setBusyKey] = useState<string | null>(null);
-  const [closeFor, setCloseFor] = useState<number | null>(null);
-  const [toast, setToast] = useState<ToastState | null>(null);
-
-  // Open-case form.
-  const [newLane, setNewLane] = useState<CaseLane>("REVIEW");
-  const [newReason, setNewReason] = useState("");
-  const [newPriority, setNewPriority] = useState(3);
-  const [newStake, setNewStake] = useState("0");
-  const [newClaimId, setNewClaimId] = useState("");
-
-  const load = useCallback(async (lane: string, status: string) => {
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
     try {
-      const [a, c] = await Promise.all([
-        api.caseAnalytics(),
-        api.cases({
-          lane: lane || undefined,
-          status: status || undefined,
-        }),
-      ]);
-      setAnalytics(a);
-      setCases(c);
-      setLoadError(null);
+      setData(await api.caseSearch({ ...VIEW_PARAMS[view], q: value("q"), lane: value("lane"), sort: sort.key, direction: sort.direction, limit: pageSize, offset: (page - 1) * pageSize }));
     } catch (e) {
-      setLoadError(e instanceof ApiError ? e.message : "Failed to load.");
+      setError(message(e, "The cases could not be loaded."));
+    } finally {
+      setLoading(false);
     }
-  }, []);
+    // `query` is the whole view, filter, sort and page state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query]);
+  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { api.caseAnalytics().then(setAnalytics).catch(() => setAnalytics(null)); }, []);
 
-  useEffect(() => {
-    void load(laneFilter, statusFilter);
-  }, [load, laneFilter, statusFilter]);
+  const c = data?.counts;
+  const views = [
+    { key: "", label: "Open", count: c ? c.OPEN + c.IN_REVIEW + c.ESCALATED : undefined },
+    { key: "mine", label: "Assigned to me", count: c?.MINE },
+    { key: "unassigned", label: "Unassigned", count: c?.OPEN },
+    { key: "overdue", label: "Past due", count: c?.OVERDUE, alert: true },
+    { key: "escalated", label: "Escalated", count: c?.ESCALATED },
+    { key: "closed", label: "Closed", count: c?.CLOSED },
+    { key: "all", label: "All" },
+  ];
 
-  // Action runner: disable in-flight, refetch analytics + list on success,
-  // surface backend {detail} on failure, always clear busyKey.
-  const run = useCallback(
-    (key: string, fn: () => Promise<unknown>, okMsg: string) => {
-      if (busyKey !== null) return;
-      setBusyKey(key);
-      fn()
-        .then(async () => {
-          await load(laneFilter, statusFilter);
-          setToast({ message: okMsg, tone: "success" });
-        })
-        .catch((e) =>
-          setToast({
-            message: e instanceof ApiError ? e.message : "Request failed.",
-            tone: "error",
-          }),
-        )
-        .finally(() => setBusyKey(null));
-    },
-    [busyKey, load, laneFilter, statusFilter],
-  );
-
-  function openCase() {
-    run(
-      "open",
-      () =>
-        api.openCase({
-          lane: newLane,
-          reason: newReason,
-          claim_id: newClaimId.trim() ? newClaimId.trim() : undefined,
-          priority: newPriority,
-          rand_at_stake: Number(newStake) || 0,
-        }),
-      "Case opened.",
-    );
-    // Optimistically reset the reason/claim fields; a failure keeps the Toast
-    // visible so the operator can re-enter.
-    setNewReason("");
-    setNewClaimId("");
+  const reasonError = !form.reason.trim() ? "Say why the case is being opened." : null;
+  const stakeError = form.stake !== "" && !(Number(form.stake) >= 0) ? "Enter an amount in rand, or leave it blank." : null;
+  async function openCase() {
+    setAttempted(true);
+    if (reasonError || stakeError) return;
+    setBusy(true);
+    setFormError(null);
+    try {
+      if (form.claim_id.trim() && !(await api.getClaim(form.claim_id.trim()).then(() => true, () => false))) {
+        setFormError("There is no claim with that reference.");
+        return;
+      }
+      const made = await api.openCase({ lane: form.lane, reason: form.reason.trim(), claim_id: form.claim_id.trim() || null, priority: Number(form.priority), rand_at_stake: Number(form.stake) || 0 });
+      toast.success(`Case ${made.id} opened.`);
+      navigate(`/cases/${made.id}`);
+    } catch (e) {
+      setFormError(message(e, "The case could not be opened."));
+    } finally {
+      setBusy(false);
+    }
   }
 
-  const anyInFlight = busyKey !== null;
-  const [q, setQ] = useState("");
-  const filtered = useMemo(
-    () =>
-      (cases ?? []).filter((c) =>
-        matchQ(q, c.claim_id, c.assigned_to, c.lane, c.status, c.verdict, `#${c.id}`),
-      ),
-    [cases, q],
-  );
-  const { page, setPage, pageCount, total, slice } = usePaged(filtered, 20);
-
-  return (
-    <div className="space-y-4">
-      <header>
-        <h1 className="text-xl font-semibold text-slate-900">Cases</h1>
-        <p className="mt-0.5 max-w-3xl text-sm text-slate-500">
-          The investigation / review case machine (§8e). A lane routes the work
-          — REVIEW → HANDLER, BLOCK / CLAWBACK → INVESTIGATOR — priority sets the
-          SLA clock (P1=1d … P5=14d), and rand-at-stake sizes the exposure. On
-          close, the verdict becomes a ground-truth label the engine's precision
-          and recall are measured against (§11) — the far end of the loop
-          Governance reads back.
-        </p>
-      </header>
-
-      {loadError && <ErrorBox message={loadError} />}
-
-      {/* Analytics */}
-      {analytics && (
-        <Card
-          title="Case analytics"
-          sub="At stake = rand exposure on cases still open, the book of work not yet resolved. Recovered = money clawed back on closed cases (realised). Prevented = spend stopped before it left — a repricing or block that never became a payment. Overdue counts cases past their SLA due date; worklists work breach-first."
-        >
-          <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
-            <Stat
-              label="Open"
-              value={num(analytics.open)}
-              sub={`${num(analytics.n)} total`}
-            />
-            <Stat
-              label="At stake"
-              value={rand(analytics.rand_at_stake_open)}
-              sub="open exposure"
-            />
-            <Stat
-              label="Recovered"
-              value={rand(analytics.rand_recovered)}
-              accent="text-emerald-600"
-              sub="clawed back"
-            />
-            <Stat
-              label="Prevented"
-              value={rand(analytics.rand_prevented)}
-              accent="text-emerald-600"
-              sub="spend stopped"
-            />
-            <Stat
-              label="Overdue"
-              value={num(analytics.overdue)}
-              accent={analytics.overdue > 0 ? "text-rose-600" : "text-slate-900"}
-              sub="past SLA"
-            />
-          </div>
-
-          <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <Breakdown
-              title="By lane"
-              hint="who owns it"
-              map={analytics.by_lane}
-            />
-            <Breakdown
-              title="By status"
-              hint="where in the machine"
-              map={analytics.by_status}
-            />
-            <Breakdown
-              title="By verdict"
-              hint="closed-case labels"
-              map={analytics.by_verdict}
-            />
-          </div>
-        </Card>
-      )}
-
-      {/* Open case */}
-      <Card
-        title="Open case"
-        sub="Create a unit of work and hand it to a lane. Lane sets ownership — REVIEW → HANDLER, BLOCK / CLAWBACK → INVESTIGATOR (§8e); priority sets the SLA (P1=1d, P2=3d, P3=7d, P4=10d, P5=14d) and rand-at-stake records the exposure at risk. Attach a claim ID to tie the case to it, or leave blank for a standalone case."
-      >
-        <div className="flex flex-wrap items-end gap-3">
-          <div>
-            <label className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-slate-400">
-              Lane
-            </label>
-            <select
-              value={newLane}
-              onChange={(e) => setNewLane(e.target.value as CaseLane)}
-              className={inputCls}
-            >
-              {LANES.map((l) => (
-                <option key={l} value={l}>
-                  {l}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="min-w-[16rem] flex-1">
-            <label className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-slate-400">
-              Reason
-            </label>
-            <input
-              type="text"
-              value={newReason}
-              onChange={(e) => setNewReason(e.target.value)}
-              placeholder="Why open this case?"
-              className={`${inputCls} w-full`}
-            />
-          </div>
-          <div>
-            <label className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-slate-400">
-              Priority
-            </label>
-            <select
-              value={newPriority}
-              onChange={(e) => setNewPriority(Number(e.target.value))}
-              className={inputCls}
-            >
-              {PRIORITIES.map((p) => (
-                <option key={p} value={p}>
-                  P{p} · {SLA_DAYS[p]}-day SLA
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="w-32">
-            <label className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-slate-400">
-              Rand at stake
-            </label>
-            <input
-              type="number"
-              min={0}
-              value={newStake}
-              onChange={(e) => setNewStake(e.target.value)}
-              className={`${inputCls} tnum w-full`}
-            />
-          </div>
-          <div className="w-40">
-            <label className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-slate-400">
-              Claim ID (optional)
-            </label>
-            <input
-              type="text"
-              value={newClaimId}
-              onChange={(e) => setNewClaimId(e.target.value)}
-              placeholder="—"
-              className={`${inputCls} w-full`}
-            />
-          </div>
-          <button
-            onClick={openCase}
-            disabled={anyInFlight || !newReason.trim()}
-            className={primaryBtn}
-          >
-            {busyKey === "open" ? "Opening…" : "Open case"}
-          </button>
-        </div>
-        <p className="mt-2 text-xs text-slate-400">
-          REVIEW is owned by HANDLER; BLOCK/CLAWBACK by INVESTIGATOR. Signed in
-          as {user?.username} ({user?.role}).
-        </p>
-      </Card>
-
-      {/* Table */}
-      <Card
-        title="Case queue"
-        sub="One row per case. assign and escalate are one-click transitions; close records a verdict + root cause + recovered/prevented — and the verdict is what labels the claim for §11 precision/recall. Only the transitions the backend currently allows appear as buttons; it stays authoritative on role gating and legal moves, so a 403/409 it returns is shown verbatim."
-        right={
-          <div className="flex flex-wrap items-end gap-2">
-            <div>
-              <label className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-slate-400">
-                Lane
-              </label>
-              <select
-                value={laneFilter}
-                onChange={(e) => setLaneFilter(e.target.value)}
-                className={inputCls}
-                aria-label="Filter by lane"
-              >
-                <option value="">All lanes</option>
-                {LANES.map((l) => (
-                  <option key={l} value={l}>
-                    {l}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-slate-400">
-                Status
-              </label>
-              <select
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
-                className={inputCls}
-                aria-label="Filter by status"
-              >
-                <option value="">All statuses</option>
-                {STATUSES.map((s) => (
-                  <option key={s} value={s}>
-                    {s.replace(/_/g, " ")}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-slate-400">
-                Search
-              </label>
-              <SearchInput
-                value={q}
-                onChange={setQ}
-                placeholder="Claim, assignee, verdict, #id…"
-                className="w-56"
-              />
-            </div>
-          </div>
-        }
-      >
-        {cases === null ? (
-          <Loading label="Loading cases…" />
-        ) : filtered.length === 0 ? (
-          <Empty
-            label={
-              q || laneFilter || statusFilter
-                ? "No cases match the current lane / status / search."
-                : "No cases yet — open one above."
-            }
-          />
-        ) : (
-          <div className="overflow-hidden rounded-md border border-slate-100">
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-slate-100 text-sm">
-                <thead className="bg-slate-50">
-                  <tr>
-                    <th className={`${th} text-left`}>#</th>
-                    <th className={`${th} text-left`}>Claim / reason</th>
-                    <th className={`${th} text-left`}>Lane</th>
-                    <th className={`${th} text-left`}>Status</th>
-                    <th className={`${th} text-left`}>Priority / SLA</th>
-                    <th className={`${th} text-right`}>At stake</th>
-                    <th className={`${th} text-left`}>Assigned</th>
-                    <th className={`${th} text-left`}>Verdict / outcome</th>
-                    <th className={`${th} text-left`}>Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {slice.map((c) => (
-                    <tr key={c.id} className="align-top hover:bg-slate-50">
-                      <td className="px-3 py-2 text-xs text-slate-400">
-                        #{c.id}
-                      </td>
-                      <td className="px-3 py-2">
-                        {c.claim_id ? (
-                          <Link
-                            to={`/claims/${encodeURIComponent(c.claim_id)}`}
-                            className="font-mono text-[13px] text-slate-900 hover:text-blue-600 hover:underline"
-                          >
-                            {c.claim_id}
-                          </Link>
-                        ) : (
-                          <span className="text-[13px] text-slate-400">
-                            no claim
-                          </span>
-                        )}
-                        {c.reason && (
-                          <div className="mt-0.5 max-w-[16rem] truncate text-[11px] text-slate-400">
-                            {c.reason}
-                          </div>
-                        )}
-                      </td>
-                      <td className="px-3 py-2">
-                        <StateChip state={c.lane} />
-                      </td>
-                      <td className="px-3 py-2">
-                        <StateChip state={c.status} />
-                      </td>
-                      <td className="px-3 py-2 text-xs">
-                        <SlaCell item={c} />
-                      </td>
-                      <td className="tnum px-3 py-2 text-right text-slate-700">
-                        {rand(c.rand_at_stake)}
-                      </td>
-                      <td className="px-3 py-2 text-xs">
-                        {c.assigned_to ? (
-                          <span className="text-slate-700">
-                            {c.assigned_to}
-                          </span>
-                        ) : (
-                          <span className="text-slate-400">
-                            unassigned
-                            {c.owner_role && (
-                              <span className="block text-[10px] text-slate-300">
-                                {c.owner_role} owns
-                              </span>
-                            )}
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2">
-                        {c.verdict ? (
-                          <VerdictCell item={c} />
-                        ) : (
-                          <span className="text-slate-300">—</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2">
-                        <RowActions
-                          item={c}
-                          busyKey={busyKey}
-                          closeOpen={closeFor === c.id}
-                          openClose={() => setCloseFor(c.id)}
-                          cancelClose={() => setCloseFor(null)}
-                          run={run}
-                        />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <Pagination
-              page={page}
-              pageCount={pageCount}
-              total={total}
-              onPage={setPage}
-              unit="cases"
-            />
-          </div>
-        )}
-      </Card>
-
-      {toast && (
-        <Toast
-          message={toast.message}
-          tone={toast.tone}
-          onClose={() => setToast(null)}
-        />
-      )}
-    </div>
-  );
-}
-
-// A titled breakdown panel: a small header (what the cut is) over the count
-// chips. Wraps `Chips` so the three analytics cuts read consistently.
-function Breakdown({
-  title,
-  hint,
-  map,
-}: {
-  title: string;
-  hint: string;
-  map: Record<string, number>;
-}) {
-  return (
-    <div className="rounded-md border border-slate-100 p-3">
-      <div className="mb-2 flex items-baseline justify-between gap-2">
-        <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-          {title}
-        </span>
-        <span className="text-[10px] text-slate-400">{hint}</span>
+  const columns: Column<CaseItem>[] = [
+    { key: "opened", header: "Case", sortable: true, render: (r) => <div><div className="font-medium text-ink-900">Case {r.id}</div><div className="max-w-[40ch] truncate text-xs text-ink-500" title={r.reason}>{r.reason}</div></div> },
+    { key: "claim", header: "Claim", render: (r) => r.claim_id ? <Ref className="text-ink-700">{r.claim_id}</Ref> : <span className="text-ink-400">—</span> },
+    { key: "lane", header: "Kind", render: (r) => <span className="text-ink-700">{CASE_LANES[r.lane]?.label ?? r.lane}</span> },
+    { key: "priority", header: "Priority", sortable: true, render: (r) => <span className={cx(r.priority <= 2 ? "font-medium text-ink-900" : "text-ink-700")}>{CASE_PRIORITIES[r.priority]?.label ?? r.priority}</span> },
+    { key: "status", header: "Status", render: (r) => (
+      <div>
+        <Badge tone={CASE_STATUS[r.status]?.tone ?? "neutral"} dot>{CASE_STATUS[r.status]?.label ?? r.status}</Badge>
+        <div className="mt-1 text-xs text-ink-500">{r.status === "CLOSED" ? CASE_VERDICTS[r.verdict ?? ""] ?? "No verdict recorded" : r.assigned_to ? `With ${r.assigned_to}` : ""}</div>
       </div>
-      <Chips map={map} empty="No cases." />
-    </div>
-  );
-}
+    ) },
+    { key: "due", header: "Due", sortable: true, render: (r) => r.status === "CLOSED" ? <span className="text-ink-400">—</span> : <span className={cx(r.overdue ? "font-medium text-bad-fg" : "text-ink-700")}>{dueText(r.days_to_sla, r.overdue)}</span> },
+    { key: "stake", header: "At stake", align: "right", sortable: true, render: (r) => <span className="tnum text-ink-900">{r.rand_at_stake > 0 ? rand(r.rand_at_stake) : "—"}</span> },
+  ];
 
-// Priority + SLA presentation. Priority sets the clock (P1=1d … P5=14d, §8e);
-// `overdue` is the backend's breach flag, `days_to_sla` the countdown while
-// still in-window. Closed cases have stopped the clock — neither is shown.
-function SlaCell({ item }: { item: CaseItem }) {
-  const closed = item.status === "CLOSED";
   return (
     <div>
-      <div className="flex items-center gap-1.5">
-        <span className="font-semibold text-slate-700">P{item.priority}</span>
-        {item.sla_days != null && (
-          <span className="text-slate-400">{item.sla_days}d SLA</span>
-        )}
-      </div>
-      {closed ? (
-        <span className="mt-0.5 inline-block text-[10px] text-slate-400">
-          clock stopped
-        </span>
-      ) : item.overdue ? (
-        <span className="mt-0.5 inline-flex items-center rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700 ring-1 ring-inset ring-rose-600/20">
-          overdue
-        </span>
-      ) : item.days_to_sla != null ? (
-        <span
-          className={`mt-0.5 inline-block text-[10px] ${
-            item.days_to_sla <= 1 ? "font-semibold text-amber-600" : "text-slate-400"
-          }`}
-        >
-          {item.days_to_sla}d left
-        </span>
-      ) : null}
-    </div>
-  );
-}
-
-// A closed case's verdict is a ground-truth label (§11); show it with the root
-// cause and any money recovered / prevented captured at close — the full
-// outcome, not just the tag.
-function VerdictCell({ item }: { item: CaseItem }) {
-  const recovered = item.rand_recovered > 0;
-  const prevented = item.rand_prevented > 0;
-  return (
-    <div className="space-y-0.5">
-      {item.verdict && <StateChip state={item.verdict} />}
-      {item.root_cause && (
-        <div className="max-w-[14rem] truncate text-[11px] text-slate-500">
-          {item.root_cause}
-        </div>
-      )}
-      {(recovered || prevented) && (
-        <div className="tnum text-[10px] text-slate-400">
-          {recovered && (
-            <span className="text-emerald-600">+{rand(item.rand_recovered)} recovered</span>
-          )}
-          {recovered && prevented && <span> · </span>}
-          {prevented && (
-            <span className="text-emerald-600">{rand(item.rand_prevented)} prevented</span>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// Small label + count chips for a Record<string, number> breakdown.
-function Chips({
-  map,
-  empty,
-}: {
-  map: Record<string, number>;
-  empty: string;
-}) {
-  const entries = Object.entries(map);
-  if (entries.length === 0)
-    return <div className="text-sm text-slate-400">{empty}</div>;
-  return (
-    <div className="flex flex-wrap gap-2">
-      {entries.map(([k, v]) => (
-        <span
-          key={k}
-          className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-xs"
-        >
-          <span className="text-slate-500">{k.replace(/_/g, " ")}</span>
-          <span className="tnum font-semibold text-slate-800">{v}</span>
-        </span>
-      ))}
-    </div>
-  );
-}
-
-// Per-row actions driven by `item.actions` (subset of assign / escalate /
-// close). assign + escalate are one-click; close opens an inline verdict form.
-function RowActions({
-  item,
-  busyKey,
-  closeOpen,
-  openClose,
-  cancelClose,
-  run,
-}: {
-  item: CaseItem;
-  busyKey: string | null;
-  closeOpen: boolean;
-  openClose: () => void;
-  cancelClose: () => void;
-  run: (key: string, fn: () => Promise<unknown>, okMsg: string) => void;
-}) {
-  const [verdict, setVerdict] = useState<CaseVerdict>("CONFIRMED_FRAUD");
-  const [rootCause, setRootCause] = useState("");
-  const [recovered, setRecovered] = useState("0");
-  const [prevented, setPrevented] = useState("0");
-  const anyInFlight = busyKey !== null;
-
-  if (item.actions.length === 0) {
-    return <span className="text-[11px] text-slate-300">—</span>;
-  }
-
-  return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap gap-2">
-        {item.actions.includes("assign") && (
-          <button
-            onClick={() =>
-              run(
-                `case.${item.id}.assign`,
-                () => api.caseAction(item.id, "assign"),
-                "Case assigned.",
-              )
-            }
-            disabled={anyInFlight}
-            className={smallBtn}
-          >
-            {busyKey === `case.${item.id}.assign` ? "…" : "assign"}
-          </button>
-        )}
-        {item.actions.includes("escalate") && (
-          <button
-            onClick={() =>
-              run(
-                `case.${item.id}.escalate`,
-                () => api.caseAction(item.id, "escalate"),
-                "Case escalated.",
-              )
-            }
-            disabled={anyInFlight}
-            className={smallBtn}
-          >
-            {busyKey === `case.${item.id}.escalate` ? "…" : "escalate"}
-          </button>
-        )}
-        {item.actions.includes("close") && (
-          <button
-            onClick={openClose}
-            disabled={anyInFlight}
-            className={smallBtn}
-          >
-            close
-          </button>
-        )}
+      <PageHeader
+        crumbs={[{ label: "Work" }, { label: "Cases" }]}
+        title="Cases"
+        subtitle="Review and investigation work. A billing review goes to a claims handler; a fraud hold or a recovery goes to an investigator."
+        actions={<Button variant="primary" icon={Plus} onClick={() => { setForm({ lane: "REVIEW", reason: "", claim_id: "", priority: "3", stake: "" }); setAttempted(false); setFormError(null); setOpening(true); }}>Open a case</Button>}
+      />
+      <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Stat label="Open cases" value={analytics ? analytics.open : "…"} hint={analytics ? `${analytics.n} in total` : undefined} />
+        <Stat label="Past their due date" value={analytics ? analytics.overdue : "…"} tone={analytics?.overdue ? "bad" : undefined} />
+        <Stat label="At stake in open cases" value={analytics ? rand(analytics.rand_at_stake_open) : "…"} />
+        <Stat label="Recovered and prevented" value={analytics ? rand(analytics.rand_recovered + analytics.rand_prevented) : "…"} tone="ok" hint={analytics ? `${rand(analytics.rand_recovered)} recovered` : undefined} />
       </div>
 
-      {/* Close inline form */}
-      {closeOpen && item.actions.includes("close") && (
-        <div className="rounded-md border border-slate-200 bg-slate-50/60 p-2">
-          <p className="mb-2 text-[10px] leading-relaxed text-slate-400">
-            Closing labels the claim: the verdict becomes ground truth (§11).
-            CONFIRMED_FRAUD / ADJUSTED / REFERRED_LEGAL count as adverse — the
-            signal was right; CLEARED / NO_ACTION as benign. Record what was
-            recovered or prevented if any.
-          </p>
-          <div className="flex flex-wrap items-end gap-2">
-          <div className="w-44">
-            <label className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-slate-400">
-              verdict
-            </label>
-            <select
-              value={verdict}
-              onChange={(e) => setVerdict(e.target.value as CaseVerdict)}
-              className="w-full rounded-md border border-slate-300 px-2 py-1 text-xs outline-none focus:border-slate-500 focus:ring-1 focus:ring-slate-500"
-            >
-              {VERDICTS.map((v) => (
-                <option key={v} value={v}>
-                  {v.replace(/_/g, " ")}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="w-48">
-            <label className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-slate-400">
-              root cause
-            </label>
-            <input
-              type="text"
-              value={rootCause}
-              onChange={(e) => setRootCause(e.target.value)}
-              className="w-full rounded-md border border-slate-300 px-2 py-1 text-xs outline-none focus:border-slate-500 focus:ring-1 focus:ring-slate-500"
-            />
-          </div>
-          <div className="w-28">
-            <label className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-slate-400">
-              recovered
-            </label>
-            <input
-              type="number"
-              min={0}
-              value={recovered}
-              onChange={(e) => setRecovered(e.target.value)}
-              className="tnum w-full rounded-md border border-slate-300 px-2 py-1 text-xs outline-none focus:border-slate-500 focus:ring-1 focus:ring-slate-500"
-            />
-          </div>
-          <div className="w-28">
-            <label className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-slate-400">
-              prevented
-            </label>
-            <input
-              type="number"
-              min={0}
-              value={prevented}
-              onChange={(e) => setPrevented(e.target.value)}
-              className="tnum w-full rounded-md border border-slate-300 px-2 py-1 text-xs outline-none focus:border-slate-500 focus:ring-1 focus:ring-slate-500"
-            />
-          </div>
-          <button
-            onClick={() =>
-              run(
-                `case.${item.id}.close`,
-                () =>
-                  api.caseAction(item.id, "close", {
-                    verdict,
-                    root_cause: rootCause,
-                    recovered: Number(recovered) || 0,
-                    prevented: Number(prevented) || 0,
-                  }),
-                "Case closed.",
-              )
-            }
-            disabled={anyInFlight}
-            className="rounded-md bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-slate-800 disabled:opacity-40"
-          >
-            {busyKey === `case.${item.id}.close` ? "…" : "Confirm"}
-          </button>
-          <button
-            onClick={cancelClose}
-            className="rounded-md border border-slate-300 px-2.5 py-1.5 text-xs text-slate-600 transition hover:bg-slate-100"
-          >
-            Cancel
-          </button>
-          </div>
-        </div>
+      <ViewPills views={views} value={view} label="Views" onChange={(k) => reset(k ? { view: k } : {})} />
+      <div className="mb-3 grid gap-2 rounded-lg border border-line bg-white p-3 shadow-panel sm:grid-cols-4">
+        <Input className="sm:col-span-2" placeholder="Case number, claim, reason or person" aria-label="Search cases" value={value("q")} onChange={(e) => set({ q: e.target.value })} />
+        <Select aria-label="Kind" value={value("lane")} onChange={(e) => set({ lane: e.target.value })}>
+          <option value="">Any kind</option>
+          {Object.entries(CASE_LANES).map(([k, l]) => <option key={k} value={k}>{l.label}</option>)}
+        </Select>
+        {filtered && <div className="flex items-center"><Button size="sm" variant="ghost" icon={X} onClick={() => set({ q: null, lane: null })}>Clear filters</Button></div>}
+      </div>
+      {error ? <ErrorBlock message={error} onRetry={load} /> : (
+        <DataTable
+          columns={columns} rows={data?.rows ?? []} rowKey={(r) => String(r.id)} loading={loading}
+          sort={sort} onSort={(s) => set({ sort: s.key === "opened" ? null : s.key, dir: s.direction === "asc" ? "asc" : null }, true)}
+          onRowClick={(r) => navigate(`/cases/${r.id}`)}
+          empty={<EmptyState title={filtered ? "No case matches" : view === "" ? "No open cases" : "Nothing in this view"} body={filtered ? "Change or clear the filters." : "Cases are opened here, or from a claim that needs a closer look."} />}
+          footer={<Pager page={page} pageSize={pageSize} total={data?.total ?? 0} unit="cases" onPage={(p) => set({ page: p > 1 ? String(p) : null }, true)} onPageSize={(n) => set({ size: n === 25 ? null : String(n) })} />}
+        />
       )}
+
+      <Dialog
+        open={opening} onClose={() => setOpening(false)} wide title="Open a case" description="The priority sets the due date. The case starts unassigned, in the queue of the role that owns its kind."
+        footer={<><Button onClick={() => setOpening(false)}>Cancel</Button><Button variant="primary" loading={busy} onClick={openCase}>Open case</Button></>}
+      >
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Kind" required hint={CASE_LANES[form.lane]?.help}>
+            <Select value={form.lane} onChange={(e) => setForm({ ...form, lane: e.target.value })}>
+              {Object.entries(CASE_LANES).map(([k, l]) => <option key={k} value={k}>{l.label}</option>)}
+            </Select>
+          </Field>
+          <Field label="Priority" required hint={`Due within ${CASE_PRIORITIES[Number(form.priority)].days} day${CASE_PRIORITIES[Number(form.priority)].days === 1 ? "" : "s"}.`}>
+            <Select value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })}>
+              {Object.entries(CASE_PRIORITIES).map(([k, p]) => <option key={k} value={k}>{p.label}</option>)}
+            </Select>
+          </Field>
+          <Field label="Reason" required error={attempted ? reasonError : null} className="sm:col-span-2">
+            <Textarea rows={3} maxLength={500} value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} placeholder="What needs to be looked at, and why" />
+          </Field>
+          <Field label="Claim reference" hint="Optional. Links the case to a claim.">
+            <Input className="font-mono" value={form.claim_id} onChange={(e) => setForm({ ...form, claim_id: e.target.value })} />
+          </Field>
+          <Field label="Amount at stake (R)" error={attempted ? stakeError : null} hint="Optional.">
+            <Input type="number" min={0} step="0.01" value={form.stake} onChange={(e) => setForm({ ...form, stake: e.target.value })} />
+          </Field>
+          {formError && <p className="rounded-md border border-bad-line bg-bad-bg px-3 py-2 text-[13px] text-bad-fg sm:col-span-2" role="alert">{formError}</p>}
+        </div>
+      </Dialog>
     </div>
   );
 }

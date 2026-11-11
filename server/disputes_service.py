@@ -16,6 +16,7 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .clock import utcnow
 from . import models, statemachine as sm
 
 SUBJECTS = {"MERITS", "QUANTUM", "TARIFF", "REPUDIATION", "SERIOUS_INJURY"}
@@ -47,7 +48,7 @@ def lodge(db: Session, user: dict, claim_id: str, subject: str, raised_by: str,
         raise sm.GateNotMet(f"unknown raised_by: {raised_by}")
     d = models.Dispute(
         claim_id=claim_id, subject=subject, raised_by=raised_by, grounds=grounds, status="LODGED",
-        opened_by=user["username"], deadline=datetime.now() + timedelta(days=OBJECTION_WINDOW_DAYS))
+        opened_by=user["username"], deadline=utcnow() + timedelta(days=OBJECTION_WINDOW_DAYS))
     db.add(d)
     db.commit()
     return d
@@ -75,13 +76,13 @@ def transition(db: Session, dispute_id: int, action: str, user: dict, outcome: O
         else:
             d.linked_ref = linked_ref
     elif action == "uphold":
-        d.outcome, d.closed_at = outcome, datetime.now()          # decision revised in the disputant's favour
+        d.outcome, d.closed_at = outcome, utcnow()          # decision revised in the disputant's favour
     elif action == "reject":
         d.outcome = outcome                                       # decision stands (may still be referred)
     elif action == "resolve":
-        d.outcome, d.closed_at = outcome, datetime.now()
+        d.outcome, d.closed_at = outcome, utcnow()
     elif action == "withdraw":
-        d.closed_at = datetime.now()
+        d.closed_at = utcnow()
     db.commit()
     return d
 
@@ -91,7 +92,7 @@ def _days_left(d: "models.Dispute", now: datetime) -> Optional[int]:
 
 
 def item_dict(d: "models.Dispute", now: Optional[datetime] = None) -> dict:
-    now = now or datetime.now()
+    now = now or utcnow()
     return {
         "id": d.id, "claim_id": d.claim_id, "subject": d.subject, "raised_by": d.raised_by,
         "grounds": d.grounds, "status": d.status, "channel": d.channel, "outcome": d.outcome,

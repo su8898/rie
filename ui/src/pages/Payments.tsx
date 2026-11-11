@@ -1,724 +1,370 @@
-// Payments — the payment-batch operations page.
-//
-// Two-column ops layout:
-//   Left  — the eligible-to-pay queue (/payments/queue) and the batch list
-//           (/payments/batches). Selecting a batch loads it on the right;
-//           clicking a queue row prefills the add-instruction form when an OPEN
-//           batch is selected.
-//   Right — the selected batch: header + instructions table + payment-event
-//           timeline + its `actions` (approve / pay / cancel) as buttons, plus
-//           an add-instruction form while the batch is OPEN.
-//
-// Every action button disables in-flight; on success we re-fetch the batch and
-// the queue; failures surface the backend {detail} (segregation of duties,
-// PAYEE_UNVERIFIED, eligibility, empty-batch, illegal transition) via Toast.
-// Approve/pay are greyed for non-ADMIN as a courtesy — the backend remains
-// authoritative and its 403 detail is always shown.
+// Payments. Three lists behind one page: payment runs, claims that are ready to pay, and the
+// remittance advice sent to practices. A run is assembled by one person, approved by a second
+// and released by a third; each run opens as its own record.
 
+import { Plus, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { ApiError, api } from "../api";
 import { useAuth } from "../auth";
-import {
-  BandChip,
-  Card,
-  DispositionChip,
-  Empty,
-  ErrorBox,
-  Loading,
-  Pagination,
-  SearchInput,
-  Stat,
-  Toast,
-  YesNo,
-  matchQ,
-  usePaged,
-} from "../components/ui";
-import { num, rand } from "../format";
-import RemittancesCard from "./PaymentsRemittances";
-import type {
-  BatchDict,
-  BatchStatus,
-  PaymentSource,
-  QueueRow,
-} from "../types";
+import { DataTable, Pager, type Column } from "../ds/DataTable";
+import { REMITTANCE_STATUS, RUN_STATUS, dateTime, paymentError, shortDate } from "../ds/labels";
+import { Dialog, useToast } from "../ds/overlays";
+import { Badge, Button, EmptyState, ErrorBlock, Field, Input, PageHeader, Ref, Select, Stat, Tabs, Textarea, cx } from "../ds/primitives";
+import { rand } from "../format";
+import type { BatchStatus, QueueRow, RemittanceSummary, RunSummary } from "../types";
+import { ReadyToPayTable, matches, selectable } from "./payments/ReadyToPay";
 
-const SOURCES: PaymentSource[] = [
-  "SETTLEMENT",
-  "COURT_ORDER",
-  "UNDERTAKING_INVOICE",
-  "SUPPLIER",
-  "INTERIM",
-];
-
-// Which role may fire each batch action (courtesy graying; backend is authoritative).
-// ADMIN is a superuser everywhere.
-const ADMIN_ONLY = new Set(["approve", "pay"]);
-
-// Inbox ordering: batches that still need action (OPEN → being assembled/approved,
-// APPROVED → awaiting payment) surface above terminal ones.
-const STATUS_ORDER: Record<string, number> = {
-  OPEN: 0,
-  APPROVED: 1,
-  PAID: 2,
-  CANCELLED: 3,
-};
-
-// ── Batch status chip (OPEN=sky, APPROVED=amber, PAID=emerald, CANCELLED=slate)
-function BatchStatusChip({ status }: { status: BatchStatus }) {
-  const cls =
-    status === "OPEN"
-      ? "bg-sky-100 text-sky-800 ring-sky-600/20"
-      : status === "APPROVED"
-        ? "bg-amber-100 text-amber-800 ring-amber-600/20"
-        : status === "PAID"
-          ? "bg-emerald-100 text-emerald-800 ring-emerald-600/20"
-          : "bg-slate-200 text-slate-600 ring-slate-500/20";
-  return (
-    <span
-      className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-semibold ring-1 ring-inset ${cls}`}
-    >
-      {status}
-    </span>
-  );
-}
+type Tab = "runs" | "ready" | "advice";
+const STATUSES: BatchStatus[] = ["OPEN", "APPROVED", "PAID", "CANCELLED"];
+const message = (e: unknown, fallback: string) => (e instanceof ApiError ? paymentError(e.message) : fallback);
 
 export default function PaymentsPage() {
+  const navigate = useNavigate();
+  const toast = useToast();
   const { user } = useAuth();
-  const isAdmin = user?.role === "ADMIN";
+  const [params, setParams] = useSearchParams();
+  const tab: Tab = params.get("tab") === "ready" ? "ready" : params.get("tab") === "advice" ? "advice" : "runs";
+  const canAssemble = user?.role === "HANDLER" || user?.role === "ADMIN";
 
   const [queue, setQueue] = useState<QueueRow[] | null>(null);
-  const [batches, setBatches] = useState<BatchDict[] | null>(null);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [batch, setBatch] = useState<BatchDict | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [busyKey, setBusyKey] = useState<string | null>(null);
-  const [toast, setToast] = useState<{
-    message: string;
-    tone: "error" | "success";
-  } | null>(null);
+  const [counts, setCounts] = useState<Record<BatchStatus, number> | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [version, setVersion] = useState(0);
 
-  // Add-instruction form state.
-  const [formClaimId, setFormClaimId] = useState("");
-  const [formSource, setFormSource] = useState<PaymentSource>("SUPPLIER");
-  const [formAmount, setFormAmount] = useState("");
-
-  // New-batch note.
-  const [newNote, setNewNote] = useState("");
-
-  const loadLists = useCallback(async () => {
-    try {
-      const [q, b] = await Promise.all([
-        api.paymentsQueue(),
-        api.listBatches(),
-      ]);
-      setQueue(q);
-      setBatches(b);
-      setLoadError(null);
-    } catch (e) {
-      setLoadError(e instanceof ApiError ? e.message : "Failed to load");
-    }
+  const loadQueue = useCallback(() => {
+    api.paymentsQueue().then(setQueue).catch(() => setQueue([]));
   }, []);
+  useEffect(() => { loadQueue(); }, [loadQueue, version]);
 
-  const loadBatch = useCallback(async (id: number) => {
+  const ready = useMemo(() => (queue ?? []).filter(selectable), [queue]);
+  const readyTotal = ready.reduce((s, r) => s + (r.amount ?? 0), 0);
+
+  const set = (changes: Record<string, string | null>, keepPage = false) => {
+    const next = new URLSearchParams(params);
+    for (const [k, v] of Object.entries(changes)) {
+      if (v) next.set(k, v); else next.delete(k);
+    }
+    if (!keepPage) next.delete("page");
+    setParams(next, { replace: true });
+  };
+
+  async function createRun() {
+    setBusy(true);
     try {
-      setBatch(await api.getBatch(id));
+      const run = await api.createBatch(note.trim() || undefined);
+      toast.success(`Payment run ${run.id} created.`);
+      navigate(`/payments/runs/${run.id}`);
     } catch (e) {
-      setToast({
-        message: e instanceof ApiError ? e.message : "Failed to load batch",
-        tone: "error",
-      });
+      toast.error(message(e, "The payment run could not be created."));
+    } finally {
+      setBusy(false);
     }
-  }, []);
-
-  useEffect(() => {
-    void loadLists();
-  }, [loadLists]);
-
-  // Load the selected batch whenever the selection changes.
-  useEffect(() => {
-    if (selectedId == null) {
-      setBatch(null);
-      return;
-    }
-    void loadBatch(selectedId);
-  }, [selectedId, loadBatch]);
-
-  // Fire an action: disable in-flight, refetch batch + lists on success,
-  // surface the backend {detail} on failure.
-  const run = useCallback(
-    (key: string, fn: () => Promise<unknown>, okMsg = "Done.") => {
-      if (busyKey !== null) return;
-      setBusyKey(key);
-      fn()
-        .then(async () => {
-          await Promise.all([
-            loadLists(),
-            selectedId != null ? loadBatch(selectedId) : Promise.resolve(),
-          ]);
-          setToast({ message: okMsg, tone: "success" });
-        })
-        .catch((e) =>
-          setToast({
-            message: e instanceof ApiError ? e.message : "Request failed.",
-            tone: "error",
-          }),
-        )
-        .finally(() => setBusyKey(null));
-    },
-    [busyKey, loadLists, loadBatch, selectedId],
-  );
-
-  function createBatch() {
-    if (busyKey !== null) return;
-    setBusyKey("new-batch");
-    api
-      .createBatch(newNote.trim() || undefined)
-      .then(async (b) => {
-        setNewNote("");
-        await loadLists();
-        setSelectedId(b.id);
-        setToast({ message: `Batch #${b.id} created.`, tone: "success" });
-      })
-      .catch((e) =>
-        setToast({
-          message: e instanceof ApiError ? e.message : "Request failed.",
-          tone: "error",
-        }),
-      )
-      .finally(() => setBusyKey(null));
   }
-
-  function addInstruction() {
-    if (selectedId == null || !formClaimId.trim()) return;
-    const amt = formAmount.trim() === "" ? undefined : Number(formAmount);
-    run(
-      "add-instruction",
-      () =>
-        api.addInstruction(selectedId, {
-          claim_id: formClaimId.trim(),
-          source: formSource,
-          ...(amt != null && !Number.isNaN(amt) ? { amount: amt } : {}),
-        }),
-      "Instruction added.",
-    );
-    setFormAmount("");
-  }
-
-  // Clicking a queue row prefills the add-instruction form when a batch is
-  // selected and OPEN; otherwise it's a no-op (aside from being harmless).
-  function pickQueueRow(row: QueueRow) {
-    setFormClaimId(row.claim_id);
-    // Heuristic source seed from disposition — user can still change it.
-    setFormSource(
-      row.disposition === "CLEAN" || row.disposition === "ADJUSTED"
-        ? "SUPPLIER"
-        : "SETTLEMENT",
-    );
-  }
-
-  // Pipeline overview.
-  const eligibleTotal = (queue ?? []).reduce((s, r) => s + r.net_payable, 0);
-  const openCount = (batches ?? []).filter((b) => b.status === "OPEN").length;
-  const approvedCount = (batches ?? []).filter(
-    (b) => b.status === "APPROVED",
-  ).length;
-  const paidCount = (batches ?? []).filter((b) => b.status === "PAID").length;
-
-  // Batch inbox: actionable first, newest first within a status.
-  const sortedBatches = useMemo(
-    () =>
-      [...(batches ?? [])].sort(
-        (a, b) =>
-          (STATUS_ORDER[a.status] ?? 9) - (STATUS_ORDER[b.status] ?? 9) ||
-          b.id - a.id,
-      ),
-    [batches],
-  );
-
-  // Eligible-queue picker (shown inside the assemble step of an OPEN batch).
-  const [queueQ, setQueueQ] = useState("");
-  const filteredQueue = useMemo(
-    () =>
-      (queue ?? []).filter((r) => matchQ(queueQ, r.claim_id, r.disposition, r.band)),
-    [queue, queueQ],
-  );
-
-  const queuePg = usePaged(filteredQueue, 6);
-  const batchesPg = usePaged(sortedBatches, 8);
-
-  const labelBtn = (a: string) => a.replace(/_/g, " ");
 
   return (
-    <div className="space-y-4">
-      <header>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h1 className="text-xl font-semibold text-slate-900">Payments</h1>
-          <span className="text-xs text-slate-400">
-            assemble → approve (different admin) → pay
-          </span>
-        </div>
-        <p className="mt-0.5 max-w-3xl text-sm text-slate-500">
-          The payment-batch machine (§8e): a batch is assembled from claims that
-          cleared the gate, then approved by a{" "}
-          <span className="font-medium text-slate-600">different</span> admin
-          than the one who assembled it, then paid — OPEN → APPROVED →
-          PAID/CANCELLED. The two-person split is the control: segregation of
-          duties is what stops a single operator paying themselves. Approve and
-          pay are ADMIN-gated here as a courtesy, but the backend is
-          authoritative — it enforces the different-approver rule, payee
-          verification and legal transitions, and its refusal is shown verbatim.
-        </p>
-      </header>
-
-      {loadError && <ErrorBox message={loadError} />}
-
-      {/* Pipeline overview */}
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <Stat
-          label="Eligible to pay"
-          value={num(queue?.length ?? 0)}
-          sub={rand(eligibleTotal)}
-        />
-        <Stat label="Open" value={num(openCount)} sub="being assembled" />
-        <Stat
-          label="Approved"
-          value={num(approvedCount)}
-          sub="awaiting payment"
-          accent={approvedCount > 0 ? "text-amber-600" : "text-slate-900"}
-        />
-        <Stat label="Paid" value={num(paidCount)} accent="text-emerald-600" />
-      </div>
-
-      {/* Batch inbox (master) + workspace (detail) */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-        {/* ── Left: batch inbox ─────────────────────────────────────────── */}
-        <div className="md:col-span-1">
-          <Card
-            title="Batches"
-            sub="Every payment run, actionable-first: OPEN (being assembled) and APPROVED (awaiting payment) sort above terminal PAID / CANCELLED, newest first within a status. New batch opens an empty OPEN batch to start assembling."
-          >
-            {/* New batch — the entry action */}
-            <div className="mb-3 space-y-2 rounded-md border border-slate-200 bg-slate-50/60 p-3">
-              <label className={microLabel}>New batch note (optional)</label>
-              <input
-                value={newNote}
-                onChange={(e) => setNewNote(e.target.value)}
-                className={fieldCls}
-                placeholder="e.g. weekly supplier run"
-              />
-              <button
-                onClick={createBatch}
-                disabled={busyKey !== null}
-                className="w-full rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-40"
-              >
-                {busyKey === "new-batch" ? "Creating…" : "+ New batch"}
-              </button>
-            </div>
-
-            {batches === null ? (
-              <Loading label="Loading batches…" />
-            ) : batches.length === 0 ? (
-              <div className="text-sm text-slate-400">
-                No batches yet — create one above to start.
-              </div>
-            ) : (
-              <ul className="space-y-1.5">
-                {batchesPg.slice.map((b) => {
-                  const active = b.id === selectedId;
-                  return (
-                    <li key={b.id}>
-                      <button
-                        onClick={() => setSelectedId(b.id)}
-                        className={`block w-full rounded-md border px-3 py-2 text-left transition ${
-                          active
-                            ? "border-slate-900 bg-slate-50"
-                            : "border-slate-200 hover:bg-slate-50"
-                        }`}
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="flex items-center gap-2">
-                            <span className="text-xs font-medium text-slate-500">
-                              #{b.id}
-                            </span>
-                            <BatchStatusChip status={b.status} />
-                          </span>
-                          <span className="tnum shrink-0 text-sm font-semibold text-slate-800">
-                            {rand(b.total)}
-                          </span>
-                        </div>
-                        <div className="mt-0.5 text-[11px] text-slate-400">
-                          {b.instructions.length} instr · {b.created_by}
-                        </div>
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-            {batches !== null && batches.length > 0 && (
-              <Pagination
-                page={batchesPg.page}
-                pageCount={batchesPg.pageCount}
-                total={batchesPg.total}
-                onPage={batchesPg.setPage}
-                unit="batches"
-              />
-            )}
-          </Card>
-        </div>
-
-        {/* ── Right: batch workspace ────────────────────────────────────── */}
-        <div className="md:col-span-2">
-          {batch === null ? (
-            <Card>
-              <Empty label="Select a batch on the left, or create one to start a payment run." />
-            </Card>
-          ) : (
-            <div className="space-y-4">
-              {/* Header + next actions */}
-              <Card sub="The batch at a glance: its status and total, and who assembled (created), approved and paid it — the segregation-of-duties trail, filled in as it advances. Next lists only the transitions the backend allows right now; approve and pay are ADMIN and cannot be fired by whoever assembled it (§8e).">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex items-center gap-3">
-                    <h2 className="text-lg font-semibold text-slate-900">
-                      Batch #{batch.id}
-                    </h2>
-                    <BatchStatusChip status={batch.status} />
-                  </div>
-                  <div className="tnum text-xl font-semibold text-slate-900">
-                    {rand(batch.total)}
-                  </div>
-                </div>
-
-                <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-1 text-xs sm:grid-cols-3">
-                  <Meta k="created by" v={batch.created_by} />
-                  <Meta k="approved by" v={batch.approved_by ?? "—"} />
-                  <Meta k="paid by" v={batch.paid_by ?? "—"} />
-                  {batch.note && (
-                    <div className="col-span-2 sm:col-span-3">
-                      <span className="text-slate-400">note: </span>
-                      <span className="text-slate-700">{batch.note}</span>
-                    </div>
-                  )}
-                </dl>
-
-                {/* Next actions — prominent (approve / pay / cancel). */}
-                {batch.actions.length > 0 ? (
-                  <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
-                    <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                      Next
-                    </span>
-                    {batch.actions.map((a) => {
-                      const adminGated = ADMIN_ONLY.has(a) && !isAdmin;
-                      const danger = a === "cancel";
-                      const advancing = a === "approve" || a === "pay";
-                      return (
-                        <button
-                          key={a}
-                          onClick={() =>
-                            run(
-                              `batch.${a}`,
-                              () =>
-                                a === "approve"
-                                  ? api.approveBatch(batch.id)
-                                  : a === "pay"
-                                    ? api.payBatch(batch.id)
-                                    : api.cancelBatch(batch.id),
-                              `Batch ${a}${a === "pay" ? "" : "d"}.`,
-                            )
-                          }
-                          disabled={busyKey !== null || adminGated}
-                          title={adminGated ? "Requires role: ADMIN" : undefined}
-                          className={`rounded-md px-3.5 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-40 ${
-                            advancing
-                              ? "bg-slate-900 text-white hover:bg-slate-800"
-                              : danger
-                                ? "border border-rose-300 text-rose-700 hover:bg-rose-50"
-                                : "border border-slate-300 text-slate-700 hover:bg-slate-100"
-                          }`}
-                        >
-                          {busyKey === `batch.${a}` ? "…" : labelBtn(a)}
-                        </button>
-                      );
-                    })}
-                    {!isAdmin && batch.actions.some((a) => ADMIN_ONLY.has(a)) && (
-                      <span className="text-[11px] text-slate-400">
-                        approve / pay require ADMIN
-                      </span>
-                    )}
-                  </div>
-                ) : (
-                  <div className="mt-4 border-t border-slate-100 pt-3 text-xs text-slate-400">
-                    {batch.status === "PAID"
-                      ? "Paid — no further actions."
-                      : "Terminal state — no further actions."}
-                  </div>
-                )}
-              </Card>
-
-              {/* Instructions */}
-              <Card
-                title={`Instructions (${batch.instructions.length})`}
-                sub="One line per payment: a claim, the source it pays under (SETTLEMENT / COURT_ORDER / UNDERTAKING_INVOICE / SUPPLIER / INTERIM), and an amount that defaults to the claim's net_payable. They sum to the batch total; Paid flips once the batch is paid."
-              >
-                {batch.instructions.length === 0 ? (
-                  <div className="text-sm text-slate-400">
-                    {batch.status === "OPEN"
-                      ? "Empty — add instructions from the eligible queue below."
-                      : "No instructions."}
-                  </div>
-                ) : (
-                  <div className="overflow-x-auto rounded-md border border-slate-100">
-                    <table className="min-w-full divide-y divide-slate-100 text-sm">
-                      <thead className="bg-slate-50">
-                        <tr className="text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                          <th className="px-3 py-2">Claim</th>
-                          <th className="px-3 py-2">Source</th>
-                          <th className="px-3 py-2 text-right">Amount</th>
-                          <th className="px-3 py-2 text-center">Paid</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {batch.instructions.map((i) => (
-                          <tr key={i.id}>
-                            <td className="px-3 py-2">
-                              <Link
-                                to={`/claims/${encodeURIComponent(i.claim_id)}`}
-                                className="font-mono text-[13px] text-slate-800 hover:text-blue-600 hover:underline"
-                              >
-                                {i.claim_id}
-                              </Link>
-                            </td>
-                            <td className="px-3 py-2 text-slate-600">
-                              {i.source.replace(/_/g, " ")}
-                            </td>
-                            <td className="tnum px-3 py-2 text-right font-medium text-slate-800">
-                              {rand(i.amount)}
-                            </td>
-                            <td className="px-3 py-2 text-center">
-                              <YesNo value={i.paid} />
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </Card>
-
-              {/* Assemble — add instructions from the eligible queue (OPEN only) */}
-              {batch.status === "OPEN" && (
-                <Card
-                  title="Add instructions"
-                  sub="Assemble the batch from the eligible queue — claims that cleared the gate and are ready to pay. Pick one to prefill its claim id, choose the source it pays under and an amount (blank uses net_payable), then Add. Only while the batch is OPEN."
-                >
-                  {/* the instruction form (prefilled from the queue picker below) */}
-                  <div className="flex flex-wrap items-end gap-2">
-                    <div className="w-40">
-                      <label className={microLabel}>claim id</label>
-                      <input
-                        value={formClaimId}
-                        onChange={(e) => setFormClaimId(e.target.value)}
-                        className={`${fieldCls} font-mono`}
-                        placeholder="pick from queue ↓"
-                      />
-                    </div>
-                    <div className="w-48">
-                      <label className={microLabel}>source</label>
-                      <select
-                        value={formSource}
-                        onChange={(e) =>
-                          setFormSource(e.target.value as PaymentSource)
-                        }
-                        className={fieldCls}
-                      >
-                        {SOURCES.map((s) => (
-                          <option key={s} value={s}>
-                            {s}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="w-32">
-                      <label className={microLabel}>amount (optional)</label>
-                      <input
-                        type="number"
-                        value={formAmount}
-                        onChange={(e) => setFormAmount(e.target.value)}
-                        className={`${fieldCls} tnum`}
-                        placeholder="net_payable"
-                      />
-                    </div>
-                    <button
-                      onClick={addInstruction}
-                      disabled={busyKey !== null || !formClaimId.trim()}
-                      className="rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-40"
-                    >
-                      {busyKey === "add-instruction" ? "…" : "Add"}
-                    </button>
-                  </div>
-                  <p className="mt-2 text-[11px] text-slate-400">
-                    Pick a claim from the eligible queue below to prefill; amount
-                    defaults to the claim's net_payable.
-                  </p>
-
-                  {/* eligible queue — the picker */}
-                  <div className="mt-4">
-                    <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                        Eligible queue
-                      </span>
-                      <SearchInput
-                        value={queueQ}
-                        onChange={setQueueQ}
-                        placeholder="Search claim…"
-                        className="w-52"
-                      />
-                    </div>
-                    {queue === null ? (
-                      <Loading label="Loading queue…" />
-                    ) : filteredQueue.length === 0 ? (
-                      <div className="text-sm text-slate-400">
-                        {queueQ
-                          ? "No eligible claims match your search."
-                          : "No claims currently eligible to pay."}
-                      </div>
-                    ) : (
-                      <div className="overflow-hidden rounded-md border border-slate-100">
-                        <table className="min-w-full divide-y divide-slate-100 text-sm">
-                          <thead className="bg-slate-50">
-                            <tr className="text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                              <th className="px-3 py-2">Claim</th>
-                              <th className="px-3 py-2">Band</th>
-                              <th className="px-3 py-2 text-right">Net payable</th>
-                              <th className="px-3 py-2" />
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-100">
-                            {queuePg.slice.map((r) => (
-                              <tr key={r.claim_id} className="hover:bg-slate-50">
-                                <td className="px-3 py-2">
-                                  <Link
-                                    to={`/claims/${encodeURIComponent(r.claim_id)}`}
-                                    className="font-mono text-[13px] text-slate-900 hover:text-blue-600 hover:underline"
-                                  >
-                                    {r.claim_id}
-                                  </Link>
-                                  <div className="mt-0.5">
-                                    <DispositionChip disposition={r.disposition} />
-                                  </div>
-                                </td>
-                                <td className="px-3 py-2">
-                                  <BandChip band={r.band} />
-                                </td>
-                                <td className="tnum px-3 py-2 text-right font-medium text-slate-800">
-                                  {rand(r.net_payable)}
-                                </td>
-                                <td className="px-3 py-2 text-right">
-                                  <button
-                                    onClick={() => pickQueueRow(r)}
-                                    className="rounded border border-slate-300 px-2 py-0.5 text-[11px] text-slate-600 transition hover:bg-slate-100"
-                                    title="Prefill the add-instruction form"
-                                  >
-                                    use
-                                  </button>
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                        <Pagination
-                          page={queuePg.page}
-                          pageCount={queuePg.pageCount}
-                          total={queuePg.total}
-                          onPage={queuePg.setPage}
-                          unit="eligible"
-                        />
-                      </div>
-                    )}
-                  </div>
-                </Card>
-              )}
-
-              {/* Event timeline */}
-              <Card
-                title="Payment events"
-                sub="The append-only payment_event log (§8e): each assemble / approve / pay stamped with actor, role and time — the audit trail behind the segregation of duties, oldest first."
-              >
-                {batch.events.length === 0 ? (
-                  <div className="text-sm text-slate-400">No events.</div>
-                ) : (
-                  <ol className="space-y-0">
-                    {batch.events.map((e, i) => (
-                      <li
-                        key={i}
-                        className="relative flex gap-3 pb-3 last:pb-0"
-                      >
-                        {/* rail */}
-                        <div className="flex flex-col items-center">
-                          <span className="mt-1 h-2 w-2 rounded-full bg-slate-400" />
-                          {i < batch.events.length - 1 && (
-                            <span className="w-px flex-1 bg-slate-200" />
-                          )}
-                        </div>
-                        <div className="flex-1 pb-1">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="text-sm font-medium text-slate-800">
-                              {e.event.replace(/_/g, " ")}
-                            </span>
-                            {e.amount != null && (
-                              <span className="tnum text-xs font-medium text-slate-600">
-                                {rand(e.amount)}
-                              </span>
-                            )}
-                          </div>
-                          <div className="text-[11px] text-slate-400">
-                            {e.actor}
-                            <span className="text-slate-300"> · {e.role}</span>
-                            {e.at && (
-                              <span className="text-slate-300">
-                                {" "}
-                                · {new Date(e.at).toLocaleString()}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </li>
-                    ))}
-                  </ol>
-                )}
-              </Card>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* refetches whenever another batch reaches PAID */}
-      <RemittancesCard
-        refreshKey={(batches ?? []).filter((b) => b.status === "PAID").length}
+    <div>
+      <PageHeader
+        crumbs={[{ label: "Finance" }, { label: "Payments" }]}
+        title="Payments"
+        subtitle="Assemble a payment run, have it approved and released, and send each practice its remittance advice."
+        actions={canAssemble && <Button variant="primary" icon={Plus} onClick={() => { setNote(""); setCreating(true); }}>New payment run</Button>}
       />
 
-      {toast && (
-        <Toast
-          message={toast.message}
-          tone={toast.tone}
-          onClose={() => setToast(null)}
-        />
-      )}
+      <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Stat label="Ready to pay" value={queue ? rand(readyTotal) : "…"} hint={queue ? `${ready.length} claim${ready.length === 1 ? "" : "s"} not in a run` : undefined} tone={ready.length ? "ok" : undefined} />
+        <Stat label="Being assembled" value={counts ? counts.OPEN : "…"} hint="Runs that can still be changed" />
+        <Stat label="Awaiting release" value={counts ? counts.APPROVED : "…"} hint="Approved, not yet paid" tone={counts?.APPROVED ? "warn" : undefined} />
+        <Stat label="Paid" value={counts ? counts.PAID : "…"} hint="Runs released" />
+      </div>
+
+      <Tabs<Tab>
+        tabs={[
+          { key: "runs", label: "Payment runs", count: counts ? STATUSES.reduce((s, k) => s + counts[k], 0) : undefined },
+          { key: "ready", label: "Ready to pay", count: queue?.length },
+          { key: "advice", label: "Remittance advice" },
+        ]}
+        value={tab} onChange={(k) => setParams(k === "runs" ? {} : { tab: k }, { replace: true })}
+      />
+
+      <div className="mt-4">
+        {tab === "runs" && <RunsTab params={params} set={set} onCounts={setCounts} version={version} />}
+        {tab === "ready" && (
+          <ReadyTab queue={queue} canAssemble={canAssemble} onDone={() => setVersion((v) => v + 1)} />
+        )}
+        {tab === "advice" && <AdviceTab params={params} set={set} />}
+      </div>
+      {tab !== "runs" && <CountsLoader onCounts={setCounts} version={version} />}
+
+      <Dialog
+        open={creating} onClose={() => setCreating(false)} title="New payment run"
+        description="You assemble the run. A second administrator approves it and a third releases the payment."
+        footer={<><Button onClick={() => setCreating(false)}>Cancel</Button><Button variant="primary" loading={busy} onClick={createRun}>Create run</Button></>}
+      >
+        <Field label="Note" hint="Optional. For example the payment date or the period this run covers.">
+          <Textarea rows={3} maxLength={500} value={note} onChange={(e) => setNote(e.target.value)} />
+        </Field>
+      </Dialog>
     </div>
   );
 }
 
-const fieldCls =
-  "w-full rounded-md border border-slate-300 px-2 py-1 text-xs outline-none focus:border-slate-500 focus:ring-1 focus:ring-slate-500";
-const microLabel =
-  "mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-slate-400";
+/** Keeps the header figures current while another tab is showing. */
+function CountsLoader({ onCounts, version }: { onCounts: (c: Record<BatchStatus, number>) => void; version: number }) {
+  useEffect(() => {
+    api.paymentRuns({ limit: 1 }).then((r) => onCounts(r.counts)).catch(() => undefined);
+  }, [onCounts, version]);
+  return null;
+}
 
-function Meta({ k, v }: { k: string; v: string }) {
+// ── Payment runs ─────────────────────────────────────────────────────────────
+function RunsTab({
+  params, set, onCounts, version,
+}: {
+  params: URLSearchParams; set: (c: Record<string, string | null>, keepPage?: boolean) => void;
+  onCounts: (c: Record<BatchStatus, number>) => void; version: number;
+}) {
+  const navigate = useNavigate();
+  const [rows, setRows] = useState<RunSummary[]>([]);
+  const [total, setTotal] = useState(0);
+  const [counts, setCounts] = useState<Record<BatchStatus, number> | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const page = Math.max(1, Number(params.get("page")) || 1);
+  const pageSize = [25, 50, 100].includes(Number(params.get("size"))) ? Number(params.get("size")) : 25;
+  const status = params.get("status") ?? "";
+  const q = params.get("q") ?? "";
+  const direction = params.get("dir") === "asc" ? "asc" : "desc";
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await api.paymentRuns({ status, q, direction, limit: pageSize, offset: (page - 1) * pageSize });
+      setRows(res.rows);
+      setTotal(res.total);
+      setCounts(res.counts);
+      onCounts(res.counts);
+    } catch (e) {
+      setError(message(e, "The payment runs could not be loaded."));
+    } finally {
+      setLoading(false);
+    }
+  }, [status, q, direction, page, pageSize, onCounts]);
+  useEffect(() => { void load(); }, [load, version]);
+
+  const all = counts ? STATUSES.reduce((s, k) => s + counts[k], 0) : undefined;
+  const views: { key: string; label: string; count?: number }[] = [
+    { key: "", label: "All runs", count: all },
+    ...STATUSES.map((k) => ({ key: k, label: RUN_STATUS[k].label, count: counts?.[k] })),
+  ];
+  const columns: Column<RunSummary>[] = [
+    { key: "created", header: "Run", sortable: true, render: (r) => (
+      <div>
+        <div className="font-medium text-ink-900">Payment run {r.id}</div>
+        <div className="max-w-[28ch] truncate text-xs text-ink-500">{r.note || "No note"}</div>
+      </div>
+    ) },
+    { key: "when", header: "Created", render: (r) => <div><div className="text-ink-800">{shortDate(r.created_at)}</div><div className="text-xs text-ink-500">by {r.created_by}</div></div> },
+    { key: "status", header: "Status", render: (r) => <Badge tone={RUN_STATUS[r.status].tone} dot>{RUN_STATUS[r.status].label}</Badge> },
+    { key: "claims", header: "Claims", align: "right", render: (r) => <span className="tnum text-ink-800">{r.n_claims}</span> },
+    { key: "total", header: "Total", align: "right", render: (r) => <span className="tnum font-medium text-ink-900">{rand(r.total)}</span> },
+    { key: "approved", header: "Approved by", render: (r) => r.approved_by ?? <span className="text-ink-400">—</span> },
+    { key: "paid", header: "Released", render: (r) => r.paid_by ? <div><div className="text-ink-800">{shortDate(r.paid_at)}</div><div className="text-xs text-ink-500">by {r.paid_by}</div></div> : <span className="text-ink-400">—</span> },
+  ];
+
   return (
-    <div>
-      <span className="text-slate-400">{k}: </span>
-      <span className="font-medium text-slate-700">{v}</span>
-    </div>
+    <>
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="Run status">
+          {views.map((v) => (
+            <button
+              key={v.key || "all"} role="tab" aria-selected={status === v.key} onClick={() => set({ status: v.key || null })}
+              className={cx("rounded-full border px-3 py-1.5 text-[13px] font-medium transition", status === v.key ? "border-ink-900 bg-ink-900 text-white" : "border-line-strong bg-white text-ink-600 hover:border-ink-400 hover:text-ink-900")}
+            >
+              {v.label}{v.count != null && <span className="tnum ml-1.5 opacity-70">{v.count}</span>}
+            </button>
+          ))}
+        </div>
+        <div className="ml-auto flex w-full items-center gap-2 sm:w-72">
+          <Input placeholder="Run number, note, person or claim" aria-label="Search payment runs" value={q} onChange={(e) => set({ q: e.target.value })} />
+          {(q || status) && <Button size="sm" variant="ghost" icon={X} onClick={() => set({ q: null, status: null })}>Clear</Button>}
+        </div>
+      </div>
+      {error ? <ErrorBlock message={error} onRetry={load} /> : (
+        <DataTable
+          columns={columns} rows={rows} rowKey={(r) => String(r.id)} loading={loading}
+          sort={{ key: "created", direction }} onSort={(s) => set({ dir: s.direction === "asc" ? "asc" : null }, true)}
+          onRowClick={(r) => navigate(`/payments/runs/${r.id}`)}
+          empty={<EmptyState title={q || status ? "No payment run matches" : "No payment runs yet"} body={q || status ? "Change the search or the status." : "Create a payment run to start paying the claims that are ready."} />}
+          footer={<Pager page={page} pageSize={pageSize} total={total} unit="runs" onPage={(p) => set({ page: p > 1 ? String(p) : null }, true)} onPageSize={(n) => set({ size: n === 25 ? null : String(n) })} />}
+        />
+      )}
+    </>
+  );
+}
+
+// ── Ready to pay ─────────────────────────────────────────────────────────────
+function ReadyTab({ queue, canAssemble, onDone }: { queue: QueueRow[] | null; canAssemble: boolean; onDone: () => void }) {
+  const navigate = useNavigate();
+  const toast = useToast();
+  const [q, setQ] = useState("");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [choosing, setChoosing] = useState(false);
+  const [openRuns, setOpenRuns] = useState<RunSummary[]>([]);
+  const [target, setTarget] = useState("new");
+  const [busy, setBusy] = useState(false);
+
+  const rows = useMemo(() => (queue ?? []).filter((r) => matches(r, q)), [queue, q]);
+  const picked = (queue ?? []).filter((r) => selected.has(r.claim_id));
+  const pickedTotal = picked.reduce((s, r) => s + (r.amount ?? 0), 0);
+
+  async function openChooser() {
+    setChoosing(true);
+    try {
+      const res = await api.paymentRuns({ status: "OPEN", limit: 100 });
+      setOpenRuns(res.rows);
+      setTarget(res.rows.length ? String(res.rows[0].id) : "new");
+    } catch {
+      setOpenRuns([]);
+      setTarget("new");
+    }
+  }
+
+  async function addToRun() {
+    setBusy(true);
+    try {
+      const runId = target === "new" ? (await api.createBatch()).id : Number(target);
+      const failed: string[] = [];
+      for (const r of picked) {
+        try {
+          await api.addInstruction(runId, { claim_id: r.claim_id, source: r.source! });
+        } catch (e) {
+          failed.push(`${r.claim_id}: ${message(e, "could not be added")}`);
+        }
+      }
+      const added = picked.length - failed.length;
+      if (added) toast.success(`${added} claim${added === 1 ? "" : "s"} added to payment run ${runId}.`);
+      failed.forEach((m) => toast.error(m));
+      setSelected(new Set());
+      setChoosing(false);
+      onDone();
+      navigate(`/payments/runs/${runId}`);
+    } catch (e) {
+      toast.error(message(e, "The claims could not be added."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (queue === null) return <div className="rounded-lg border border-line bg-white px-4 py-10 text-center text-sm text-ink-500 shadow-panel">Loading</div>;
+  return (
+    <>
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <div className="w-full sm:w-72"><Input placeholder="Claim reference or practice number" aria-label="Search claims ready to pay" value={q} onChange={(e) => setQ(e.target.value)} /></div>
+        <span className="text-[13px] text-ink-500">{rows.length} of {queue.length} claims</span>
+        {canAssemble && (
+          <div className="ml-auto flex items-center gap-3">
+            {picked.length > 0 && <span className="tnum text-[13px] text-ink-700">{picked.length} selected, {rand(pickedTotal)}</span>}
+            <Button variant="primary" disabled={picked.length === 0} onClick={openChooser}>Add to a payment run</Button>
+          </div>
+        )}
+      </div>
+      <div className="overflow-hidden rounded-lg border border-line bg-white shadow-panel">
+        <ReadyToPayTable rows={rows} selected={selected} onChange={setSelected} selectableRows={canAssemble} emptyBody={q ? "No claim matches the search." : "Claims appear here once they are cleared for payment."} />
+      </div>
+
+      <Dialog
+        open={choosing} onClose={() => setChoosing(false)} title="Add to a payment run"
+        description={`${picked.length} claim${picked.length === 1 ? "" : "s"}, ${rand(pickedTotal)} in total.`}
+        footer={<><Button onClick={() => setChoosing(false)}>Cancel</Button><Button variant="primary" loading={busy} onClick={addToRun}>Add claims</Button></>}
+      >
+        <Field label="Payment run" hint="Only runs that are still being assembled can take more claims.">
+          <Select value={target} onChange={(e) => setTarget(e.target.value)}>
+            {openRuns.map((r) => <option key={r.id} value={r.id}>Payment run {r.id}{r.note ? `: ${r.note}` : ""} ({r.n_claims} claim{r.n_claims === 1 ? "" : "s"}, {rand(r.total)})</option>)}
+            <option value="new">A new payment run</option>
+          </Select>
+        </Field>
+      </Dialog>
+    </>
+  );
+}
+
+// ── Remittance advice ────────────────────────────────────────────────────────
+function AdviceTab({ params, set }: { params: URLSearchParams; set: (c: Record<string, string | null>, keepPage?: boolean) => void }) {
+  const navigate = useNavigate();
+  const [rows, setRows] = useState<RemittanceSummary[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const page = Math.max(1, Number(params.get("page")) || 1);
+  const pageSize = [25, 50, 100].includes(Number(params.get("size"))) ? Number(params.get("size")) : 25;
+  const value = (k: string) => params.get(k) ?? "";
+  const filters = { q: value("q"), status: value("status"), provider_id: value("provider_id"), date_from: value("date_from"), date_to: value("date_to") };
+  const key = JSON.stringify(filters);
+  const filtered = Object.values(filters).some(Boolean);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await api.remittanceSearch({ ...filters, limit: pageSize, offset: (page - 1) * pageSize });
+      setRows(res.rows);
+      setTotal(res.total);
+    } catch (e) {
+      setError(message(e, "The remittance advice could not be loaded."));
+    } finally {
+      setLoading(false);
+    }
+    // `key` is the whole filter state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, page, pageSize]);
+  useEffect(() => { void load(); }, [load]);
+
+  const columns: Column<RemittanceSummary>[] = [
+    { key: "ref", header: "Advice", render: (r) => <div><Ref className="font-medium text-brand-700">{r.ref}</Ref><div className="text-xs text-ink-500">Issued {dateTime(r.issued_at)}</div></div> },
+    { key: "practice", header: "Practice", render: (r) => <Ref className="text-ink-800">{r.provider_id}</Ref> },
+    { key: "run", header: "Payment run", render: (r) => <span className="tnum text-ink-700">{r.batch_id}</span> },
+    { key: "period", header: "Service period", render: (r) => <span className="text-ink-700">{r.period_from ? `${shortDate(r.period_from)} to ${shortDate(r.period_to)}` : "—"}</span> },
+    { key: "claims", header: "Claims", align: "right", render: (r) => <span className="tnum">{r.n_claims}</span> },
+    { key: "billed", header: "Billed", align: "right", render: (r) => <span className="tnum text-ink-600">{rand(r.total_billed)}</span> },
+    { key: "paid", header: "Paid", align: "right", render: (r) => (
+      <div><div className="tnum font-medium text-ink-900">{rand(r.total_paid)}</div>{r.total_reduced > 0 && <div className="tnum text-xs text-bad-fg">−{rand(r.total_reduced)}</div>}</div>
+    ) },
+    { key: "status", header: "Status", render: (r) => <Badge tone={REMITTANCE_STATUS[r.status]?.tone ?? "neutral"} dot>{REMITTANCE_STATUS[r.status]?.label ?? r.status}</Badge> },
+  ];
+
+  return (
+    <>
+      <div className="mb-3 grid gap-2 rounded-lg border border-line bg-white p-3 shadow-panel sm:grid-cols-2 lg:grid-cols-6">
+        <Input className="lg:col-span-2" placeholder="Advice reference, practice or claim" aria-label="Search remittance advice" value={filters.q} onChange={(e) => set({ q: e.target.value })} />
+        <Input placeholder="Practice number" aria-label="Practice number" value={filters.provider_id} onChange={(e) => set({ provider_id: e.target.value })} />
+        <Select aria-label="Status" value={filters.status} onChange={(e) => set({ status: e.target.value })}>
+          <option value="">Any status</option>
+          {Object.entries(REMITTANCE_STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+        </Select>
+        <div className="flex flex-wrap items-center gap-2 text-[13px] text-ink-500 sm:flex-nowrap lg:col-span-2">
+          <span className="shrink-0">Services from</span>
+          <Input type="date" aria-label="Services from" value={filters.date_from} onChange={(e) => set({ date_from: e.target.value })} />
+          <span>to</span>
+          <Input type="date" aria-label="Services to" value={filters.date_to} onChange={(e) => set({ date_to: e.target.value })} />
+        </div>
+        {filtered && (
+          <div className="flex items-center lg:col-span-6">
+            <Button size="sm" variant="ghost" icon={X} onClick={() => set({ q: null, status: null, provider_id: null, date_from: null, date_to: null })}>Clear filters</Button>
+          </div>
+        )}
+      </div>
+      {error ? <ErrorBlock message={error} onRetry={load} /> : (
+        <DataTable
+          columns={columns} rows={rows} rowKey={(r) => r.ref} loading={loading}
+          onRowClick={(r) => navigate(`/payments/remittances/${encodeURIComponent(r.ref)}`)}
+          empty={<EmptyState title={filtered ? "No remittance advice matches" : "No remittance advice yet"} body={filtered ? "Change or clear the filters." : "An advice is issued to each practice when a payment run is released."} />}
+          footer={<Pager page={page} pageSize={pageSize} total={total} unit="advices" onPage={(p) => set({ page: p > 1 ? String(p) : null }, true)} onPageSize={(n) => set({ size: n === 25 ? null : String(n) })} />}
+        />
+      )}
+    </>
   );
 }

@@ -281,3 +281,62 @@ def test_live_feed_seam_is_inert_until_a_feed_is_connected():
         assert svc.sync(db, ADMIN, "PRG_FEED", Feed(None)) is None            # the feed does not know it
         row = svc.sync(db, ADMIN, "PRG_FEED", Feed({"practice_name": "From the feed", "discipline": "GP"}))
         assert (row["practice_name"], row["source"], row["status"]) == ("From the feed", "PCNS", "ACTIVE")
+
+
+# ── the practice screens: filters, sorting, who bills unregistered, one practice's activity ──
+def test_register_list_filters_and_sorts():
+    tag = uuid.uuid4().hex[:6].upper()
+    _practice(f"SCR{tag}A", practice_name="Zeta Rooms", discipline="GP", setting="ROOMS", practice_type="INDIVIDUAL")
+    _practice(f"SCR{tag}B", practice_name="Alpha Hospital", discipline="Physiotherapy", setting="HOSPITAL",
+              practice_type="INSTITUTION", verified=False, professional_nr=f"MP{tag}")
+    get = lambda **p: ops.get("/api/practices", params={"q": f"SCR{tag}", **p}).json()
+    assert [r["provider_id"] for r in get()["items"]] == [f"SCR{tag}A", f"SCR{tag}B"]
+    assert [r["provider_id"] for r in get(sort="name")["items"]] == [f"SCR{tag}B", f"SCR{tag}A"]
+    assert [r["provider_id"] for r in get(sort="number", direction="desc")["items"]] == [f"SCR{tag}B", f"SCR{tag}A"]
+    assert [r["provider_id"] for r in get(setting="HOSPITAL")["items"]] == [f"SCR{tag}B"]
+    assert [r["provider_id"] for r in get(discipline="GP")["items"]] == [f"SCR{tag}A"]
+    assert [r["provider_id"] for r in get(practice_type="INSTITUTION")["items"]] == [f"SCR{tag}B"]
+    assert [r["provider_id"] for r in get(verified="false")["items"]] == [f"SCR{tag}B"]
+    assert ops.get("/api/practices", params={"q": f"MP{tag}"}).json()["total"] == 1    # by council number
+    assert ops.get("/api/practices", params={"sort": "nope"}).status_code == 422
+    assert {"GP", "Physiotherapy"} <= set(ops.get("/api/practices/disciplines").json())
+
+
+def test_unregistered_billers_are_listed_until_added():
+    tag = uuid.uuid4().hex[:6].upper()
+    pid = f"UNREG{tag}"
+    _submit(f"R_UNREG_{tag}", pid, amount=640.0)
+    res = ops.get("/api/practices/unregistered", params={"q": pid}).json()
+    assert res["total"] == 1
+    assert res["items"] == [{"provider_id": pid, "n_claims": 1, "billed": 640.0, "last_service": "2026-03-01"}]
+    before = ops.get("/api/practices/summary").json()["unregistered"]
+    _practice(pid, practice_name="Now known")
+    assert ops.get("/api/practices/unregistered", params={"q": pid}).json()["total"] == 0
+    assert ops.get("/api/practices/summary").json()["unregistered"] == before - 1
+
+
+def test_practice_activity_shows_billing_history_and_channel_access():
+    tag = uuid.uuid4().hex[:6].upper()
+    pid = f"ACT{tag}"
+    _practice(pid, practice_name="Activity Practice", discipline="GP")
+    _submit(f"R_ACT_{tag}", pid, amount=500.0)
+    assert _status(pid, "SUSPENDED", "licence lapsed").status_code == 200
+    _login("handler")                                           # any operator may read it
+    a = ops.get(f"/api/practices/{pid}/activity").json()
+    assert a["billing"]["n_claims"] == 1 and a["billing"]["billed"] == 500.0
+    assert a["billing"]["first_service"] == a["billing"]["last_service"] == "2026-03-01"
+    assert a["payments"] == {"n_advices": 0, "paid": 0.0, "reduced": 0.0}
+    _practice(pid, practice_name="Activity Practice", discipline="GP", setting="HOSPITAL")   # one field changes
+    _practice(pid, practice_name="Activity Practice", discipline="GP", setting="HOSPITAL")   # nothing changes
+    _login("handler")
+    a = ops.get(f"/api/practices/{pid}/activity").json()
+    assert [h["action"] for h in a["history"]] == ["update", "status", "add"]
+    assert a["history"][0]["detail"] == {"setting": "HOSPITAL"}                               # only what changed
+    a["history"] = a["history"][1:]
+    assert a["history"][0]["detail"] == {"from": "ACTIVE", "to": "SUSPENDED", "reason": "licence lapsed"}
+    assert a["history"][0]["actor"] == "admin"
+    assert a["risk"]["n_claims"] == 1 and "rating" in a["risk"]
+    assert all(set(p) == {"party_id", "name", "kind", "status", "all_providers"} for p in a["parties"])
+    unknown = ops.get("/api/practices/NOBODY-HERE/activity").json()
+    assert unknown["billing"]["n_claims"] == 0 and unknown["history"] == [] and unknown["risk"] is None
+    assert TestClient(app).get(f"/api/practices/{pid}/activity").status_code == 401

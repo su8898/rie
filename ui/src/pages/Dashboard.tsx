@@ -1,223 +1,150 @@
-// Portfolio snapshot from GET /api/dashboard — the state of the book in one view:
-// how many claims the engine has determined, how they split by risk band and by
-// disposition, how many cleared the gate to pay, and the rand on the payment path.
-//
-// Band is the risk read (GREEN [0,25) · AMBER [25,50) · RED [50,∞), domain-logic §; higher
-// score = more to answer for). Disposition is the routing verdict, worst-wins (§9):
-// FRAUD ▸ MERITS ▸ COMPLIANCE ▸ PREAUTH ▸ SI_GATE ▸ ADJUSTED ▸ CLEAN. Money is what the
-// payment path reads: payable = min(billed, reference), summed across the six heads of
-// damage after gates and apportionment.
+// The dashboard. First what is waiting for you, as links into each worklist; then the state of
+// the whole book of claims: how risky it is, and where claims are held.
 
+import { AlertTriangle, ArrowRight, Banknote, Bell, Briefcase, FileText, Scale } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { ApiError, api } from "../api";
-import { Card, DispositionChip, ErrorBox, Loading, Stat } from "../components/ui";
-import { num, rand } from "../format";
-import type { Band, Dashboard, Disposition } from "../types";
+import { useAuth } from "../auth";
+import { DISPOSITIONS, RISK, ROLES } from "../ds/labels";
+import { ErrorBlock, PageHeader, Panel, Stat, cx } from "../ds/primitives";
+import { rand } from "../format";
+import type { Band, Dashboard, Disposition, WorkSummary } from "../types";
 
-const BANDS: { key: Band; label: string; bar: string; text: string }[] = [
-  { key: "GREEN", label: "Green", bar: "bg-emerald-500", text: "text-emerald-700" },
-  { key: "AMBER", label: "Amber", bar: "bg-amber-500", text: "text-amber-700" },
-  { key: "RED", label: "Red", bar: "bg-rose-500", text: "text-rose-700" },
-];
+interface Queue { to: string; label: string; count: number; note?: string; alert?: boolean }
 
-const DISP_ORDER: Disposition[] = [
-  "FRAUD",
-  "MERITS",
-  "COMPLIANCE",
-  "PREAUTH",
-  "SI_GATE",
-  "REVIEW",
-  "ADJUSTED",
-  "CLEAN",
-];
-
-// One-line outcome per disposition (domain-logic §9) — what a claim in this lane needs next.
-const DISP_OUTCOME: Record<Disposition, string> = {
-  FRAUD: "investigate — opens a case",
-  MERITS: "merits determination / repudiation",
-  COMPLIANCE: "request documents · cure · reject",
-  PREAUTH: "obtain authorisation or reject the invoice",
-  SI_GATE: "RAF 4 serious-injury process",
-  REVIEW: "R&N review — a billed code has no benchmark",
-  ADJUSTED: "auto-adjudicated, no human",
-  CLEAN: "paid / offered as computed",
-};
+function QueueCard({ icon: Icon, title, queues, all }: { icon: LucideIcon; title: string; queues: Queue[]; all: { to: string; label: string } }) {
+  return (
+    <div className="flex flex-col rounded-lg border border-line bg-white shadow-panel">
+      <div className="flex items-center gap-2 border-b border-line px-4 py-3">
+        <Icon size={16} className="text-ink-500" aria-hidden />
+        <h2 className="text-sm font-semibold text-ink-900">{title}</h2>
+      </div>
+      <ul className="flex-1 divide-y divide-line">
+        {queues.map((q) => (
+          <li key={q.label}>
+            <Link to={q.to} className="group flex items-center justify-between gap-3 px-4 py-2.5 transition hover:bg-brand-50/40">
+              <span className="min-w-0">
+                <span className="block text-sm text-ink-800">{q.label}</span>
+                {q.note && <span className="block text-xs text-ink-500">{q.note}</span>}
+              </span>
+              <span className={cx("tnum flex items-center gap-1.5 text-base font-semibold", q.alert && q.count > 0 ? "text-bad-fg" : q.count > 0 ? "text-ink-900" : "text-ink-400")}>
+                {q.alert && q.count > 0 && <AlertTriangle size={14} aria-hidden />}{q.count}
+              </span>
+            </Link>
+          </li>
+        ))}
+      </ul>
+      <Link to={all.to} className="flex items-center gap-1 border-t border-line px-4 py-2.5 text-[13px] font-medium text-brand-700 hover:underline">{all.label} <ArrowRight size={13} aria-hidden /></Link>
+    </div>
+  );
+}
 
 export default function DashboardPage() {
-  const [data, setData] = useState<Dashboard | null>(null);
+  const { user } = useAuth();
+  const [work, setWork] = useState<WorkSummary | null>(null);
+  const [book, setBook] = useState<Dashboard | null>(null);
   const [error, setError] = useState<string | null>(null);
-
   useEffect(() => {
-    let alive = true;
-    api
-      .dashboard()
-      .then((d) => alive && setData(d))
-      .catch((e) =>
-        alive && setError(e instanceof ApiError ? e.message : "Failed to load"),
-      );
-    return () => {
-      alive = false;
-    };
+    Promise.all([api.workSummary(), api.dashboard()])
+      .then(([w, b]) => { setWork(w); setBook(b); })
+      .catch((e) => setError(e instanceof ApiError ? e.message : "The dashboard could not be loaded."));
   }, []);
 
-  if (error) return <ErrorBox message={error} />;
-  if (!data) return <Loading label="Loading portfolio…" />;
+  const crumbs = [{ label: "Work" }, { label: "Dashboard" }];
+  if (error) return <div><PageHeader crumbs={crumbs} title="Dashboard" /><ErrorBlock message={error} /></div>;
 
-  const bandTotal = data.by_band.GREEN + data.by_band.AMBER + data.by_band.RED;
-  const eligiblePct =
-    data.determinations > 0
-      ? Math.round((data.eligible_to_pay / data.determinations) * 100)
-      : 0;
-
-  // Order dispositions worst-first, then append any unexpected keys.
-  const dispEntries: [string, number][] = [
-    ...DISP_ORDER.filter((k) => data.by_disposition[k] != null).map(
-      (k) => [k, data.by_disposition[k] as number] as [string, number],
-    ),
-    ...Object.entries(data.by_disposition).filter(
-      ([k]) => !DISP_ORDER.includes(k as Disposition),
-    ),
-  ];
-  const dispTotal = dispEntries.reduce((s, [, v]) => s + v, 0);
-  const cleanCount = data.by_disposition.CLEAN ?? 0;
-  const fraudCount = data.by_disposition.FRAUD ?? 0;
+  const held = book ? book.determinations - book.eligible_to_pay : 0;
+  const bands: Band[] = ["GREEN", "AMBER", "RED"];
+  const barTone: Record<Band, string> = { GREEN: "bg-ok-fg", AMBER: "bg-warn-fg", RED: "bg-bad-fg" };
+  const statuses = book ? (Object.entries(book.by_disposition) as [Disposition, number][]).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]) : [];
+  const most = Math.max(1, ...statuses.map(([, n]) => n));
 
   return (
-    <div className="space-y-6">
-      <header>
-        <h1 className="text-xl font-semibold text-slate-900">Dashboard</h1>
-        <p className="mt-0.5 max-w-3xl text-sm text-slate-500">
-          The state of the book from the latest engine run. Each claim carries a risk{" "}
-          <span className="font-medium text-slate-600">band</span> (how much it has to answer
-          for), a worst-wins <span className="font-medium text-slate-600">disposition</span>{" "}
-          (where it routes), and a settled rand figure — payable = min(billed, reference)
-          across the six heads of damage. Read the money as what the payment path will pay,
-          not what was billed.
-        </p>
-      </header>
+    <div>
+      <PageHeader
+        crumbs={crumbs}
+        title={user ? `Good day, ${user.username}` : "Dashboard"}
+        subtitle={user ? `${ROLES[user.role]?.label ?? user.role}. Here is what is waiting, and the state of the book.` : undefined}
+      />
 
-      {/* Head stats */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <Stat
-          label="Determinations"
-          value={num(data.determinations)}
-          sub={`claims scored and dispositioned (latest verdict per claim) · ${num(
-            data.needs_review ?? 0,
-          )} awaiting R&N review`}
+      <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-ink-500">Waiting for attention</h2>
+      <div className="mb-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <QueueCard
+          icon={Briefcase} title="Cases" all={{ to: "/cases", label: "All cases" }}
+          queues={work ? [
+            { to: "/cases?view=mine", label: "Assigned to you", count: work.cases.mine },
+            { to: "/cases?view=unassigned", label: "Unassigned", count: work.cases.unassigned },
+            { to: "/cases?view=overdue", label: "Past their due date", count: work.cases.overdue, alert: true },
+            { to: "/cases?view=escalated", label: "Escalated", count: work.cases.escalated },
+          ] : []}
         />
-        <Stat
-          label="Eligible to pay"
-          value={num(data.eligible_to_pay)}
-          accent="text-emerald-600"
-          sub={`cleared the gate; ready for a payment batch · ${eligiblePct}% of determinations`}
+        <QueueCard
+          icon={Scale} title="Disputes" all={{ to: "/disputes", label: "All disputes" }}
+          queues={work ? [
+            { to: "/disputes?view=new", label: "New, not yet started", count: work.disputes.new },
+            { to: "/disputes?view=open", label: "Open", count: work.disputes.open },
+            { to: "/disputes?view=overdue", label: "Past their deadline", count: work.disputes.overdue, alert: true },
+          ] : []}
         />
-        <Stat
-          label="Net payable"
-          value={rand(data.net_payable_total)}
-          sub="Σ payable across all six heads, after gates & apportionment"
+        <QueueCard
+          icon={Banknote} title="Payments" all={{ to: "/payments", label: "All payment runs" }}
+          queues={work ? [
+            { to: "/payments?tab=ready", label: "Claims ready to pay", count: work.payments.ready, note: rand(work.payments.ready_amount) },
+            { to: "/payments?status=OPEN", label: "Runs being assembled", count: work.payments.open_runs },
+            { to: "/payments?status=APPROVED", label: "Runs awaiting release", count: work.payments.awaiting_release },
+          ] : []}
         />
-        <Stat
-          label="Medical payable"
-          value={rand(data.medical_payable_total)}
-          sub="the medical heads (past + future) within net payable"
+        <QueueCard
+          icon={Bell} title="Notifications" all={{ to: "/notifications", label: "All notifications" }}
+          queues={work ? [
+            { to: "/notifications?status=PENDING", label: "Waiting to send", count: work.notifications.pending },
+            { to: "/notifications?status=FAILED", label: "Failed to send", count: work.notifications.failed, alert: true },
+          ] : []}
         />
       </div>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        {/* Band mix */}
-        <Card
-          title="Band mix"
-          sub="Risk split by score: GREEN [0,25) auto-clears, AMBER [25,50) needs a look, RED [50,∞) is worked first. A book weighted GREEN is healthy; a heavy RED tail is where the review effort goes."
-        >
-          {bandTotal === 0 ? (
-            <div className="text-sm text-slate-400">No determinations yet.</div>
-          ) : (
-            <div className="space-y-3">
-              {BANDS.map(({ key, label, bar, text }) => {
-                const v = data.by_band[key];
-                const w = bandTotal ? (v / bandTotal) * 100 : 0;
-                return (
-                  <div key={key}>
-                    <div className="mb-1 flex items-center justify-between text-sm">
-                      <span className={`font-medium ${text}`}>{label}</span>
-                      <span className="tnum text-slate-500">
-                        {num(v)}{" "}
-                        <span className="text-slate-300">
-                          ({Math.round(w)}%)
-                        </span>
-                      </span>
-                    </div>
-                    <div className="h-2.5 overflow-hidden rounded-full bg-slate-100">
-                      <div
-                        className={`h-full rounded-full ${bar}`}
-                        style={{ width: `${w}%` }}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
-              <p className="pt-1 text-xs text-slate-400">
-                {Math.round((data.by_band.GREEN / bandTotal) * 100)}% GREEN,{" "}
-                {Math.round((data.by_band.RED / bandTotal) * 100)}% RED —{" "}
-                {data.by_band.RED > data.by_band.GREEN
-                  ? "the RED tail outweighs the clean lane; expect heavy review load."
-                  : "the clean lane carries the book; the RED tail is the work queue."}
-              </p>
-            </div>
-          )}
-        </Card>
+      <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-ink-500">The book of claims</h2>
+      <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Stat label="Claims assessed" value={book ? book.determinations.toLocaleString("en-ZA") : "…"} />
+        <Stat label="Cleared for payment" value={book ? book.eligible_to_pay.toLocaleString("en-ZA") : "…"} tone="ok" hint={book ? `${held.toLocaleString("en-ZA")} held` : undefined} />
+        <Stat label="Payable now" value={book ? rand(book.net_payable_total) : "…"} hint={book ? `${rand(book.medical_payable_total)} assessed, including held claims` : undefined} />
+        <Stat label="Awaiting a pricing review" value={book ? book.needs_review : "…"} tone={book?.needs_review ? "warn" : undefined} hint="A line has no reference price" />
+      </div>
 
-        {/* Disposition breakdown */}
-        <Card
-          title="Disposition breakdown"
-          sub="The routing verdict per claim, worst-first (§9): the single most severe reason wins, so a claim is counted once, in its worst lane. FRAUD/MERITS/COMPLIANCE/PREAUTH/SI_GATE/REVIEW need a human; ADJUSTED and CLEAN carry the auto-processed volume."
-        >
-          {dispTotal === 0 ? (
-            <div className="text-sm text-slate-400">No determinations yet.</div>
-          ) : (
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Panel title="Risk" description="How the claims are rated. Each links to those claims." actions={<Link to="/claims" className="inline-flex items-center gap-1 text-[13px] text-brand-700 hover:underline"><FileText size={13} aria-hidden /> Claims</Link>}>
+          {book && (
             <>
-              <ul className="divide-y divide-slate-100">
-                {dispEntries.map(([k, v]) => {
-                  const outcome = DISP_OUTCOME[k as Disposition];
-                  return (
-                    <li
-                      key={k}
-                      className="flex items-center justify-between gap-3 py-2 first:pt-0 last:pb-0"
-                    >
-                      <div className="min-w-0">
-                        <DispositionChip disposition={k as Disposition} />
-                        {outcome && (
-                          <div className="mt-0.5 text-[11px] text-slate-400">
-                            {outcome}
-                          </div>
-                        )}
-                      </div>
-                      <div className="flex shrink-0 items-center gap-3">
-                        <div className="h-1.5 w-24 overflow-hidden rounded-full bg-slate-100">
-                          <div
-                            className="h-full rounded-full bg-slate-400"
-                            style={{
-                              width: `${dispTotal ? (v / dispTotal) * 100 : 0}%`,
-                            }}
-                          />
-                        </div>
-                        <span className="tnum w-8 text-right text-sm font-medium text-slate-700">
-                          {num(v)}
-                        </span>
-                      </div>
-                    </li>
-                  );
-                })}
+              <div className="flex h-3 overflow-hidden rounded-full bg-ink-100" role="img" aria-label="Share of claims by risk">
+                {bands.map((b) => book.by_band[b] > 0 && <div key={b} className={barTone[b]} style={{ width: `${(100 * book.by_band[b]) / Math.max(1, book.determinations)}%` }} />)}
+              </div>
+              <ul className="mt-3 divide-y divide-line">
+                {bands.map((b) => (
+                  <li key={b}>
+                    <Link to={`/claims?band=${b}`} className="flex items-center justify-between py-2 text-sm hover:text-brand-700">
+                      <span className="flex items-center gap-2"><span className={cx("h-2.5 w-2.5 rounded-full", barTone[b])} aria-hidden />{RISK[b].label} risk</span>
+                      <span className="tnum"><span className="font-semibold text-ink-900">{book.by_band[b]}</span> <span className="text-ink-500">({Math.round((100 * book.by_band[b]) / Math.max(1, book.determinations))}%)</span></span>
+                    </Link>
+                  </li>
+                ))}
               </ul>
-              <p className="mt-3 border-t border-slate-100 pt-2 text-xs text-slate-400">
-                {Math.round((cleanCount / dispTotal) * 100)}% land CLEAN (paid as computed)
-                {fraudCount > 0
-                  ? `; ${num(fraudCount)} in FRAUD — the review lane that pays for itself.`
-                  : "; no FRAUD flagged this run."}
-              </p>
             </>
           )}
-        </Card>
+        </Panel>
+        <Panel title="Where claims stand" description="The outcome of each claim's latest assessment.">
+          <ul className="space-y-2.5">
+            {statuses.map(([d, n]) => (
+              <li key={d}>
+                <Link to={`/claims?disposition=${d}`} className="group block">
+                  <div className="flex items-baseline justify-between text-sm"><span className="text-ink-800 group-hover:text-brand-700">{DISPOSITIONS[d]?.label ?? d}</span><span className="tnum font-semibold text-ink-900">{n}</span></div>
+                  <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-ink-100"><div className="h-full rounded-full bg-ink-700" style={{ width: `${(100 * n) / most}%` }} /></div>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </Panel>
       </div>
     </div>
   );

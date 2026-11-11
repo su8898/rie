@@ -24,7 +24,13 @@ import type {
   Dashboard,
   Determination,
   DeterminationPage,
+  CaseSearch,
   DisputeAnalytics,
+  DisputeSearch,
+  HistoryEntry,
+  NotificationSearch,
+  WorkSummary,
+  WorkflowHistoryEntry,
   DisputeItem,
   Fairness,
   Health,
@@ -49,11 +55,18 @@ import type {
   CodeRule,
   CodeRuleKind,
   DriftReport,
+  RemittanceDetail,
   RemittanceSummary,
+  RunSummary,
+  BatchStatus,
+  ClaimRow,
   MedicalReportSummary,
   RailsParty,
   Practice,
+  PracticeActivity,
   PracticeList,
+  PracticeRecord,
+  UnregisteredPractice,
   PracticeSummary,
   ClaimDocumentation,
   Reason,
@@ -85,6 +98,16 @@ export class ApiError extends Error {
     this.status = status;
     this.detail = detail;
   }
+}
+
+/** `?a=1&b=2` from the defined, non-empty values (or an empty string). */
+function qs(params: Record<string, string | number | boolean | undefined>): string {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== "") q.set(k, String(v));
+  }
+  const text = q.toString();
+  return text ? `?${text}` : "";
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -206,6 +229,21 @@ export const api = {
     const total = Number(headers.get("X-Total-Count") ?? data.length);
     return { rows: data, total: Number.isFinite(total) ? total : data.length };
   },
+  // The claims worklist: filtered, sorted and paged on the server.
+  claimsWorklist: async (params: Record<string, string | number | boolean | undefined>) => {
+    const q = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) {
+      if (v !== undefined && v !== "") q.set(k, String(v));
+    }
+    const { data, headers } = await requestWithHeaders<ClaimRow[]>(`/api/claims?${q.toString()}`);
+    const total = Number(headers.get("X-Total-Count") ?? data.length);
+    return { rows: data, total: Number.isFinite(total) ? total : data.length };
+  },
+  rescoreClaim: (claimId: string, note: string) =>
+    request<Determination>(`/api/claims/${encodeURIComponent(claimId)}/rescore`, {
+      method: "POST",
+      body: JSON.stringify({ note }),
+    }),
   getClaim: (claimId: string) =>
     request<ClaimDetail>(`/api/claims/${encodeURIComponent(claimId)}`),
 
@@ -244,6 +282,8 @@ export const api = {
 
   // — operational workflow —
   // The one aggregation call for a claim's every state machine + offer.
+  workflowHistory: (claimId: string) =>
+    request<WorkflowHistoryEntry[]>(`/api/claims/${encodeURIComponent(claimId)}/workflow/history`),
   workflow: (claimId: string) =>
     request<Workflow>(
       `/api/claims/${encodeURIComponent(claimId)}/workflow`,
@@ -329,6 +369,19 @@ export const api = {
       method: "POST",
       body: "{}",
     }),
+  paymentRuns: (params: Record<string, string | number | undefined>) =>
+    request<{ rows: RunSummary[]; total: number; counts: Record<BatchStatus, number> }>(`/api/payments/runs${qs(params)}`),
+  removeInstruction: (batchId: number, instructionId: number) =>
+    request<BatchDict>(`/api/payments/batches/${batchId}/instructions/${instructionId}`, { method: "DELETE" }),
+  updateBatchNote: (id: number, note: string) =>
+    request<BatchDict>(`/api/payments/batches/${id}`, {
+      method: "PATCH", body: JSON.stringify({ note }),
+    }),
+  remittanceSearch: (params: Record<string, string | number | undefined>) =>
+    request<{ rows: RemittanceSummary[]; total: number }>(`/api/remittances/search${qs(params)}`),
+  remittance: (ref: string) => request<RemittanceDetail>(`/api/remittances/${encodeURIComponent(ref)}`),
+  issueRemittances: (batchId: number) =>
+    request<RemittanceSummary[]>(`/api/remittances/issue/${batchId}`, { method: "POST" }),
   cancelBatch: (id: number) =>
     request<BatchDict>(`/api/payments/batches/${id}/cancel`, {
       method: "POST",
@@ -401,6 +454,21 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  caseSearch: (params: Record<string, string | number | boolean | undefined>) =>
+    request<CaseSearch>(`/api/cases/search${qs(params)}`),
+  caseGet: (id: number) => request<CaseItem>(`/api/cases/${id}`),
+  caseHistory: (id: number) => request<HistoryEntry[]>(`/api/cases/${id}/history`),
+  updateCase: (id: number, body: { priority?: number; reason?: string; rand_at_stake?: number }) =>
+    request<CaseItem>(`/api/cases/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  disputeSearch: (params: Record<string, string | number | boolean | undefined>) =>
+    request<DisputeSearch>(`/api/disputes/search${qs(params)}`),
+  disputeGet: (id: number) => request<DisputeItem>(`/api/disputes/${id}`),
+  disputeHistory: (id: number) => request<HistoryEntry[]>(`/api/disputes/${id}/history`),
+  updateDispute: (id: number, grounds: string) =>
+    request<DisputeItem>(`/api/disputes/${id}`, { method: "PATCH", body: JSON.stringify({ grounds }) }),
+  notificationSearch: (params: Record<string, string | number | undefined>) =>
+    request<NotificationSearch>(`/api/notifications/search${qs(params)}`),
+  workSummary: () => request<WorkSummary>("/api/dashboard/work"),
   caseNotes: (id: number) => request<CaseNote[]>(`/api/cases/${id}/notes`),
   addCaseNote: (id: number, body: string) =>
     request<{ id: number }>(`/api/cases/${id}/notes`, {
@@ -593,10 +661,14 @@ export const api = {
     ),
   remittancePrintUrl: (ref: string) => `/api/remittances/${encodeURIComponent(ref)}/print`,
   remittanceXmlUrl: (ref: string) => `/api/remittances/${encodeURIComponent(ref)}/xml`,
-  practices: (q: string, status: string, page: number) =>
-    request<PracticeList>(
-      `/api/practices?${new URLSearchParams({ q, status, page: String(page) }).toString()}`,
-    ),
+  practices: (params: Record<string, string | number | boolean | undefined>) =>
+    request<PracticeList>(`/api/practices${qs(params)}`),
+  practicesUnregistered: (params: Record<string, string | number | undefined>) =>
+    request<{ total: number; page: number; page_size: number; items: UnregisteredPractice[] }>(`/api/practices/unregistered${qs(params)}`),
+  practiceDisciplines: () => request<string[]>("/api/practices/disciplines"),
+  practice: (providerId: string) => request<PracticeRecord>(`/api/practices/${encodeURIComponent(providerId)}`),
+  practiceActivity: (providerId: string) =>
+    request<PracticeActivity>(`/api/practices/${encodeURIComponent(providerId)}/activity`),
   practiceSummary: () => request<PracticeSummary>("/api/practices/summary"),
   upsertPractice: (body: Partial<Practice> & { provider_id: string }) =>
     request<Practice>("/api/admin/practices", { method: "POST", body: JSON.stringify(body) }),
@@ -643,6 +715,21 @@ export const api = {
       { method: "DELETE" },
     ),
   adminAudit: () => request<AdminAuditRow[]>("/api/admin/audit"),
+  auditSearch: (params: Record<string, string | number | undefined>) =>
+    request<{ rows: AdminAuditRow[]; total: number }>(`/api/admin/audit/search${qs(params)}`),
+  auditFacets: () => request<{ actors: string[]; areas: string[] }>("/api/admin/audit/facets"),
+  resetUserPassword: (username: string, password: string) =>
+    request<{ username: string; reset: boolean }>(`/api/admin/users/${encodeURIComponent(username)}/password`, {
+      method: "POST", body: JSON.stringify({ password }),
+    }),
+  setRailsPartyProviders: (partyId: string, providers: string[]) =>
+    request<RailsParty>(`/api/admin/rails-parties/${encodeURIComponent(partyId)}/providers`, {
+      method: "POST", body: JSON.stringify({ providers }),
+    }),
+  rotateRailsPartyKey: (partyId: string, public_jwk: string) =>
+    request<RailsParty>(`/api/admin/rails-parties/${encodeURIComponent(partyId)}/key`, {
+      method: "POST", body: JSON.stringify({ public_jwk }),
+    }),
 
   // — coding intelligence (aggregation / negotiation targets / condition bands) —
   codingCodes: (kind?: string) =>

@@ -8,10 +8,10 @@ are always SCORED and cannot be overridden.
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timedelta
 from typing import Optional
 
-from sqlalchemy import delete, desc, select
+from sqlalchemy import delete, desc, func, or_, select
 from sqlalchemy.orm import Session
 
 from engine.coding import CODE_RULES, PCT_OF_TIME, TIME_BLOCK
@@ -62,10 +62,21 @@ def create_user(db: Session, user: dict, username: str, role: str, password: str
     return {"username": username, "role": role, "active": True}
 
 
+def _keep_an_admin(db: Session, u: "models.AppUser") -> None:
+    """Refuse a change that would leave the Fund with no active administrator."""
+    if u.role == "ADMIN" and u.active:
+        others = db.scalar(select(func.count()).select_from(models.AppUser).where(
+            models.AppUser.role == "ADMIN", models.AppUser.active.is_(True), models.AppUser.id != u.id))
+        if not others:
+            raise AdminError("this is the last active administrator — make another user an administrator first")
+
+
 def set_role(db: Session, user: dict, username: str, role: str) -> dict:
     if role not in VALID_ROLES:
         raise AdminError(f"invalid role: {role}")
     u = _get_user(db, username)
+    if role != "ADMIN":
+        _keep_an_admin(db, u)
     u.role = role
     _audit(db, user, "user.set_role", username, {"role": role})
     db.commit()
@@ -76,6 +87,8 @@ def set_active(db: Session, user: dict, username: str, active: bool) -> dict:
     u = _get_user(db, username)
     if u.username == user["username"] and not active:
         raise AdminError("cannot deactivate yourself")
+    if not active:
+        _keep_an_admin(db, u)
     u.active = bool(active)
     _audit(db, user, "user.set_active", username, {"active": bool(active)})
     db.commit()
@@ -274,3 +287,36 @@ def list_audit(db: Session, limit: int = 100) -> list[dict]:
              "detail": a.detail, "at": a.at.isoformat() if a.at else None}
             for a in db.scalars(select(models.AdminAudit)
                                 .order_by(desc(models.AdminAudit.id)).limit(limit))]
+
+
+def _audit_out(a: "models.AdminAudit") -> dict:
+    return {"id": a.id, "actor": a.actor, "action": a.action, "target": a.target,
+            "detail": a.detail, "at": a.at.isoformat() if a.at else None}
+
+
+def search_audit(db: Session, *, area: str = "", actor: str = "", q: str = "",
+                 date_from=None, date_to=None, limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
+    """The audit log, filtered and paged, newest first. `area` is the part of the action before
+    the dot (user, cap, rate, …); `q` matches the action or the target."""
+    stmt = select(models.AdminAudit)
+    if area:
+        stmt = stmt.where(models.AdminAudit.action.like(f"{area}.%"))
+    if actor:
+        stmt = stmt.where(models.AdminAudit.actor == actor)
+    if q and q.strip():
+        like = f"%{q.strip()}%"
+        stmt = stmt.where(or_(models.AdminAudit.target.ilike(like), models.AdminAudit.action.ilike(like)))
+    if date_from:
+        stmt = stmt.where(models.AdminAudit.at >= datetime.combine(date_from, datetime.min.time()))
+    if date_to:
+        stmt = stmt.where(models.AdminAudit.at < datetime.combine(date_to, datetime.min.time()) + timedelta(days=1))
+    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    rows = db.scalars(stmt.order_by(desc(models.AdminAudit.id)).limit(limit).offset(offset))
+    return [_audit_out(a) for a in rows], total
+
+
+def audit_facets(db: Session) -> dict:
+    """Who has made changes, and in which areas — for the audit log's filters."""
+    actors = sorted(a for a in db.scalars(select(models.AdminAudit.actor).distinct()) if a)
+    areas = sorted({a.split(".", 1)[0] for a in db.scalars(select(models.AdminAudit.action).distinct()) if a})
+    return {"actors": actors, "areas": areas}

@@ -80,6 +80,13 @@ def transition(db: Session, audit_id: int, action: str, user: dict,
         raise sm.IllegalTransition("no such audit item")
     if action == "recover" and outcome is not None and outcome not in _RECOVERY_OUTCOMES:
         raise sm.GateNotMet(f"invalid recovery outcome: {outcome}")
+    if action == "recover" and amount is not None:
+        try:
+            amount = round(float(amount), 2)
+        except (TypeError, ValueError):
+            raise sm.GateNotMet("the amount recovered must be a number") from None
+        if not 0 <= amount <= round(a.amount_at_stake, 2):         # never more than was paid
+            raise sm.GateNotMet("the amount recovered must be between zero and the amount paid")
     sm.fire(db, AUDIT, a, audit_id, action, user, detail={"amount": amount, "outcome": outcome})
     if action == "review":
         a.assigned_to = user["username"]

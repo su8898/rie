@@ -1,286 +1,210 @@
-// Claims — the determination table: every submitted claim the engine has scored,
-// filterable by band + disposition and searchable across the full corpus.
-//
-// A determination is one claim's verdict on two orthogonal axes. The risk axis is
-// the score → band read (GREEN [0,25) · AMBER [25,50) · RED [50,∞), domain-logic §;
-// higher score = more to answer for). The routing axis is the worst-wins disposition
-// (§9): the single most severe reason wins, so a claim sits in exactly one lane —
-// FRAUD ▸ MERITS ▸ COMPLIANCE ▸ PREAUTH ▸ SI_GATE ▸ ADJUSTED ▸ CLEAN. The money is
-// what the payment path reads: net payable = min(billed, reference) summed across the
-// six heads of damage after gates & apportionment; eligible-to-pay means the claim
-// cleared its gates and can be pulled into a payment batch. Each row links to the
-// full determination at /claims/:id.
-//
-// Filters (band + disposition + needs-review) and the search box push to the
-// server via query params; the search is debounced so typing doesn't fire a
-// request per keystroke. Paging is server-side (limit/offset + X-Total-Count),
-// so the whole corpus is reachable and the total is the real total — the
-// server returns one row per claim, its latest determination (H9).
+// Claims worklist. One row per claim with its status in plain language, who billed, what was
+// billed and what is payable. Filters, sort order and page live in the URL, so a view can be
+// bookmarked or sent to a colleague, and the global search lands here.
 
-import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Download, FileText, Plus, X } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { ApiError, api } from "../api";
-import {
-  BandChip,
-  Card,
-  DispositionChip,
-  Empty,
-  ErrorBox,
-  Loading,
-  Pagination,
-  SearchInput,
-  YesNo,
-} from "../components/ui";
+import { useAuth } from "../auth";
+import { DataTable, Pager, type Column, type Sort } from "../ds/DataTable";
+import { CLAIM_TYPES, claimStatus, DISPOSITIONS, RISK, shortDate } from "../ds/labels";
+import { useToast } from "../ds/overlays";
+import { Badge, Button, cx, EmptyState, ErrorBlock, Input, PageHeader, Ref, Select } from "../ds/primitives";
 import { rand } from "../format";
-import type { Band, Determination, Disposition } from "../types";
+import type { ClaimRow } from "../types";
 
-const BAND_OPTS: Band[] = ["GREEN", "AMBER", "RED"];
-const DISP_OPTS: Disposition[] = [
-  "FRAUD",
-  "MERITS",
-  "COMPLIANCE",
-  "PREAUTH",
-  "SI_GATE",
-  "REVIEW",
-  "ADJUSTED",
-  "CLEAN",
+// Saved views: the questions a handler opens this page to answer.
+const VIEWS: { key: string; label: string; params: Record<string, string> }[] = [
+  { key: "all", label: "All claims", params: {} },
+  { key: "ready", label: "Ready to pay", params: { eligible: "true" } },
+  { key: "held", label: "Held", params: { eligible: "false" } },
+  { key: "review", label: "Pricing review", params: { needs_review: "true" } },
+  { key: "fraud", label: "Fraud review", params: { disposition: "FRAUD" } },
+];
+const VIEW_KEYS = ["eligible", "needs_review", "disposition"];
+const FILTER_KEYS = ["q", "claim_type", "band", "disposition", "provider_id", "lodged_from", "lodged_to", "eligible", "needs_review"];
+
+const COLUMNS: Column<ClaimRow>[] = [
+  {
+    key: "claim", header: "Claim", sortable: true, width: "20%",
+    render: (r) => (
+      <div>
+        <Ref className="font-medium text-brand-700">{r.claim_id}</Ref>
+        <div className="mt-0.5 text-xs text-ink-500">{r.claim_type ? CLAIM_TYPES[r.claim_type] ?? r.claim_type : "No claim record"}</div>
+      </div>
+    ),
+  },
+  {
+    key: "lodged", header: "Lodged", sortable: true,
+    render: (r) => <span className="whitespace-nowrap text-ink-700">{shortDate(r.lodged_on)}</span>,
+  },
+  {
+    key: "provider", header: "Billed by",
+    render: (r) =>
+      r.providers.length === 0 ? <span className="text-ink-400">—</span> : (
+        <div><Ref>{r.providers[0]}</Ref>{r.providers.length > 1 && <span className="ml-1.5 text-xs text-ink-500">+{r.providers.length - 1} more</span>}</div>
+      ),
+  },
+  { key: "status", header: "Status", render: (r) => { const s = claimStatus(r); return <Badge tone={s.tone} dot>{s.label}</Badge>; } },
+  { key: "score", header: "Risk", sortable: true, render: (r) => <Badge tone={RISK[r.band].tone}>{RISK[r.band].label}</Badge> },
+  { key: "billed", header: "Billed", align: "right", render: (r) => <span className="tnum text-ink-600">{rand(r.billed)}</span> },
+  {
+    key: "payable", header: "Payable", align: "right", sortable: true,
+    render: (r) => (
+      <div>
+        <span className="tnum font-semibold text-ink-900">{rand(r.net_payable)}</span>
+        {r.billed > r.net_payable && <div className="tnum text-xs text-bad-fg">−{rand(r.billed - r.net_payable)}</div>}
+      </div>
+    ),
+  },
 ];
 
-const PAGE_SIZE = 25;
-
-const selectCls =
-  "rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm outline-none focus:border-slate-500 focus:ring-1 focus:ring-slate-500";
-const th =
-  "px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-slate-500";
+function toCsv(rows: ClaimRow[]): string {
+  const cell = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const head = ["Claim", "Type", "Lodged", "Accident date", "Billed by", "Status", "Risk", "Billed", "Payable", "Eligible to pay"];
+  const body = rows.map((r) => [
+    r.claim_id, r.claim_type ? CLAIM_TYPES[r.claim_type] ?? r.claim_type : "", r.lodged_on ?? "", r.accident_date ?? "",
+    r.providers.join("; "), claimStatus(r).label, RISK[r.band].label, r.billed.toFixed(2), r.net_payable.toFixed(2), r.eligible_to_pay ? "Yes" : "No",
+  ].map(cell).join(","));
+  return [head.map(cell).join(","), ...body].join("\n");
+}
 
 export default function ClaimsPage() {
-  const [rows, setRows] = useState<Determination[] | null>(null);
+  const navigate = useNavigate();
+  const toast = useToast();
+  const { user } = useAuth();
+  const [params, setParams] = useSearchParams();
+  const [rows, setRows] = useState<ClaimRow[]>([]);
   const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [band, setBand] = useState("");
-  const [disposition, setDisposition] = useState("");
-  const [needsReview, setNeedsReview] = useState(false);
-  const [q, setQ] = useState("");
-  const [page, setPage] = useState(0);
+  const [exporting, setExporting] = useState(false);
 
-  // Any filter change starts again from the first page.
-  useEffect(() => {
-    setPage(0);
-  }, [band, disposition, needsReview, q]);
+  const page = Math.max(1, Number(params.get("page")) || 1);
+  const pageSize = [25, 50, 100].includes(Number(params.get("size"))) ? Number(params.get("size")) : 25;
+  const sort: Sort = { key: params.get("sort") ?? "received", direction: params.get("dir") === "asc" ? "asc" : "desc" };
+  const value = (k: string) => params.get(k) ?? "";
+  const canCreate = user?.role === "HANDLER" || user?.role === "MEDICAL_OFFICER";
+  const filters = Object.fromEntries(FILTER_KEYS.map((k) => [k, value(k)]));
+  const query = params.toString();
 
-  useEffect(() => {
-    let alive = true;
-    // Debounce the search so typing doesn't fire a request per keystroke;
-    // band / disposition / page changes settle just as quickly.
-    const handle = setTimeout(() => {
-      setRows(null);
-      setError(null);
-      api
-        .listClaimsPage({
-          band: band || undefined,
-          disposition: disposition || undefined,
-          q: q || undefined,
-          needsReview: needsReview || undefined,
-          limit: PAGE_SIZE,
-          offset: page * PAGE_SIZE,
-        })
-        .then((r) => {
-          if (!alive) return;
-          setRows(r.rows);
-          setTotal(r.total);
-        })
-        .catch((e) =>
-          alive &&
-          setError(e instanceof ApiError ? e.message : "Failed to load"),
-        );
-    }, 250);
-    return () => {
-      alive = false;
-      clearTimeout(handle);
-    };
-  }, [band, disposition, needsReview, q, page]);
+  const set = (changes: Record<string, string | null>, keepPage = false) => {
+    const next = new URLSearchParams(params);
+    for (const [k, v] of Object.entries(changes)) {
+      if (v) next.set(k, v); else next.delete(k);
+    }
+    if (!keepPage) next.delete("page");
+    setParams(next, { replace: true });
+  };
 
-  const filtered = band || disposition || q || needsReview;
-  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const slice = rows ?? [];
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await api.claimsWorklist({ ...filters, sort: sort.key, direction: sort.direction, limit: pageSize, offset: (page - 1) * pageSize });
+      setRows(res.rows);
+      setTotal(res.total);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "The claims list could not be loaded.");
+    } finally {
+      setLoading(false);
+    }
+    // `query` is the whole filter, sort and page state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const activeView = VIEWS.find((v) => VIEW_KEYS.every((k) => (v.params[k] ?? "") === value(k)))?.key;
+  const filtered = FILTER_KEYS.some((k) => value(k));
+
+  async function exportCsv() {
+    setExporting(true);
+    try {
+      const res = await api.claimsWorklist({ ...filters, sort: sort.key, direction: sort.direction, limit: 200, offset: 0 });
+      const url = URL.createObjectURL(new Blob([toCsv(res.rows)], { type: "text/csv" }));
+      const a = Object.assign(document.createElement("a"), { href: url, download: "claims.csv" });
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success(res.total > res.rows.length ? `Exported the first ${res.rows.length} of ${res.total} claims.` : `Exported ${res.rows.length} claims.`);
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : "The export failed.");
+    } finally {
+      setExporting(false);
+    }
+  }
 
   return (
-    <div className="space-y-4">
-      <header>
-        <h1 className="text-xl font-semibold text-slate-900">Claims</h1>
-        <p className="mt-0.5 max-w-3xl text-sm text-slate-500">
-          Every submitted claim the engine has scored into a risk{" "}
-          <span className="font-medium text-slate-600">band</span> (GREEN / AMBER /
-          RED, by score) and routed to a worst-wins{" "}
-          <span className="font-medium text-slate-600">disposition</span> (§9 — the
-          single most severe reason wins). Net payable = min(billed, reference)
-          across the six heads of damage after gates; eligible-to-pay means it
-          cleared the gate and can join a payment batch. Read the money as what the
-          payment path will pay, not what was billed.
-        </p>
-      </header>
+    <div>
+      <PageHeader
+        crumbs={[{ label: "Work" }, { label: "Claims" }]}
+        title="Claims"
+        subtitle="Every claim and invoice the Fund has received, with its current status and what is payable."
+        actions={<>
+          <Button icon={Download} onClick={exportCsv} loading={exporting}>Export</Button>
+          {canCreate && <Button variant="primary" icon={Plus} onClick={() => navigate("/claims/new")}>New claim</Button>}
+        </>}
+      />
 
-      <Card
-        title="Determinations"
-        sub="One row per claim. Band is the risk read (higher score = more to answer for); disposition is where it routes, worst-first (§9). Net is what the payment path pays — min(billed, reference) across the six heads after gates, not the billed amount; Medical is the two medical heads within it. Eligible ✓ means the claim cleared its gates and is ready for a batch."
-        right={
-          <div className="flex flex-wrap items-center gap-2">
-            <SearchInput
-              value={q}
-              onChange={setQ}
-              placeholder="Search claim or accident id…"
-              className="w-56"
-            />
-            <select
-              value={band}
-              onChange={(e) => setBand(e.target.value)}
-              className={selectCls}
-              aria-label="Filter by band"
-            >
-              <option value="">All bands</option>
-              {BAND_OPTS.map((b) => (
-                <option key={b} value={b}>
-                  {b}
-                </option>
-              ))}
-            </select>
-            <select
-              value={disposition}
-              onChange={(e) => setDisposition(e.target.value)}
-              className={selectCls}
-              aria-label="Filter by disposition"
-            >
-              <option value="">All dispositions</option>
-              {DISP_OPTS.map((d) => (
-                <option key={d} value={d}>
-                  {d}
-                </option>
-              ))}
-            </select>
-            <label className="flex items-center gap-1.5 text-sm text-slate-600">
-              <input
-                type="checkbox"
-                checked={needsReview}
-                onChange={(e) => setNeedsReview(e.target.checked)}
-                className="h-3.5 w-3.5 rounded border-slate-300"
-              />
-              Needs review
-            </label>
-            {filtered && (
-              <button
-                onClick={() => {
-                  setBand("");
-                  setDisposition("");
-                  setNeedsReview(false);
-                  setQ("");
-                }}
-                className="rounded-md border border-slate-300 px-2.5 py-1.5 text-sm text-slate-600 transition hover:bg-slate-100"
-              >
-                Clear
-              </button>
+      <div className="mb-3 flex flex-wrap gap-1.5" role="tablist" aria-label="Saved views">
+        {VIEWS.map((v) => (
+          <button
+            key={v.key} role="tab" aria-selected={activeView === v.key}
+            onClick={() => set(Object.fromEntries(VIEW_KEYS.map((k) => [k, v.params[k] ?? null])))}
+            className={cx(
+              "rounded-full border px-3 py-1.5 text-[13px] font-medium transition",
+              activeView === v.key ? "border-ink-900 bg-ink-900 text-white" : "border-line-strong bg-white text-ink-600 hover:border-ink-400 hover:text-ink-900",
             )}
-          </div>
-        }
-      >
-        {error ? (
-          <ErrorBox message={error} />
-        ) : rows === null ? (
-          <Loading label="Loading claims…" />
-        ) : rows.length === 0 ? (
-          <Empty
-            label={
-              filtered
-                ? "No determinations match these filters."
-                : "No determinations yet."
-            }
-          />
-        ) : (
-          <div className="overflow-hidden rounded-md border border-slate-100">
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-slate-100 text-sm">
-                <thead className="bg-slate-50">
-                  <tr>
-                    <th className={`${th} text-left`}>Claim / accident</th>
-                    <th className={`${th} text-left`}>Band</th>
-                    <th className={`${th} text-left`}>Disposition</th>
-                    <th className={`${th} text-right`}>Score</th>
-                    <th className={`${th} text-right`}>Medical</th>
-                    <th className={`${th} text-right`}>Net</th>
-                    <th className={`${th} text-center`}>Eligible</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {slice.map((r) => (
-                    <tr key={r.id} className="transition hover:bg-slate-50">
-                      <td className="px-4 py-2.5">
-                        <Link
-                          to={`/claims/${encodeURIComponent(r.claim_id)}`}
-                          className="font-mono text-[13px] font-medium text-slate-900 hover:text-blue-600 hover:underline"
-                        >
-                          {r.claim_id}
-                        </Link>
-                        <div className="font-mono text-[11px] text-slate-400">
-                          {r.accident_id}
-                          {r.accident_candidate && (
-                            <span
-                              className="ml-1.5 rounded bg-violet-50 px-1 py-px font-sans text-[10px] font-medium text-violet-700"
-                              title={`WORKLIST — fuzzy match to ${r.accident_candidate}; a human confirms the join`}
-                            >
-                              worklist
-                            </span>
-                          )}
-                          {r.needs_review && (
-                            <span
-                              className="ml-1.5 rounded bg-fuchsia-50 px-1 py-px font-sans text-[10px] font-medium text-fuchsia-700"
-                              title="A billed code has no benchmark — R&N review before payment"
-                            >
-                              needs review
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="px-4 py-2.5">
-                        <BandChip band={r.band} />
-                      </td>
-                      <td className="px-4 py-2.5">
-                        <DispositionChip disposition={r.disposition} />
-                      </td>
-                      <td className="tnum px-4 py-2.5 text-right text-slate-700">
-                        {r.score}
-                      </td>
-                      <td className="tnum px-4 py-2.5 text-right text-slate-700">
-                        {rand(r.medical_payable)}
-                      </td>
-                      <td className="tnum px-4 py-2.5 text-right font-medium text-slate-900">
-                        {rand(r.net_payable)}
-                      </td>
-                      <td className="px-4 py-2.5 text-center">
-                        <YesNo value={r.eligible_to_pay} />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <Pagination
-              page={page}
-              pageCount={pageCount}
-              total={total}
-              onPage={setPage}
-              unit="claims"
-            />
+          >
+            {v.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="mb-3 grid gap-2 rounded-lg border border-line bg-white p-3 shadow-panel sm:grid-cols-2 lg:grid-cols-6">
+        <Input className="lg:col-span-2" placeholder="Reference, accident or claimant" aria-label="Search" value={value("q")} onChange={(e) => set({ q: e.target.value })} />
+        <Select aria-label="Claim type" value={value("claim_type")} onChange={(e) => set({ claim_type: e.target.value })}>
+          <option value="">Any type</option>
+          {Object.entries(CLAIM_TYPES).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+        </Select>
+        <Select aria-label="Risk" value={value("band")} onChange={(e) => set({ band: e.target.value })}>
+          <option value="">Any risk</option>
+          {Object.entries(RISK).map(([k, r]) => <option key={k} value={k}>{r.label} risk</option>)}
+        </Select>
+        <Select aria-label="Status" value={value("disposition")} onChange={(e) => set({ disposition: e.target.value })}>
+          <option value="">Any status</option>
+          {Object.entries(DISPOSITIONS).map(([k, d]) => <option key={k} value={k}>{d.label}</option>)}
+        </Select>
+        <Input placeholder="Practice number" aria-label="Billed by" value={value("provider_id")} onChange={(e) => set({ provider_id: e.target.value })} />
+        <div className="flex flex-wrap items-center gap-2 text-[13px] text-ink-500 sm:flex-nowrap lg:col-span-2">
+          <span className="shrink-0">Lodged from</span>
+          <Input type="date" aria-label="Lodged from" value={value("lodged_from")} onChange={(e) => set({ lodged_from: e.target.value })} />
+          <span>to</span>
+          <Input type="date" aria-label="Lodged to" value={value("lodged_to")} onChange={(e) => set({ lodged_to: e.target.value })} />
+        </div>
+        {filtered && (
+          <div className="flex items-center lg:col-span-4">
+            <Button size="sm" variant="ghost" icon={X} onClick={() => setParams(new URLSearchParams(), { replace: true })}>Clear filters</Button>
           </div>
         )}
-        <p className="mt-2 text-xs text-slate-400">
-          Score → band: GREEN{" "}
-          <span className="tnum text-slate-500">[0, 25)</span> auto-clears · AMBER{" "}
-          <span className="tnum text-slate-500">[25, 50)</span> needs a look · RED{" "}
-          <span className="tnum text-slate-500">[50, ∞)</span> worked first. Band
-          and disposition are independent — a GREEN claim can still route non-CLEAN
-          on a payment-rule adjustment, and a RED score does not by itself withhold
-          payment.
-        </p>
-      </Card>
+      </div>
+
+      {error ? <ErrorBlock message={error} onRetry={load} /> : (
+        <DataTable
+          columns={COLUMNS} rows={rows} rowKey={(r) => r.claim_id} loading={loading}
+          sort={sort} onSort={(s) => set({ sort: s.key, dir: s.direction })}
+          onRowClick={(r) => navigate(`/claims/${encodeURIComponent(r.claim_id)}`)}
+          empty={
+            <EmptyState
+              icon={FileText} title={filtered ? "No claims match these filters" : "No claims yet"}
+              body={filtered ? "Widen the filters, or clear them to see every claim." : "Claims appear here as soon as they are submitted."}
+              action={filtered ? <Button onClick={() => setParams(new URLSearchParams(), { replace: true })}>Clear filters</Button> : undefined}
+            />
+          }
+          footer={<Pager page={page} pageSize={pageSize} total={total} unit="claims" onPage={(p) => set({ page: String(p) }, true)} onPageSize={(n) => set({ size: String(n) })} />}
+        />
+      )}
     </div>
   );
 }

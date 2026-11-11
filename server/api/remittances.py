@@ -34,6 +34,19 @@ def list_remittances(provider_id: Optional[str] = None, date_from: Optional[date
     return svc.list_remittances(db, provider_id, date_from, date_to, limit)
 
 
+@router.get("/search")
+def search_remittances(provider_id: Optional[str] = None,
+                       status: Optional[str] = Query(None, pattern="^(REMITTED|ACKNOWLEDGED)$"),
+                       batch_id: Optional[int] = None, q: Optional[str] = Query(None, max_length=100),
+                       date_from: Optional[date] = None, date_to: Optional[date] = None,
+                       limit: int = Query(25, ge=1, le=200), offset: int = Query(0, ge=0),
+                       db: Session = Depends(get_db), user: dict = Depends(current_user)) -> dict:
+    """The remittance worklist for the operator screens: `{rows, total}`."""
+    rows, total = svc.search(db, provider_id=provider_id, status=status, batch_id=batch_id, q=q,
+                             date_from=date_from, date_to=date_to, limit=limit, offset=offset)
+    return {"rows": rows, "total": total}
+
+
 @router.post("/issue/{batch_id}")
 def issue(batch_id: int, db: Session = Depends(get_db),
           user: dict = Depends(require_role("ADMIN"))) -> list[dict]:

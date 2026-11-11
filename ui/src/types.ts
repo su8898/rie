@@ -137,6 +137,60 @@ export interface ClaimRecord {
 export interface ClaimDetail {
   claim: ClaimRecord | null;
   determination: Determination;
+  lines: AdjudicatedLine[];
+  history: DeterminationSummary[];
+  payment: { status: string; amount: number | null; remittances: string[]; batch_id: number | null };
+  billed: number;
+  practices: PracticeIdentity[];
+}
+
+/** A worklist row: the claim's latest determination plus the claim and its billing. */
+export interface ClaimRow extends Determination {
+  claim_type: string | null;
+  party_token: string | null;
+  accident_date: string | null;
+  lodged_on: string | null;
+  billed: number;
+  providers: string[];
+}
+
+/** One billing line as adjudicated: what was billed, the reference, what is paid and why. */
+export interface AdjudicatedLine {
+  id: number;
+  provider_id: string;
+  kind: string;
+  code: string;
+  service_date: string | null;
+  billed: number;
+  reference: number | null;
+  payable: number;
+  reduced: number;
+  source: string;
+  legal_status: string | null;
+  needs_review: boolean;
+  reasons: string[];
+}
+
+export interface DeterminationSummary {
+  id: number;
+  created_at: string | null;
+  band: Band;
+  score: number;
+  disposition: Disposition;
+  net_payable: number;
+  eligible_to_pay: boolean;
+  reasons: string[];
+  engine_version: string;
+}
+
+export interface PracticeIdentity {
+  provider_id: string;
+  known: boolean;
+  may_bill: boolean;
+  practice_name?: string;
+  discipline?: string;
+  setting?: string;
+  status?: string;
 }
 
 export interface Reason {
@@ -285,6 +339,29 @@ export interface QueueRow {
   net_payable: number;
   disposition: Disposition;
   band: Band;
+  claim_type: string | null;
+  lodged_on: string | null;
+  providers: string[];
+  /** How the claim would be paid, and the amount an instruction would carry. */
+  source: PaymentSource | null;
+  amount: number | null;
+  /** Why it cannot be added to a run right now (IN_BATCH, NOT_SETTLED, PAYEE_UNVERIFIED…). */
+  blocked: string | null;
+  in_batch: { id: number; status: BatchStatus } | null;
+}
+
+/** One row of the payment-run worklist (GET /payments/runs). */
+export interface RunSummary {
+  id: number;
+  status: BatchStatus;
+  created_by: string;
+  approved_by: string | null;
+  paid_by: string | null;
+  note: string | null;
+  created_at: string | null;
+  paid_at: string | null;
+  n_claims: number;
+  total: number;
 }
 
 export interface PaymentInstruction {
@@ -293,6 +370,8 @@ export interface PaymentInstruction {
   source: PaymentSource;
   amount: number;
   paid: boolean;
+  claim_type: string | null;
+  providers: string[];
 }
 
 export interface PaymentEvent {
@@ -304,17 +383,11 @@ export interface PaymentEvent {
   detail: Record<string, unknown>;
 }
 
-export interface BatchDict {
-  id: number;
-  status: BatchStatus;
-  created_by: string;
-  approved_by: string | null;
-  paid_by: string | null;
-  note: string | null;
-  total: number;
+export interface BatchDict extends RunSummary {
   actions: string[];
   instructions: PaymentInstruction[];
   events: PaymentEvent[];
+  remittances: RemittanceSummary[];
 }
 
 // ── Party intelligence (/api/parties) ────────────────────────────────────────
@@ -834,6 +907,23 @@ export interface RemittanceSummary {
   acknowledged_at: string | null;
 }
 
+export interface RemittanceClaim {
+  claim_id: string;
+  patient: string;
+  billed: number;
+  paid: number;
+  reduced: number;
+  outcome: "REDUCED" | "PAID_IN_FULL";
+  lines: {
+    kind: string; code: string; service_date: string | null;
+    billed: number; paid: number; reduced: number; reasons: string[]; reason_text: string;
+  }[];
+}
+
+export interface RemittanceDetail extends RemittanceSummary {
+  claims: RemittanceClaim[];
+}
+
 // ── medical reports (RAF 1 medical report, RAF 4) ─────────────────────────────
 export interface MedicalReportSummary {
   ref: string;
@@ -894,5 +984,57 @@ export interface PracticeList {
 export interface PracticeSummary {
   total: number;
   by_status: Record<string, number>;
+  /** Practice numbers billing the Fund that have no register entry. */
+  unregistered: number;
   enforced: boolean;
+}
+
+/** What the Fund knows about one practice number: its register entry, or that it has none. */
+export type PracticeRecord = Partial<Practice> & { provider_id: string; known: boolean; may_bill: boolean };
+
+export interface UnregisteredPractice {
+  provider_id: string;
+  n_claims: number;
+  billed: number;
+  last_service: string | null;
+}
+
+export interface PracticeActivity {
+  provider_id: string;
+  billing: { n_claims: number; n_lines: number; billed: number; payable: number; first_service: string | null; last_service: string | null };
+  payments: { n_advices: number; paid: number; reduced: number };
+  parties: { party_id: string; name: string; kind: string; status: string; all_providers: boolean }[];
+  history: { action: string; actor: string; at: string | null; detail: Record<string, unknown> }[];
+  risk: {
+    score: number; rating: Rating; confidence: Confidence; n_claims: number;
+    red_rate: number; flag_rate: number; cohort: string; value_percentile: number;
+  } | null;
+}
+
+// ── work screens (cases, disputes, notifications, dashboard) ──────────────────
+export interface HistoryEntry {
+  action: string;
+  from_state: string;
+  to_state: string;
+  actor: string;
+  role: string;
+  at: string | null;
+  detail: Record<string, unknown>;
+}
+
+export interface CaseSearch { rows: CaseItem[]; total: number; counts: Record<"OPEN" | "IN_REVIEW" | "ESCALATED" | "CLOSED" | "OVERDUE" | "MINE", number> }
+export interface DisputeSearch { rows: DisputeItem[]; total: number; counts: Record<string, number> }
+export interface NotificationSearch { rows: Notification[]; total: number; counts: Record<string, number>; events: string[] }
+
+export interface WorkSummary {
+  cases: { open: number; mine: number; unassigned: number; overdue: number; escalated: number };
+  disputes: { open: number; new: number; overdue: number };
+  payments: { ready: number; ready_amount: number; open_runs: number; awaiting_release: number };
+  notifications: { pending: number; failed: number };
+}
+
+/** One workflow step on a claim, from any of its machines (GET /claims/{id}/workflow/history). */
+export interface WorkflowHistoryEntry extends HistoryEntry {
+  area: string;
+  ref: string;
 }
