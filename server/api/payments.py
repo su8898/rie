@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
@@ -40,6 +40,18 @@ def list_batches(db: Session = Depends(get_db), user: dict = Depends(current_use
             db.scalars(select(models.PaymentBatch).order_by(desc(models.PaymentBatch.id)))]
 
 
+@router.get("/runs")
+def list_runs(status: Optional[Literal["OPEN", "APPROVED", "PAID", "CANCELLED"]] = None,
+              q: Optional[str] = Query(None, max_length=100),
+              direction: Literal["asc", "desc"] = "desc",
+              limit: int = Query(25, ge=1, le=200), offset: int = Query(0, ge=0),
+              db: Session = Depends(get_db), user: dict = Depends(current_user)) -> dict:
+    """The payment-run worklist: summary rows, a total for paging and a count per status."""
+    rows, total, counts = svc.list_batches(db, status=status, q=q, direction=direction,
+                                           limit=limit, offset=offset)
+    return {"rows": rows, "total": total, "counts": counts}
+
+
 @router.post("/batches")
 def create_batch(body: BatchIn = BatchIn(), db: Session = Depends(get_db),
                  user: dict = Depends(require_role("HANDLER", "ADMIN"))) -> dict:
@@ -60,6 +72,18 @@ def add_instruction(batch_id: int, body: InstructionIn, db: Session = Depends(ge
                     user: dict = Depends(require_role("HANDLER", "ADMIN"))) -> dict:
     svc.add_instruction(db, batch_id, body.claim_id, body.source, body.amount, user)
     return svc.batch_dict(db, db.get(models.PaymentBatch, batch_id))
+
+
+@router.delete("/batches/{batch_id}/instructions/{instruction_id}")
+def remove_instruction(batch_id: int, instruction_id: int, db: Session = Depends(get_db),
+                       user: dict = Depends(require_role("HANDLER", "ADMIN"))) -> dict:
+    return svc.batch_dict(db, svc.remove_instruction(db, batch_id, instruction_id, user))
+
+
+@router.patch("/batches/{batch_id}")
+def update_batch(batch_id: int, body: BatchIn, db: Session = Depends(get_db),
+                 user: dict = Depends(require_role("HANDLER", "ADMIN"))) -> dict:
+    return svc.batch_dict(db, svc.set_note(db, batch_id, body.note, user))
 
 
 @router.post("/batches/{batch_id}/approve")

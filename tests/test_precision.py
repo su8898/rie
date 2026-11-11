@@ -134,3 +134,26 @@ def test_draw_recall_qa_api():
     assert set(r) == {"drawn", "sampled", "skipped"} and r["drawn"] + r["skipped"] == r["sampled"]
     client.post("/api/auth/logout")
     assert client.post("/api/governance/recall/draw").status_code == 401
+
+
+def test_an_applied_mode_change_is_not_suggested_again():
+    """Governance must read the mode in force (the administrator's override), not the default."""
+    from server import admin_service
+    from server.db import SessionLocal
+    with SessionLocal() as db:
+        rows = svc.precision_by_signal(db)
+        code = next((r["signal"] for r in rows if r["maturity"] != "GROUNDED"), None)
+        if code is None:
+            return
+        before = next(r for r in rows if r["signal"] == code)
+        other = "ADVISORY" if before["current_mode"] != "ADVISORY" else "SHADOW"
+        admin = {"username": "admin", "role": "ADMIN"}
+        try:
+            admin_service.set_signal_mode(db, admin, code, other, note="test")
+            after = next(r for r in svc.precision_by_signal(db) if r["signal"] == code)
+            assert after["current_mode"] == other
+            if after["recommended_mode"] == other:
+                assert all(p["signal"] != code for p in svc.promotions(db))
+        finally:
+            admin_service.clear_signal_mode(db, admin, code)
+        assert next(r for r in svc.precision_by_signal(db) if r["signal"] == code)["current_mode"] == before["current_mode"]

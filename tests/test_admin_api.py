@@ -101,3 +101,47 @@ def test_signal_mode_override_changes_live_scoring_and_is_audited():
     finally:                                                              # restore so other tests are unaffected
         _login("admin")
         client.delete("/api/admin/signal-modes/DX_ACCIDENT_MISMATCH")
+
+
+def test_last_active_administrator_cannot_be_removed():
+    _login("admin")
+    others = [u["username"] for u in client.get("/api/admin/users").json()
+              if u["role"] == "ADMIN" and u["active"] and u["username"] != "admin"]
+    try:
+        for name in others:
+            assert client.post(f"/api/admin/users/{name}/active", json={"active": False}).status_code == 200
+        r = client.post("/api/admin/users/admin/role", json={"role": "HANDLER"})
+        assert r.status_code == 400 and "last active administrator" in r.json()["detail"]
+        assert client.post("/api/admin/users/admin/role", json={"role": "ADMIN"}).status_code == 200   # no change is fine
+    finally:
+        for name in others:
+            assert client.post(f"/api/admin/users/{name}/active", json={"active": True}).status_code == 200
+    # with another administrator active, the guard does not bite: deactivating one of several is allowed
+    if others:
+        assert client.post(f"/api/admin/users/{others[0]}/active", json={"active": False}).status_code == 200
+        assert client.post(f"/api/admin/users/{others[0]}/active", json={"active": True}).status_code == 200
+
+
+def test_audit_search_filters_and_pages():
+    _login("admin")
+    client.post("/api/admin/caps", json={"effective_from": "2031-04-01", "annual_cap": 411000})
+    client.post("/api/admin/preauth", json={"code": "AUDSRCH1"})
+    client.delete("/api/admin/preauth/AUDSRCH1")
+    get = lambda **p: client.get("/api/admin/audit/search", params=p).json()
+
+    caps = get(area="cap")
+    assert caps["total"] >= 1 and all(r["action"].startswith("cap.") for r in caps["rows"])
+    hit = get(q="AUDSRCH1")
+    assert hit["total"] == 2 and [r["action"] for r in hit["rows"]] == ["preauth.remove", "preauth.add"]   # newest first
+    assert get(q="AUDSRCH1", actor="nobody")["total"] == 0
+    assert get(q="AUDSRCH1", actor="admin")["total"] == 2
+    page = get(q="AUDSRCH1", limit=1, offset=1)
+    assert page["total"] == 2 and [r["action"] for r in page["rows"]] == ["preauth.add"]
+    assert get(q="AUDSRCH1", date_from="2099-01-01")["total"] == 0
+    assert get(q="AUDSRCH1", date_to="2000-01-01")["total"] == 0
+
+    facets = client.get("/api/admin/audit/facets").json()
+    assert "admin" in facets["actors"] and {"cap", "preauth"} <= set(facets["areas"])
+    client.delete("/api/admin/caps/2031-04-01")
+    _login("handler")
+    assert client.get("/api/admin/audit/search").status_code == 403

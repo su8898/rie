@@ -15,6 +15,7 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .clock import utcnow
 from . import models, statemachine as sm
 
 LANE_OWNER = {"REVIEW": "HANDLER", "BLOCK": "INVESTIGATOR", "CLAWBACK": "INVESTIGATOR"}
@@ -43,7 +44,7 @@ def open_case(db: Session, user: dict, lane: str, reason: str, claim_id: Optiona
     c = models.Case(
         claim_id=claim_id, lane=lane, status="OPEN", priority=int(priority), reason=reason,
         rand_at_stake=round(float(rand_at_stake or 0.0), 2), opened_by=user["username"],
-        due_at=datetime.now() + timedelta(days=SLA_DAYS[int(priority)]))
+        due_at=utcnow() + timedelta(days=SLA_DAYS[int(priority)]))
     db.add(c)
     db.commit()
     return c
@@ -78,7 +79,7 @@ def transition(db: Session, case_id: int, action: str, user: dict, verdict: Opti
         c.verdict, c.root_cause = verdict, root_cause
         c.rand_recovered = round(float(recovered or 0.0), 2)
         c.rand_prevented = round(float(prevented or 0.0), 2)
-        c.closed_at = datetime.now()
+        c.closed_at = utcnow()
     db.commit()
     return c
 
@@ -104,7 +105,7 @@ def _overdue(c: "models.Case", now: datetime) -> bool:
 
 
 def item_dict(c: "models.Case", now: Optional[datetime] = None) -> dict:
-    now = now or datetime.now()
+    now = now or utcnow()
     return {
         "id": c.id, "claim_id": c.claim_id, "lane": c.lane, "status": c.status,
         "priority": c.priority, "reason": c.reason, "rand_at_stake": c.rand_at_stake,
@@ -123,7 +124,7 @@ def item_dict(c: "models.Case", now: Optional[datetime] = None) -> dict:
 
 def analytics(db: Session) -> dict:
     items = list(db.scalars(select(models.Case)))
-    now = datetime.now()
+    now = utcnow()
     open_items = [c for c in items if c.status != "CLOSED"]
     return {
         "n": len(items), "open": len(open_items),

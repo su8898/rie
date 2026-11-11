@@ -106,9 +106,9 @@ The consequence you'll meet daily: a claim can be **`GREEN` but held** (a missin
 | **Disputes** — lodge / withdraw | any | any | any | any | any |
 | **Disputes** — reconsider / uphold / reject | ✓ | ✓ | | ✓ | ✓ |
 | **Disputes** — refer / resolve (HPCSA / litigation) | | | | ✓ | ✓ |
-| **Payments** — new batch / add instruction / cancel | ✓ | | | | ✓ |
-| **Payments** — approve | | | | | ✓ (≠ assembler) |
-| **Payments** — pay | | | | | ✓ (sole) |
+| **Payments** — new run / add or remove a claim / edit note / cancel an open run | ✓ | | | | ✓ |
+| **Payments** — approve | | | | | ✓ (not the assembler) |
+| **Payments** — release payment / cancel an approved run | | | | | ✓ (release: not the assembler or the approver) |
 | **Audit** — recovery sweep / review / recover / clear | | | ✓ | | ✓ |
 | **Governance** — view precision / recall / labels | any | any | any | any | any |
 | **Governance** — draw QA reviews into Cases | any | any | any | any | any |
@@ -121,37 +121,54 @@ The consequence you'll meet daily: a claim can be **`GREEN` but held** (a missin
 
 **You are the claims caseworker** — the workhorse of the Fund. You take a claim from submission through validation, merits, offer, and settlement, and you assemble the batches that pay it.
 
-**Your pages:** Submit · Claims → Claim detail (Workflow panel) · Cases (REVIEW lane) · Payments · Disputes · plus all the read-only analytics.
+**Your pages:** Claims (New claim) → Claim record (Workflow tab) · Cases (REVIEW lane) · Payments · Disputes · plus all the read-only analytics.
 
-### 5.1 Submit and read a claim
+### 5.1 Capture and read a claim
 
-1. Go to **Submit**. Fill the claim: id, type (`PERSONAL` / `SUPPLIER` / `UNDERTAKING_INVOICE`), party token, accident and lodgement dates, the case number (the OAR), the documents, and the billing lines (tariff/NAPPI code, amount, service date, diagnosis).
-2. Watch the **payload preview** update live — it's exactly what the engine reads.
-3. **Submit claim.** The engine scores it and you land on the determination.
-4. On **Claims**, filter by band/disposition or search by claim/accident id; click any row to open its **detail**.
+1. Go to **Claims** and choose **New claim**. The form has four parts: the claim (reference, type, claimant, accident and lodgement dates, police case number), liability (personal claims only), supporting documents, and the medical account.
+2. **Claimant:** enter a 13-digit identity number or an existing claimant reference. An identity number is replaced by an anonymous reference and is never stored.
+3. **Supporting documents:** the checklist follows the claim type. A supplier claim needs the RAF 2 form, the accident report, invoices and banking details. A personal claim needs the RAF 1 form, the accident report, an identity document and banking details. The summary on the right names anything still outstanding; the claim is held until it arrives.
+4. **Medical account:** one row per billed line (tariff or medicine code, quantity, amount, service date, practice number, diagnosis). Leave the discipline blank to take it from the practice register.
+5. **Submit claim.** Fields that need attention are marked before anything is sent. The engine prices and assesses the claim and you land on its record.
+6. On **Claims**, use the saved views (Ready to pay, Held, Pricing review, Fraud review), the filters (type, risk, status, practice, lodged dates) and the search. Click a column heading to sort. **Export** downloads the filtered list (up to 200 claims) as a CSV file. Filters live in the page address, so a filtered list can be bookmarked or shared.
+7. Click a row to open the **claim record**. Its tabs are Overview (what is holding the claim and each finding), Lines (billed, reference and payable per line with the reason for every reduction), Documents, Payments, Workflow, History (every determination) and Technical.
 
-### 5.2 Drive the lifecycle (Claim detail → Workflow)
+Invoices against an undertaking are captured from the claim record: **Workflow → Undertakings**.
 
-The claim-detail page has a **Workflow** panel with one sub-panel per state machine. You act mostly in **Lifecycle**, **Merits**, and **Offer**:
+### 5.2 Drive the lifecycle (Claim record → Workflow)
 
-- **Validate** the claim (Lifecycle) once its documents/gates are satisfied. If it fails compliance, **reject-compliance**.
-- **Open merits**, then in the **Merits** panel **accept** (entering the fault %) or **reject** (choosing the ground — `S19_EXCLUSION` / `SOLE_NEGLIGENCE` / `NO_MVA_NEXUS`). Fault % apportions every head.
-- **Build the offer** (Offer panel): tick the heads that apply — loss of earnings, loss of support, general damages (a manual band, or computed from the comparable-awards store by injury class), funeral — and **Build offer**. The offer shows its total, per-head breakdown, and anything it's **gated by** (e.g. general damages gated until serious injury is accepted).
-- **make-offer → settle** to conclude (you or Legal), or hand to Legal if it repudiates.
-- **Finalize** once paid.
+The claim record's **Workflow** tab shows where the claim is on its path (Lodged, Validated, Merits, Quantum, Offer made, Settled, Paid, Finalised) and the **Next steps** available. Each step opens a confirmation that says what it does before you take it. A step you may not take is greyed out, and hovering over it says which role can.
 
-### 5.3 Work a REVIEW case
+- **Validate lodgement** once the documents are complete, or **Reject lodgement** if it does not comply.
+- **Open merits**, then in **Merits** choose **Accept liability** (entering the claimant's share of fault, which reduces every head) or **Reject liability** (choosing the ground). **Move to quantum** is refused until liability is accepted.
+- **Build offer**: past medical expenses come from the adjudicated account. Tick the other heads that apply (loss of earnings, loss of support, general damages, funeral expenses) and enter the amounts. For general damages, choose the injury to compare against past awards, or enter the range by hand. The offer shows each head, the total, and anything holding it.
+- **Make the offer**, then **Record settlement** (you or Legal). A settled claim becomes payable in a payment run; **Mark as paid** is for a payment made outside a run and is an administrator's step.
+- **Finalise** once paid.
 
-When a claim is flagged for a look, open or pick it up in **Cases** (the REVIEW lane is yours):
+Beside the path, the tab holds **Serious-injury assessments**, **Undertakings** with their invoices, and **Litigation**. **Workflow history** at the foot lists every step on the claim, across all of these, with who took it.
 
-1. **Open case** (or select an existing REVIEW case). Set lane `REVIEW`, a reason, priority (P1–P5 sets the SLA clock), and rand-at-stake.
-2. **assign** it to yourself (one click), work it, then **close** with a verdict, root cause, and any recovered/prevented amounts. If it needs the fraud team, **escalate** — it moves to the Investigator pool.
+### 5.3 Work a billing-review case
+
+**Cases** opens on what is still open. The views across the top (Open, Assigned to me, Unassigned, Past due, Escalated, Closed) carry counts; search by case number, claim, reason or person, filter by kind, and sort by priority, due date or amount at stake. A *Billing review* case is yours; a *Fraud hold* or a *Recovery* belongs to the investigators.
+
+1. **Open a case**: choose the kind, a reason, the priority (Urgent to Lowest, which sets the due date) and optionally the claim and the amount at stake. The claim reference is checked before the case is opened.
+2. Click a case to open its record. **Take this case** assigns it to you. Add **Notes** as you work; a note cannot be changed once added. **Edit** corrects the priority, reason or amount while the case is open; changing the priority resets the due date.
+3. **Close case** asks for the outcome, what was found, and any amounts recovered or prevented. A closed case cannot be reopened or changed. If it needs the fraud team, **Escalate**: it moves to the investigators' queue and only an investigator can close it.
+
+The **History** tab lists every step and every edit with who made it. If a button is greyed out, the line under the header says which role owns the case.
 
 Your verdict on close becomes a **ground-truth label** that tunes the engine (governance precision/recall). Judge the merits honestly.
 
-### 5.4 Assemble a payment batch
+### 5.4 Assemble a payment run
 
-In **Payments** (see §10 for the full flow): **New batch**, then add instructions from the **eligible queue** (claims that cleared the gate) — pick a claim, choose the source and amount, **Add**. You assemble; a **different ADMIN approves**, and ADMIN pays. You cannot approve or pay your own batch — that's the segregation-of-duties control.
+**Payments** has three lists: **Payment runs**, **Ready to pay** and **Remittance advice**. The figures at the top show what is ready to pay and how many runs are waiting at each step.
+
+1. Open **Ready to pay**. It lists every claim cleared for payment that has not been paid, with how it will be paid and the amount. A claim that cannot be added says why (for example it is already in a run).
+2. Tick the claims and choose **Add to a payment run**. Pick a run that is still being assembled, or a new one. You land on the run.
+3. On the run, **Claims in this run** shows what will be paid. While the run is being assembled you can **Remove** a claim (it goes back to Ready to pay), **Edit note**, or use **Add claims** for more. **Another payment** on that tab captures an interim payment, or a settlement or court order by claim reference; the Fund checks the claim and the amount before it accepts it.
+4. Hand over. The **Three-person control** panel shows who assembled, approved and released the run, and tells you why a button is not available to you. You cannot approve or release a run you assembled.
+
+**History** on the run lists every change with who made it. A cancelled run pays nothing and cannot be reopened.
 
 ---
 
@@ -159,7 +176,7 @@ In **Payments** (see §10 for the full flow): **New batch**, then add instructio
 
 **You are the clinical authority.** Two things are yours alone: the **serious-injury (RAF 4)** gate that unlocks general damages, and the **undertakings** that pre-authorise future treatment (and their invoices). You can also submit and assess claims and take part in dispute reconsiderations.
 
-**Your pages:** Submit · Claim detail (Workflow → Serious injury, Undertakings) · Disputes · analytics.
+**Your pages:** Claims (New claim) · Claim record (Workflow → Serious injury, Undertakings) · Disputes · analytics.
 
 ### 6.1 Serious injury (RAF 4)
 
@@ -189,24 +206,25 @@ You can take a lodged dispute **under reconsideration** and **uphold** or **reje
 
 **Your pages:** Intelligence · Cases (BLOCK / CLAWBACK) · Audit · Accidents · analytics.
 
-### 7.1 Find who to look at (Intelligence)
+### 7.1 Find who to look at (Party intelligence)
 
-**Intelligence** scores parties, cohort-relative and n-guarded (see [how-party-risk-is-determined.md](how-party-risk-is-determined.md)):
+**Party intelligence** compares each practice and attorney with others like it (see [how-party-risk-is-determined.md](how-party-risk-is-determined.md)). A rating is a reason to look closer, never a verdict.
 
-- **Providers / Attorneys** — sortable, searchable tables of composite 0–100 scores with a rating and an expandable component breakdown. High scores are *shortlists*, not verdicts.
-- **Claimants** — recurrence: a party token spanning ≥ 2 accidents (a possible ring).
-- **Risk sweep** — one threshold across every provider and attorney, worst-first. Lower it to widen the net. **It only ranks** — acting on a flagged party means opening a case (next step).
+- **Practices** and **Attorneys**: a rating (Low, Watch, Elevated, High, Critical) and a score out of 100, with search, filters and sorting. **How it is scored** shows the four parts of the score. A party with fewer than 5 claims is not rated. Click a practice to open its record.
+- **Repeat claimants**: a claimant who is a party to two or more accidents.
+- **Fairness**: whether findings fall evenly across groups of practices. A group flagged much more or much less than the rest is marked for a look.
+- **High-risk list**: every practice and attorney at or above a score you choose, highest first. **It only lists.** Being on it holds no claim and opens no case; to act on a party, open a case (next step).
 
-### 7.2 Work a BLOCK / CLAWBACK case
+### 7.2 Work a fraud-hold or recovery case
 
-In **Cases**, the `BLOCK` (stop a suspect claim) and `CLAWBACK` (recover a paid one) lanes are yours:
+In **Cases**, the *Fraud hold* (stop a suspect claim) and *Recovery* (recover a paid one) kinds are yours, as is the **Escalated** view:
 
-1. **Open case** on the flagged claim/party (lane `BLOCK` or `CLAWBACK`), or pick up an **escalated** case from the Handler pool.
-2. **assign**, investigate, and **close** with a verdict — `CONFIRMED_FRAUD` / `CLEARED` / `ADJUSTED` / `NO_ACTION` / `REFERRED_LEGAL` — plus root cause and recovered/prevented amounts. Escalated cases are closed by you.
+1. **Open a case** on the flagged claim, or pick up an escalated case from the handlers.
+2. **Take this case**, investigate, keep **Notes**, and **Close case** with an outcome (Fraud confirmed, Cleared, Payment adjusted, No action needed or Referred to legal), what was found, and the amounts recovered or prevented. Escalated cases are closed by you.
 
 ### 7.3 Post-payment recovery (Audit)
 
-**Audit** is your clawback workflow. **Run recovery sweep** at a score floor to open clawback items on already-paid claims flagged RED/FRAUD or touched by a high-risk provider. Then per item: **review** to pick it up, **recover** (recording the amount returned and an outcome — `RECOVERED_FULL` / `PARTIAL` / `WRITTEN_OFF` / `NOT_PURSUED`) or **clear** if it isn't worth pursuing. The **recovery-rate** (recovered ÷ at-stake) is the realised ROI of the whole integrity effort.
+**Recovery audit** lists paid claims that now look wrong. **Find paid claims to review** opens an item for each paid claim that was paid on a high-risk assessment or billed by a practice at or above the risk score you set; a claim that already has an item is skipped. Per item: **Start review** to pick it up, then **Record recovery** (the amount returned, which cannot be more than was paid, and an outcome: recovered in full, in part, written off or not pursued) or **Clear** if the payment was correct. The views (Not started, Under review, Recovered, Cleared) carry counts. The **recovery rate** (recovered against paid) is the realised return of the whole integrity effort.
 
 ### 7.4 Undertakings
 
@@ -222,10 +240,12 @@ You can **suspend** and **resume** an active undertaking when an investigation w
 
 ### 8.1 Disputes (the objection register)
 
-**Disputes** is the s91-style objection register. Anyone can **lodge** an objection (subject: `MERITS` / `QUANTUM` / `TARIFF` / `REPUDIATION` / `SERIOUS_INJURY`; raised by claimant / provider / attorney). From there:
+**Disputes** lists every objection to a decision of the Fund. It opens on what is still open; the views (Open, New, Past deadline, Referred, All) carry counts, and you can search by dispute number, claim or grounds and filter by what is disputed, who raised it and status. Anyone can **Lodge a dispute**: the claim reference is checked, and the grounds are required. Each dispute opens as its own record, with the steps available to you shown as buttons:
 
-- Any of Handler / Medical Officer / Legal takes it **under reconsideration** and **upholds** or **rejects** it.
-- **Referral is yours alone.** **refer** a dispute out: a `SERIOUS_INJURY` objection goes to the **HPCSA tribunal**; anything else opens a **litigation** record. After an external outcome, **resolve** it. (A raiser may **withdraw** at any open stage.)
+- Handler, Medical Officer or Legal chooses **Start reconsideration**, then **Uphold** or **Reject**. Both ask for the reasons, which the objector sees. **Edit grounds** corrects what was captured; the earlier wording stays in the history.
+- **Referral is yours alone.** **Refer** sends a serious-injury dispute to the **HPCSA tribunal** and anything else to **litigation**, where a litigation matter is opened and linked. After the external outcome, **Record outcome** closes the dispute. A dispute may be **withdrawn** at any open stage.
+
+The **History** tab lists every step with who took it.
 
 ### 8.2 Litigation
 
@@ -242,34 +262,45 @@ When a claim is repudiated or a dispute is litigated, drive the matter on the cl
 
 **You run the console and you hold the money keys.** Admin has two hats: the **configuration authority** (users, statutory config, reference tiers, signal modes) and the **payment authority** (approve and pay). Admin is also a superuser — so use it deliberately.
 
-**Your pages:** Admin · Payments (approve/pay) · Governance (apply promotions) · everything else.
+**Your pages:** Admin · Practices (maintain the register) · Payments (approve, release) · Governance (apply promotions) · everything else.
 
-### 9.1 The Admin console
+### 9.1 Administration
 
-**Admin** has ten tabs; every change is audit-logged and effective-dated — it's reference data, never a code deploy:
+**Administration** is a set of pages with a side menu grouped by purpose: **Access** (Users, Channel access), **Pricing** (Dated rates, Negotiated rates), **Rules** (Statutory cap, Pre-authorisation codes, Coding rules, Signal modes) and **Oversight** (Audit log). Each page has its own address, a search or filter, and a **Recent changes** panel showing who last changed that setting. Every change is audit-logged; it is reference data, never a code deploy. Actions that remove something or cut off access ask you to confirm first.
 
-- **Users** — create operators, set roles, activate/deactivate. (You cannot deactivate the account you're signed in as.)
-- **Signal modes** — apply the `SHADOW → ADVISORY → SCORED` promotion lifecycle per signal. The *Recommended* column is what measured precision suggests (Governance computes the Wilson-lower ≥ 60% floor; you **Set** it here). `GROUNDED`, law-cited signals are locked `SCORED` — you cannot switch off the law.
-- **Caps** — the s17(4)(c) statutory annual-cap schedule (effective-dated; the engine applies the cap effective on the service date).
-- **Pre-auth** — the set of codes that require pre-authorisation (add/remove).
-- **Negotiated** — negotiated ENFORCEABLE rates that override the gazetted tariff (the engine prices `min(billed, negotiated)` for these).
-- **Dated rates** — the tariff, negotiated and NAPPI exit-price rates as dated versions. Add a rate from an effective date and the prior one is closed the day before; the engine pays each line at the rate in force on its **service date**, so late claims price at the tariff of their day. Also: percentage increase (one rate or every rate in the filter), correct, retire, CSV import/export, and the change log. A negotiated rate that has dated versions is maintained here, not on the Negotiated tab.
+- **Users** — **Add user**, **Change role**, **Reset password**, **Deactivate** or **Reactivate**. A user is never deleted: a person who leaves is deactivated, so their name stays on what they did. You cannot deactivate the account you are signed in as, and the system refuses any change that would leave no active administrator. A new password must be at least 8 characters and is given to the user directly.
+- **Signal modes** — how much weight each finding carries: *Shadow* (measured only), *Advisory* (shown, not scored) or *Scored*. The **Suggested** column is what measured precision recommends (Governance computes it); choose **Change**, pick the mode and give a reason. **Reset** returns a finding to its default. Findings marked *Set by law* (`GROUNDED`) are always scored and cannot be changed: you cannot switch off the law. Filter by mode, or show only findings with a suggested change.
+- **Statutory cap** — the s17(4)(c) annual cap on loss of income and support, by the date each amount takes effect. The engine applies the cap in force on the **date of the accident**, so earlier entries must stay. The page marks which entry is in force today. Add, edit the amount, or remove an entry.
+- **Pre-authorisation codes** — the tariff codes that are paid only when treatment was authorised beforehand. Add or remove a code.
+- **Negotiated rates** — a price agreed for one code, paid instead of the gazetted tariff (the engine prices `min(billed, negotiated)`). Add, edit or remove. A code that has dated versions is maintained under Dated rates, and the page says so.
+- **Dated rates** — the reference tariff, negotiated rates and medicine exit prices as dated versions. The engine pays each line at the rate in force on its **service date**, so late claims price at the tariff of their day. A rate is never deleted: it is replaced from a date, corrected, or ended.
+  - **Find a rate:** pick the price list (Reference tariff, Negotiated, Medicine exit price), search by the start of the code, filter by discipline, and set **Rates as at** to see what was in force on any date.
+  - **Rate history:** click a code. It lists every version, newest first. **New rate** sets a rate from a date (the earlier rate ends the day before; the date must be later than every existing version). **Increase** applies a percentage from a date. **Correct** fixes a capture error on one version and needs a note. **End** closes an open-ended rate on a last day and needs a note.
+  - **Add rate** captures a rate for a code that may not have one yet. **Increase** in the page header raises every matching rate by a percentage: choose the list, the percentage, the date and an optional code prefix and discipline, then review the summary before applying. Codes that already have a version on or after the date are skipped and listed.
+  - **Import** loads a CSV file (`code, rate, effective_from`, optionally `discipline, kind, source, note`); bad rows are reported and do not stop the rest. **Export** downloads the list as at the chosen date.
+  - **Change log** lists every new, corrected or ended rate with the old and new amount and who made the change.
 - **Coding rules** — the tariff's own billing rules per code. *Once per encounter*: a repeat for the same claimant, provider and day is not paid (`UNBUNDLING_CONFLICT`). *Time* rules: the billed quantity is minutes and the line is priced by its ladder off the block rate, not per minute. *Percentage of time*: a share of the anaesthetic-time lines billed with it; with none on the claim the line goes to review. The reference loader seeds the list from the tariff; a rule you set here is kept on reload. Check the seeded once-only codes against the gazette, because the descriptions were read by OCR.
-- **Channel keys** — who may connect to the provider channel. Each connecting party (a provider's own system, or a switch) signs its requests with a private key only it holds; you register the matching **public** key here, with the provider ids the party may act for. A switch may be given `*` for any provider. **Suspend** refuses a party's signatures at once. Never accept or paste a private key: the form refuses one, and a party that sent one must generate a new pair.
-- **Practice register** — who each billing practice is, by practice number: its name, discipline, setting and status. The register decides three things at claim intake, whatever the submitter put on the claim. A **suspended** or **deregistered** practice cannot bill: its claims carry `PROVIDER_UNREGISTERED` and payment is blocked. A practice's lines are priced under its **registered discipline**, so a practice cannot claim a dearer one. And its **setting** decides whether a claim counts as a hospital account. Barring a practice needs a reason, which is logged. The banner at the top says whether enforcement is on; while it is off, a practice that is not in the register is accepted as submitted. Changing the register does not alter claims already decided.
+- **Channel access** — who may connect to the provider channel. Each connecting party (a provider's own system, or a switch) signs its requests with a private key only it holds; you register the matching **public** key here, with the provider ids the party may act for. A switch may be given `*` for any provider. **Suspend** refuses a party's signatures at once. Never accept or paste a private key: the form refuses one, and a party that sent one must generate a new pair. **Practices** changes which practice numbers a system may act for, and **Replace key** swaps its public key (the old key is refused at once). Both were API-only before. A system is never deleted; suspend it to cut it off.
+- **Audit log** — every change made in Administration and to the practice register: who, what and when. Filter by area, person, subject and date; **Show record** reveals the stored entry; **Export** downloads the filtered entries as a CSV file. Entries cannot be edited or removed.
+- **Practice register** — now its own page, **Practices** (under Providers); any operator can read it, an administrator maintains it. It records who each billing practice is, by practice number: its name, discipline, setting and status. The register decides three things at claim intake, whatever the submitter put on the claim. A **suspended** or **deregistered** practice cannot bill: its claims carry `PROVIDER_UNREGISTERED` and payment is blocked. A practice's lines are priced under its **registered discipline**, so a practice cannot claim a dearer one. And its **setting** decides whether a claim counts as a hospital account. The banner at the top says whether enforcement is on; while it is off, a practice that is not in the register is accepted as submitted. Changing the register does not alter claims already decided.
+  - **Find a practice:** the views (All, Active, Suspended, Deregistered) carry counts; search by practice number, name, discipline or council number; filter by discipline, setting, type and verification; click a column heading to sort. **Export** downloads the filtered list as a CSV file.
+  - **Not in the register:** this view lists every practice number that is billing the Fund without an entry, the largest biller first, with its claims and billed total. **Add to register** opens the form with the number filled in.
+  - **Add or import:** **Add practice** captures one entry. **Import** loads a CSV file (choose a file or paste rows); good rows are loaded, bad rows are listed by line, and an import never changes a practice's status.
+  - **The practice record:** click a practice to open it. It shows the register entry, what the practice has billed and been paid, its billing risk, and tabs for its Claims, Remittance advice, Channel access (the systems that may sign for it) and History (every change, with who made it). **Edit details** changes the entry; the practice number itself cannot be changed.
+  - **Suspend, deregister, reinstate:** these are on the practice record. Barring a practice needs a reason, which is shown on the record and logged. There is no delete: a practice that should no longer bill is deregistered, so its history is kept.
 - **Audit** — the append-only log of every admin mutation.
 
 ### 9.2 Approve and pay (the money keys)
 
 **Medical reports.** A provider files the RAF 1 medical report and the RAF 4 serious injury assessment electronically. They appear on the claim's page under **Medical reports on file**, each with a **Print** page and an **XML** document. The two chips at the top show, per form, whether one is on file and whether a complete one is. A report marked *Incomplete* lists the required fields the provider left empty; ask the provider to file a corrected report. When a complete RAF 4 arrives for a personal claim with no serious-injury assessment, the assessment is opened for the Medical Officer automatically, carrying the form's impairment percentage and narrative finding.
 
-When a batch is paid, the system issues a **remittance advice** for each provider paid in it, listed at the foot of **Payments**. Each advice shows every line billed, what was paid and why any line was reduced, and has a **Print** page and an **XML** document. Providers fetch and acknowledge their own advice over the rails channel, and the status changes to *Acknowledged* when they do. An advice never shows a review or fraud signal. A provider's objection to a reduction arrives in **Disputes** with *raised by PROVIDER*.
+When a run is released, the system issues a **remittance advice** for each practice paid in it. They are listed on the run's **Remittance advice** tab and under **Payments → Remittance advice**, where you can search by advice reference, practice or claim and filter by status and service period. Each advice opens as its own record: every claim and line billed, what was paid and why any line was reduced, with a **Print** page and an **XML** document. Providers fetch and acknowledge their own advice over the rails channel, and the status changes to *Acknowledged* when they do. An advice never shows a review or fraud signal. A provider's objection to a reduction arrives in **Disputes** with *raised by PROVIDER*.
 
-In **Payments**, you are the second and third pair of hands: **approve** a batch a Handler assembled (you must be a *different* admin than the assembler — segregation of duties), then **pay** it. You are the sole authority for `pay`, lifecycle `pay`, undertaking-invoice `pay`, and litigation `order-paid`.
+In **Payments**, administrators are the second and third pair of hands. Open a run from **Payment runs** (the *Being assembled* and *Approved, awaiting release* views show what is waiting). **Approve** a run someone else assembled; after approval its contents are fixed. A third person then chooses **Release payment**, which pays the claims and issues the remittance advice. The person who assembled a run cannot approve it, and neither the assembler nor the approver can release it. Administrators are the sole authority for releasing a run, lifecycle `pay`, undertaking-invoice `pay`, and litigation `order-paid`.
 
 ### 9.3 Close the governance loop
 
-In **Governance**, when a signal's measured precision clears the floor, **apply** the promotion in place (this calls the same signal-mode edit as the Admin tab, audit-logged). Use **Draw QA reviews** to seed blind review cases that keep the recall estimate honest.
+**Signal governance** shows how often each finding was borne out on closed cases. **Suggested changes** lists the findings whose record supports a different mode: more weight once we can be confident at least 60% of its cases bore it out, less when it falls short. **Apply** makes the change and asks for a reason (it is the same edit as Administration → Signal modes, and is audit-logged); once applied, the suggestion goes away. **What the engine misses** shows the miss rate measured from automatically cleared claims that were re-checked; **Open quality checks** opens blind billing-review cases to keep that figure honest. **Case outcomes** lists the closed cases all of this is measured from, with a download.
 
 ---
 
@@ -279,7 +310,7 @@ A single claim can pass through every role. Here is the end-to-end path and who 
 
 ```
                     ┌─────────────────────────────────────────────────────────┐
-   HANDLER /        │  1. INTAKE — submit the claim (Submit)                   │
+   HANDLER /        │  1. INTAKE — capture the claim (New claim)               │
    MEDICAL_OFFICER  │     → engine scores it: band + disposition + eligibility │
                     └─────────────────────────────────────────────────────────┘
                                               │
@@ -316,21 +347,22 @@ Alongside this, two flows run continuously:
 
 | Page | What it's for | Primary users |
 |---|---|---|
-| **Dashboard** | the book at a glance — determination counts, band mix, disposition breakdown, money | all |
-| **Claims** | the determination table — filter/search, open a claim's detail | all (Handler acts) |
-| **Claim detail** | one claim's full record + the **Workflow** panel (all its state machines) | Handler, MO, Legal, Admin |
-| **Submit** | submit a claim to the engine | Handler, MO |
-| **Payments** | assemble → approve → pay batches | Handler (assemble), Admin (approve/pay) |
-| **Cases** | investigation/review case machine (REVIEW / BLOCK / CLAWBACK) | Handler (REVIEW), Investigator (BLOCK/CLAWBACK) |
-| **Disputes** | the objection register (s91) | Handler, MO, Legal |
-| **Audit** | post-payment clawback recovery | Investigator |
-| **Accidents** | the accident graph + convergence | all (Investigator reads) |
-| **Intelligence** | party fraud analytics (providers/attorneys/claimants/fairness/sweep) | Investigator |
-| **Coding** | tariff/NAPPI leakage, negotiation targets, condition cost bands | all (analytics) |
-| **Governance** | precision/recall, promotions, fairness, ground-truth labels | Admin (acts), all (view) |
-| **Reference** | the L0 reference data — tariff, NAPPI, ICD-10, comparable awards | all |
-| **Reasons** | the reason register — every rule the engine can fire | all |
-| **Notifications** | the POPIA-minimal outbox + channel preferences | operators |
+| **Dashboard** | what is waiting for attention (cases, disputes, payments, notifications), each a link into its worklist; then the book of claims: risk mix and where claims stand | all |
+| **Claims** | the claims worklist — saved views, filters, sorting, export; open a claim's record | all (Handler acts) |
+| **Claim record** | one claim in tabs: Overview, Lines, Documents, Payments, **Workflow** (all its state machines), History, Technical | all (Handler, MO, Legal, Admin act) |
+| **New claim** | capture a claim; it is priced and assessed on submission | Handler, MO |
+| **Payments** | payment runs (assemble → approve → release), the ready-to-pay list and remittance advice; each run and each advice opens as a record | Handler (assemble), Admin (approve, release) |
+| **Practices** | the practice register and each practice's record; practice numbers billing without an entry | all read, Admin maintains |
+| **Cases** | the case worklist and each case's record: take, note, edit, escalate, close | Handler (billing review), Investigator (fraud hold, recovery) |
+| **Disputes** | the dispute worklist and each dispute's record: reconsider, uphold, reject, refer, record the outcome | Handler, MO, Legal |
+| **Recovery audit** | paid claims to review: find them, review, record a recovery or clear | Investigator |
+| **Accidents** | every accident with its claims, claimants against occupants reported, and how well independent sources support it; filter to accidents with several claims, thin support or more claimants than reported | all (Investigator reads) |
+| **Party intelligence** | ratings for practices and attorneys, repeat claimants, fairness across groups, and a high-risk list | Investigator (all can read) |
+| **Coding analysis** | spend by code (reduced, paid above reference, no reference price), rates worth negotiating, the usual cost of treating each injury with an amount checker, and practices whose prices are rising | all (read-only) |
+| **Signal governance** | how reliable each finding has proved, suggested mode changes, what the engine misses, and the case outcomes behind the figures | Admin (applies), all (read) |
+| **Reference data** | look up a tariff rate, a medicine price, a diagnosis code (by code or by words in the diagnosis) or the comparable awards for an injury; the Overview tab shows which lists are loaded | all |
+| **Reason catalogue** | every finding the engine can raise: what it leads to, whether it blocks or reduces payment or adds to the risk score, its mode, its evidence and its basis; filter by any of these | all |
+| **Notifications** | messages to claimants by status, with search and filters; mark a message sent or failed; **Claimant consent** records whether and how a claimant may be contacted | operators |
 | **Admin** | users, config, reference tiers, signal modes, audit log | Admin |
 
 ---
@@ -343,7 +375,7 @@ Alongside this, two flows run continuously:
 
 **A claim won't pay ("held").** Read its **holds** (§3). Each names the blocker: validate the documents, accept merits, verify the payee, confirm attorney standing, or resolve its disposition. Clear the hold, and it becomes eligible.
 
-**"different approver required" on a payment.** Segregation of duties: the admin approving a batch must not be the one who assembled it. Have a different admin approve.
+**Approve or Release payment is greyed out.** Three-person control: the person who assembled a run cannot approve it, and neither the assembler nor the approver can release it. The line under the Three-person control panel says which rule applies. Have a different administrator act.
 
 **An offer won't include general damages.** It's `gated_by` serious injury — a Medical Officer must create and accept a RAF 4 assessment first (§6.1).
 
@@ -365,7 +397,7 @@ Alongside this, two flows run continuously:
 - **The six heads** — past medical, future medical, loss of earnings, loss of support, general damages, funeral. The offer's components.
 - **Case** — a unit of human investigation/review work: lane (REVIEW/BLOCK/CLAWBACK) + priority (SLA) + verdict.
 - **Dispute** — a lodged objection to a determination; reconsidered internally or referred out.
-- **Batch** — a set of payment instructions assembled, approved, and paid together.
+- **Payment run** (batch) — a set of payments assembled, approved and released together. Each line in it is a payment instruction for one claim.
 - **Signal / reason** — a named rule the engine fires; its register entry fixes its weight, category, maturity, and mode.
 - **Mode (`SHADOW`/`ADVISORY`/`SCORED`)** — whether a signal is silent, visible, or scoring.
 - **Maturity (`GROUNDED`/`HEURISTIC`/`UNVALIDATED`)** — the evidentiary grade of a signal; `GROUNDED` is law-cited and always scores.

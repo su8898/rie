@@ -76,8 +76,14 @@ def adjudicate_invoice(db: Session, inv_id: int, approved: float,
     inv = db.get(models.UndertakingInvoice, inv_id)
     if inv is None:
         raise sm.IllegalTransition(f"no invoice {inv_id}")
-    sm.fire(db, INVOICE, inv, inv_id, "adjudicate", user, detail={"approved": approved})
-    inv.payable = float(approved)
+    try:
+        amount = round(float(approved), 2)
+    except (TypeError, ValueError):
+        raise sm.GateNotMet("the approved amount must be a number") from None
+    if not 0 <= amount <= round(float(inv.billed or 0.0), 2):      # never more than was billed
+        raise sm.GateNotMet("the approved amount must be between zero and the amount billed")
+    sm.fire(db, INVOICE, inv, inv_id, "adjudicate", user, detail={"approved": amount})
+    inv.payable = amount
     db.commit()
     return inv
 

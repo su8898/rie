@@ -7,7 +7,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from .. import notifications_service as svc
+from .. import notifications_service as svc, work_query
 from ..db import get_db
 from .deps import current_user
 
@@ -19,6 +19,16 @@ def outbox(status: str | None = None, claim_id: str | None = None,
            limit: int = Query(200, ge=1, le=1000), db: Session = Depends(get_db),
            user: dict = Depends(current_user)) -> list[dict]:
     return svc.outbox(db, status=status, claim_id=claim_id, limit=limit)
+
+
+@router.get("/search")
+def search(q: str = Query("", max_length=100), status: str = "", channel: str = "", event: str = "",
+           claim_id: str = Query("", max_length=64), limit: int = Query(25, ge=1, le=200),
+           offset: int = Query(0, ge=0), db: Session = Depends(get_db),
+           user: dict = Depends(current_user)) -> dict:
+    """The notification outbox as a worklist: `{rows, total, counts, events}`."""
+    return work_query.search_notifications(db, q=q, status=status, channel=channel, event=event,
+                                           claim_id=claim_id, limit=limit, offset=offset)
 
 
 @router.get("/prefs/{party_token}")

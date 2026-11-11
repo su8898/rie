@@ -3,6 +3,9 @@ signal-mode overrides, and the CUD audit log. Every route requires the ADMIN rol
 """
 from __future__ import annotations
 
+from datetime import date
+from typing import Optional
+
 from fastapi import APIRouter, Body, Depends, Query
 from sqlalchemy.orm import Session
 
@@ -193,3 +196,20 @@ def clear_signal_mode(code: str, db: Session = Depends(get_db), user: dict = Dep
 def audit(limit: int = Query(100, ge=1, le=1000), db: Session = Depends(get_db),
           user: dict = Depends(_admin)) -> list[dict]:
     return svc.list_audit(db, limit=limit)
+
+
+@router.get("/audit/search")
+def audit_search(area: str = Query("", max_length=40), actor: str = Query("", max_length=80),
+                 q: str = Query("", max_length=100), date_from: Optional[date] = None,
+                 date_to: Optional[date] = None, limit: int = Query(50, ge=1, le=200),
+                 offset: int = Query(0, ge=0), db: Session = Depends(get_db),
+                 user: dict = Depends(_admin)) -> dict:
+    """The audit log, filtered and paged: `{rows, total}`."""
+    rows, total = svc.search_audit(db, area=area, actor=actor, q=q, date_from=date_from,
+                                   date_to=date_to, limit=limit, offset=offset)
+    return {"rows": rows, "total": total}
+
+
+@router.get("/audit/facets")
+def audit_facets(db: Session = Depends(get_db), user: dict = Depends(_admin)) -> dict:
+    return svc.audit_facets(db)

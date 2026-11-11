@@ -8,14 +8,15 @@ verification; the amount is never free-form — it must equal the assembled offe
 court order) or the determination's net payable (supplier / undertaking), and an interim payment
 is capped by it; a claim gets ONE settlement-family and ONE supplier instruction across all
 non-cancelled batches (no double payment). Every money event appends to payment_event; paying a
-settlement/court-order instruction advances the claim lifecycle to PAID.
+settlement/court-order instruction advances the claim lifecycle to PAID. While a batch is OPEN its
+assembler side may still correct it: remove an instruction or change the note (both logged).
 """
 from __future__ import annotations
 
 import math
 from typing import Optional
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, or_, select
 from sqlalchemy.orm import Session
 
 from . import lifecycle_service, models, remittance_service, statemachine as sm
@@ -167,6 +168,41 @@ def add_instruction(db: Session, batch_id: int, claim_id: str, source: str,
     return inst
 
 
+def remove_instruction(db: Session, batch_id: int, instruction_id: int, user: dict) -> "models.PaymentBatch":
+    """Take a claim out of a batch that is still OPEN. The removal is logged; the claim returns to
+    the queue and may be instructed again."""
+    b = db.get(models.PaymentBatch, batch_id)
+    if b is None:
+        raise sm.IllegalTransition("no such payment batch")
+    if b.status != "OPEN":
+        raise sm.GateNotMet("batch is not OPEN")
+    inst = db.get(models.PaymentInstruction, instruction_id)
+    if inst is None or inst.batch_id != batch_id:
+        raise sm.IllegalTransition("no such instruction in this batch")
+    db.add(models.PaymentEvent(batch_id=batch_id, event="INSTRUCTION_REMOVED", actor=user["username"],
+                               role=user["role"], amount=inst.amount,
+                               detail={"claim_id": inst.claim_id, "source": inst.source}))
+    db.delete(inst)
+    db.commit()
+    return b
+
+
+def set_note(db: Session, batch_id: int, note: Optional[str], user: dict) -> "models.PaymentBatch":
+    """Change the note on a batch that is still OPEN (logged)."""
+    b = db.get(models.PaymentBatch, batch_id)
+    if b is None:
+        raise sm.IllegalTransition("no such payment batch")
+    if b.status != "OPEN":
+        raise sm.GateNotMet("batch is not OPEN")
+    note = (note or "").strip() or None
+    if note != b.note:
+        b.note = note
+        db.add(models.PaymentEvent(batch_id=batch_id, event="NOTE_CHANGED", actor=user["username"],
+                                   role=user["role"], amount=None, detail={"note": note}))
+        db.commit()
+    return b
+
+
 def approve(db: Session, batch_id: int, user: dict) -> "models.PaymentBatch":
     b = db.get(models.PaymentBatch, batch_id)
     if b is None:
@@ -225,32 +261,142 @@ def cancel(db: Session, batch_id: int, user: dict) -> "models.PaymentBatch":
     return b
 
 
+def _live_instructions(db, claim_ids) -> dict[str, tuple[int, str]]:
+    """claim -> (batch id, batch status) for every claim held by a batch that is not CANCELLED."""
+    if not claim_ids:
+        return {}
+    return {cid: (bid, status) for cid, bid, status in db.execute(
+        select(models.PaymentInstruction.claim_id, models.PaymentBatch.id, models.PaymentBatch.status)
+        .join(models.PaymentBatch, models.PaymentBatch.id == models.PaymentInstruction.batch_id)
+        .where(models.PaymentInstruction.claim_id.in_(claim_ids),
+               models.PaymentBatch.status != "CANCELLED")
+        .order_by(models.PaymentInstruction.id))}
+
+
+def _providers(db, claim_ids) -> dict[str, list[str]]:
+    out: dict[str, list[str]] = {c: [] for c in claim_ids}
+    if claim_ids:
+        for cid, provider in db.execute(
+                select(models.BillingLineRecord.claim_id, models.BillingLineRecord.provider_id)
+                .where(models.BillingLineRecord.claim_id.in_(claim_ids)).distinct()):
+            if provider and provider not in out[cid]:
+                out[cid].append(provider)
+    return out
+
+
 def queue(db: Session) -> list[dict]:
-    """Claims whose latest determination is eligible to pay and not yet in a paid instruction."""
+    """Claims whose latest determination is eligible to pay and not yet in a paid instruction.
+
+    Each row says how the claim would be paid (`source`, `amount`) and, when it cannot be added to
+    a batch right now, why (`blocked`) — the same gates add_instruction enforces."""
     paid_claims = set(db.scalars(select(models.PaymentInstruction.claim_id)
                                  .where(models.PaymentInstruction.paid.is_(True))))
-    out = []
+    dets = []
     seen = set()
     for det in db.scalars(select(models.Determination).order_by(desc(models.Determination.id))):
         if det.claim_id in seen:
             continue
         seen.add(det.claim_id)
         if det.eligible_to_pay and det.net_payable > 0 and det.claim_id not in paid_claims:
-            out.append({"claim_id": det.claim_id, "net_payable": det.net_payable,
-                        "disposition": det.disposition, "band": det.band})
+            dets.append(det)
+    ids = [d.claim_id for d in dets]
+    live, providers = _live_instructions(db, ids), _providers(db, ids)
+    out = []
+    for det in dets:
+        claim = db.get(models.ClaimRecord, det.claim_id)
+        row = {"claim_id": det.claim_id, "net_payable": det.net_payable,
+               "disposition": det.disposition, "band": det.band,
+               "claim_type": claim.claim_type if claim else None,
+               "lodged_on": claim.lodged_on.isoformat() if claim and claim.lodged_on else None,
+               "providers": providers.get(det.claim_id, []),
+               "source": None, "amount": det.net_payable, "blocked": None, "in_batch": None}
+        if det.claim_id in live:
+            bid, status = live[det.claim_id]
+            row["in_batch"] = {"id": bid, "status": status}
+            row["blocked"] = "IN_BATCH"
+        if claim is None:
+            row["blocked"] = row["blocked"] or "NO_CLAIM_RECORD"
+        else:
+            if claim.claim_type == "PERSONAL":
+                lc = db.get(models.ClaimLifecycle, det.claim_id)
+                stage = lc.stage if lc else None
+                row["source"] = "COURT_ORDER" if stage == "COURT_ORDER" else "SETTLEMENT"
+                offer = _assembled_offer_total(db, det.claim_id)
+                row["amount"] = offer
+                if stage not in ("SETTLED", "COURT_ORDER") or offer is None:
+                    row["blocked"] = row["blocked"] or "NOT_SETTLED"
+            else:
+                row["source"] = claim.claim_type if claim.claim_type in VALID_SOURCES else "SUPPLIER"
+            if not (claim.raw or {}).get("payee_verified"):
+                row["blocked"] = row["blocked"] or "PAYEE_UNVERIFIED"
+        out.append(row)
     return out
 
 
+def _stamp(dt) -> Optional[str]:
+    return dt.isoformat() if dt else None
+
+
+def batch_summary(db: Session, b: "models.PaymentBatch", n_claims: int, total: float,
+                  paid_at=None) -> dict:
+    return {"id": b.id, "status": b.status, "created_by": b.created_by,
+            "approved_by": b.approved_by, "paid_by": b.paid_by, "note": b.note,
+            "created_at": _stamp(b.created_at), "paid_at": _stamp(paid_at),
+            "n_claims": n_claims, "total": round(total or 0.0, 2)}
+
+
+def list_batches(db: Session, *, status: Optional[str] = None, q: Optional[str] = None,
+                 direction: str = "desc", limit: int = 25, offset: int = 0) -> tuple[list[dict], int, dict]:
+    """The payment-run worklist: one summary row per batch, newest first, with a count per status
+    (the counts ignore the status filter, so the saved views can show them)."""
+    base = select(models.PaymentBatch)
+    if q and (q := q.strip()):
+        like = f"%{q}%"
+        held = select(models.PaymentInstruction.batch_id).where(models.PaymentInstruction.claim_id.ilike(like))
+        conds = [models.PaymentBatch.note.ilike(like), models.PaymentBatch.created_by.ilike(like),
+                 models.PaymentBatch.id.in_(held)]
+        digits = q.lstrip("#")
+        if digits.isdigit():
+            conds.append(models.PaymentBatch.id == int(digits))
+        base = base.where(or_(*conds))
+    counts = dict(db.execute(select(models.PaymentBatch.status, func.count())
+                             .where(models.PaymentBatch.id.in_(select(base.subquery().c.id)))
+                             .group_by(models.PaymentBatch.status)).all())
+    if status:
+        base = base.where(models.PaymentBatch.status == status)
+    total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
+    order = models.PaymentBatch.id.asc() if direction == "asc" else models.PaymentBatch.id.desc()
+    batches = list(db.scalars(base.order_by(order).limit(limit).offset(offset)))
+    ids = [b.id for b in batches]
+    agg = {bid: (n, t) for bid, n, t in db.execute(
+        select(models.PaymentInstruction.batch_id, func.count(), func.sum(models.PaymentInstruction.amount))
+        .where(models.PaymentInstruction.batch_id.in_(ids))
+        .group_by(models.PaymentInstruction.batch_id))} if ids else {}
+    paid_at = dict(db.execute(select(models.PaymentEvent.batch_id, func.max(models.PaymentEvent.at))
+                              .where(models.PaymentEvent.batch_id.in_(ids), models.PaymentEvent.event == "PAID")
+                              .group_by(models.PaymentEvent.batch_id)).all()) if ids else {}
+    rows = [batch_summary(db, b, *agg.get(b.id, (0, 0.0)), paid_at.get(b.id)) for b in batches]
+    return rows, total, {k: counts.get(k, 0) for k in ("OPEN", "APPROVED", "PAID", "CANCELLED")}
+
+
 def batch_dict(db: Session, b: "models.PaymentBatch") -> dict:
+    insts = _instructions(db, b.id)
+    ids = [i.claim_id for i in insts]
+    providers = _providers(db, ids)
+    types = dict(db.execute(select(models.ClaimRecord.claim_id, models.ClaimRecord.claim_type)
+                            .where(models.ClaimRecord.claim_id.in_(ids))).all()) if ids else {}
+    events = list(db.scalars(select(models.PaymentEvent).where(models.PaymentEvent.batch_id == b.id)
+                             .order_by(models.PaymentEvent.id)))
+    paid_at = next((e.at for e in reversed(events) if e.event == "PAID"), None)
     return {
-        "id": b.id, "status": b.status, "created_by": b.created_by,
-        "approved_by": b.approved_by, "paid_by": b.paid_by, "note": b.note,
-        "total": _total(db, b.id), "actions": BATCH.actions_from(b.status),
+        **batch_summary(db, b, len(insts), sum(i.amount for i in insts), paid_at),
+        "actions": BATCH.actions_from(b.status),
         "instructions": [{"id": i.id, "claim_id": i.claim_id, "source": i.source,
-                          "amount": i.amount, "paid": i.paid} for i in _instructions(db, b.id)],
+                          "amount": i.amount, "paid": i.paid, "claim_type": types.get(i.claim_id),
+                          "providers": providers.get(i.claim_id, [])} for i in insts],
         "events": [{"event": e.event, "actor": e.actor, "role": e.role, "amount": e.amount,
-                    "at": e.at.isoformat() if e.at else None, "detail": e.detail}
-                   for e in db.scalars(select(models.PaymentEvent)
-                                       .where(models.PaymentEvent.batch_id == b.id)
-                                       .order_by(models.PaymentEvent.id))],
+                    "at": e.at.isoformat() if e.at else None, "detail": e.detail} for e in events],
+        "remittances": [remittance_service.summary(r) for r in db.scalars(
+            select(models.Remittance).where(models.Remittance.batch_id == b.id)
+            .order_by(models.Remittance.id))],
     }

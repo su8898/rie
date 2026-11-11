@@ -9,12 +9,12 @@ delivery — it is never stored here.
 """
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
+from .clock import utcnow
 from . import models
 
 CHANNELS = {"SMS", "EMAIL", "NONE"}
@@ -95,7 +95,7 @@ def _set_status(db: Session, notif_id: int, status: str, stamp: bool) -> dict:
         raise ValueError(f"no such notification: {notif_id}")
     n.status = status
     if stamp:
-        n.sent_at = datetime.now()
+        n.sent_at = utcnow()
     db.commit()
     return _dict(n)
 

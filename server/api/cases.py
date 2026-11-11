@@ -4,11 +4,13 @@ Static routes (/analytics, /labels) are declared before /{case_id} so they are n
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from typing import Literal
+
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
-from .. import cases_service as svc, models
+from .. import cases_service as svc, models, work_query
 from ..db import get_db
 from .deps import current_user
 
@@ -38,6 +40,19 @@ def open_case(body: dict = Body(...), db: Session = Depends(get_db),
     return svc.item_dict(c)
 
 
+@router.get("/search")
+def search(q: str = Query("", max_length=100), lane: str = "", status: str = "", mine: bool = False,
+           overdue: bool = False, open_only: bool = False, claim_id: str = Query("", max_length=64),
+           sort: Literal["opened", "due", "priority", "stake"] = "opened",
+           direction: Literal["asc", "desc"] = "desc", limit: int = Query(25, ge=1, le=200),
+           offset: int = Query(0, ge=0), db: Session = Depends(get_db),
+           user: dict = Depends(current_user)) -> dict:
+    """The case worklist: `{rows, total, counts}`."""
+    return work_query.search_cases(db, user, q=q, lane=lane, status=status, mine=mine, overdue=overdue,
+                                   open_only=open_only, claim_id=claim_id, sort=sort,
+                                   direction=direction, limit=limit, offset=offset)
+
+
 @router.get("/analytics")
 def analytics(db: Session = Depends(get_db), user: dict = Depends(current_user)) -> dict:
     return svc.analytics(db)
@@ -55,6 +70,21 @@ def get_case(case_id: int, db: Session = Depends(get_db),
     if c is None:
         raise HTTPException(status_code=404, detail="case not found")
     return svc.item_dict(c)
+
+
+@router.patch("/{case_id}")
+def update_case(case_id: int, body: dict = Body(...), db: Session = Depends(get_db),
+                user: dict = Depends(current_user)) -> dict:
+    """Correct an open case's priority, reason or amount at stake (logged)."""
+    c = work_query.update_case(db, case_id, user, priority=body.get("priority"),
+                               reason=body.get("reason"), rand_at_stake=body.get("rand_at_stake"))
+    return svc.item_dict(c)
+
+
+@router.get("/{case_id}/history")
+def case_history(case_id: int, db: Session = Depends(get_db),
+                 user: dict = Depends(current_user)) -> list[dict]:
+    return work_query.history(db, "case", case_id)
 
 
 @router.get("/{case_id}/notes")

@@ -1,414 +1,210 @@
-// Notifications — the POPIA-minimal outbound outbox + opt-in channel preference
-// (the direct-claimant notification service, domain-logic §8 / §12.8).
-//
-// Lifecycle and checklist transitions emit outbound messages, but the body is
-// data-minimised by construction: it carries only the claim reference and the
-// required action — never medical or quantum detail. Delivery is opt-in, so the
-// opt-in flag on the party record IS the POPIA lawful-basis gate: a party with
-// no opt-in is SUPPRESSED — logged, not delivered. That is the privacy-correct
-// outcome, not a failure. Parties are identified by an HMAC pseudonym (P_*),
-// never a name (SPECIFICATION — Party token; no raw PII stored).
-//
-// Two workflows on one page:
-//   • Channel preference — look up a party token's channel (SMS / EMAIL / NONE)
-//     and opt-in, and save a change. No opt-in ⇒ every message to that party
-//     SUPPRESSES.
-//   • Outbox — the notification log, one row per message, with the lifecycle
-//     status (PENDING / SENT / SUPPRESSED / FAILED). Delivery itself is external
-//     (an SMS / e-mail gateway); mark-sent / mark-failed are the manual delivery
-//     reconciliation for a PENDING row until that gateway reports back.
+// Notifications. The messages the Fund sends claimants about their claim, and each claimant's
+// consent to be contacted. A message carries only a claim reference and what to do next, never
+// a name, an amount or a diagnosis. Nothing is sent to a claimant who has not agreed.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Check, Search, ShieldCheck, X } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, ApiError } from "../api";
-import {
-  Card,
-  Loading,
-  ErrorBox,
-  Empty,
-  Pagination,
-  SearchInput,
-  Toast,
-  StateChip,
-  CodePill,
-  matchQ,
-  usePaged,
-} from "../components/ui";
-import { num } from "../format";
-import type { Notification, NotifPref, NotifChannel } from "../types";
+import { ApiError, api } from "../api";
+import { DataTable, Pager, type Column } from "../ds/DataTable";
+import { NOTIFICATION_CHANNELS, NOTIFICATION_STATUS, dateTime, humanise } from "../ds/labels";
+import { ConfirmDialog, Dialog, useToast } from "../ds/overlays";
+import { Badge, Button, Checkbox, EmptyState, ErrorBlock, Field, Input, PageHeader, Ref, Select, Stat } from "../ds/primitives";
+import type { Notification, NotificationSearch } from "../types";
+import { ViewPills, useListParams } from "./work/shared";
 
-const th = "px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500";
-
-const inputClass =
-  "rounded-md border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-slate-500 focus:ring-1 focus:ring-slate-500";
-const smallBtn =
-  "rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-40";
-const claimLink =
-  "font-mono text-[13px] text-slate-900 hover:text-blue-600 hover:underline";
-
-const STATUS_OPTIONS = ["", "PENDING", "SENT", "SUPPRESSED", "FAILED"] as const;
-const CHANNEL_OPTIONS: NotifChannel[] = ["SMS", "EMAIL", "NONE"];
-
-// One-line meaning per lifecycle status — what a row in this state actually is.
-const STATUS_MEANING: Record<string, string> = {
-  PENDING: "queued for the gateway; awaiting a delivery result",
-  SENT: "handed to the SMS / e-mail gateway",
-  SUPPRESSED: "not delivered — the party has no opt-in (privacy-correct)",
-  FAILED: "the gateway could not deliver it",
-};
+const message = (e: unknown, fallback: string) => (e instanceof ApiError ? e.message : fallback);
 
 export default function NotificationsPage() {
+  const toast = useToast();
+  const { value, page, pageSize, set, reset, query } = useListParams();
+  const [data, setData] = useState<NotificationSearch | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [marking, setMarking] = useState<{ row: Notification; as: "sent" | "failed" } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [consentFor, setConsentFor] = useState<string | null>(null);
 
-  const [statusFilter, setStatusFilter] = useState<string>("");
-  const [notifs, setNotifs] = useState<Notification[] | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [busyKey, setBusyKey] = useState<string | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
-
-  const [tokenInput, setTokenInput] = useState<string>("");
-  const [pref, setPref] = useState<NotifPref | null>(null);
-  const [prefChannel, setPrefChannel] = useState<NotifChannel>("SMS");
-  const [prefOptedIn, setPrefOptedIn] = useState<boolean>(false);
-
+  const status = value("status");
+  const filterKeys = ["q", "channel", "event"];
+  const filtered = filterKeys.some((k) => value(k));
   const load = useCallback(async () => {
-    setLoadError(null);
+    setLoading(true);
+    setError(null);
     try {
-      const rows = await api.notifications(
-        statusFilter ? { status: statusFilter } : {}
-      );
-      setNotifs(rows);
+      setData(await api.notificationSearch({ status, q: value("q"), channel: value("channel"), event: value("event"), limit: pageSize, offset: (page - 1) * pageSize }));
     } catch (e) {
-      setLoadError(e instanceof ApiError ? e.message : "Failed to load notifications.");
-    }
-  }, [statusFilter]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  const run = useCallback(
-    async (key: string, fn: () => Promise<unknown>, okMsg: string) => {
-      setBusyKey(key);
-      try {
-        await fn();
-        await load();
-        setToast(okMsg);
-      } catch (e) {
-        setToast(e instanceof ApiError ? e.message : "Request failed.");
-      } finally {
-        setBusyKey(null);
-      }
-    },
-    [load]
-  );
-
-  const lookUpPref = useCallback(async () => {
-    const token = tokenInput.trim();
-    if (!token) return;
-    setBusyKey("pref:lookup");
-    try {
-      const p = await api.notifPref(token);
-      setPref(p);
-      setPrefChannel(
-        p.channel === "EMAIL" ? "EMAIL" : p.channel === "NONE" ? "NONE" : "SMS"
-      );
-      setPrefOptedIn(p.opted_in);
-    } catch (e) {
-      setToast(e instanceof ApiError ? e.message : "Request failed.");
+      setError(message(e, "The notifications could not be loaded."));
     } finally {
-      setBusyKey(null);
+      setLoading(false);
     }
-  }, [tokenInput]);
+    // `query` is the whole view, filter and page state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query]);
+  useEffect(() => { void load(); }, [load]);
 
-  const savePref = useCallback(async () => {
-    const token = pref ? pref.party_token : tokenInput.trim();
-    if (!token) return;
-    setBusyKey("pref:save");
+  const c = data?.counts;
+  const all = c ? Object.values(c).reduce((s, n) => s + n, 0) : undefined;
+  const views = [
+    { key: "", label: "All", count: all },
+    { key: "PENDING", label: "Waiting to send", count: c?.PENDING },
+    { key: "FAILED", label: "Failed", count: c?.FAILED, alert: true },
+    { key: "SENT", label: "Sent", count: c?.SENT },
+    { key: "SUPPRESSED", label: "Not sent", count: c?.SUPPRESSED },
+  ];
+
+  async function mark() {
+    if (!marking) return;
+    setBusy(true);
     try {
-      const p = await api.setNotifPref(token, prefChannel, prefOptedIn);
-      setPref(p);
-      setToast("Preference saved.");
+      await (marking.as === "sent" ? api.notifMarkSent(marking.row.id) : api.notifMarkFailed(marking.row.id));
+      toast.success(marking.as === "sent" ? "Marked as sent." : "Marked as failed.");
+      setMarking(null);
+      await load();
     } catch (e) {
-      setToast(e instanceof ApiError ? e.message : "Request failed.");
+      toast.error(message(e, "The status could not be changed."));
     } finally {
-      setBusyKey(null);
+      setBusy(false);
     }
-  }, [pref, tokenInput, prefChannel, prefOptedIn]);
+  }
 
-  const disabled = busyKey !== null;
-  const [q, setQ] = useState("");
-  const filtered = useMemo(
-    () =>
-      (notifs ?? []).filter((n) =>
-        matchQ(q, n.claim_id, n.event, n.channel, n.status, n.body, `#${n.id}`),
-      ),
-    [notifs, q],
-  );
-  const { page, setPage, pageCount, total, slice } = usePaged(filtered, 25);
+  const columns: Column<Notification>[] = [
+    { key: "when", header: "Created", render: (n) => <span className="tnum whitespace-nowrap text-ink-700">{dateTime(n.created_at)}</span> },
+    { key: "claim", header: "Claim", render: (n) => <Link to={`/claims/${encodeURIComponent(n.claim_id)}`} className="font-medium text-brand-700 hover:underline"><Ref>{n.claim_id}</Ref></Link> },
+    { key: "message", header: "Message", render: (n) => <div><div className="max-w-[52ch] text-ink-900">{n.body}</div><div className="text-xs text-ink-500">{humanise(n.event)}</div></div> },
+    { key: "to", header: "To", render: (n) => (
+      <div>
+        <div className="text-ink-700">{n.channel === "NONE" ? "No channel" : NOTIFICATION_CHANNELS[n.channel] ?? n.channel}</div>
+        {n.party_token && <button className="text-xs text-brand-700 hover:underline" onClick={() => setConsentFor(n.party_token)}><Ref>{n.party_token}</Ref></button>}
+      </div>
+    ) },
+    { key: "status", header: "Status", render: (n) => (
+      <div>
+        <Badge tone={NOTIFICATION_STATUS[n.status]?.tone ?? "neutral"} dot>{NOTIFICATION_STATUS[n.status]?.label ?? n.status}</Badge>
+        {n.sent_at && <div className="mt-1 text-xs text-ink-500">{dateTime(n.sent_at)}</div>}
+        {n.status === "SUPPRESSED" && <div className="mt-1 text-xs text-ink-500">No consent on record</div>}
+      </div>
+    ) },
+    { key: "actions", header: "", align: "right", render: (n) => n.status === "PENDING" || n.status === "FAILED" ? (
+      <div className="flex justify-end gap-1 whitespace-nowrap">
+        <Button size="sm" variant="ghost" icon={Check} onClick={() => setMarking({ row: n, as: "sent" })}>Mark sent</Button>
+        {n.status === "PENDING" && <Button size="sm" variant="ghost" icon={X} onClick={() => setMarking({ row: n, as: "failed" })}>Mark failed</Button>}
+      </div>
+    ) : null },
+  ];
 
   return (
-    <div className="space-y-4">
-      <header>
-        <h1 className="text-xl font-semibold text-slate-900">Notifications</h1>
-        <p className="mt-0.5 max-w-3xl text-sm text-slate-500">
-          The POPIA-minimal outbound outbox (§8 / §12.8). Every message carries
-          only a{" "}
-          <span className="font-medium text-slate-600">claim reference</span> and
-          the{" "}
-          <span className="font-medium text-slate-600">required action</span> —
-          never medical or quantum detail. Delivery is opt-in, so a party with no
-          opt-in is <span className="font-medium text-slate-600">SUPPRESSED</span>{" "}
-          (logged, not delivered) — data-minimisation by construction, not a
-          failure to reach them.
-        </p>
-      </header>
+    <div>
+      <PageHeader
+        crumbs={[{ label: "Work" }, { label: "Notifications" }]}
+        title="Notifications"
+        subtitle="Messages to claimants about their claim. A message carries only the claim reference and what to do next. Nothing is sent to a claimant who has not agreed to be contacted."
+        actions={<Button icon={ShieldCheck} onClick={() => setConsentFor("")}>Claimant consent</Button>}
+      />
+      <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Stat label="Waiting to send" value={c ? c.PENDING : "…"} tone={c?.PENDING ? "warn" : undefined} />
+        <Stat label="Failed" value={c ? c.FAILED : "…"} tone={c?.FAILED ? "bad" : undefined} hint="Check the contact details" />
+        <Stat label="Sent" value={c ? c.SENT : "…"} tone="ok" />
+        <Stat label="Not sent" value={c ? c.SUPPRESSED : "…"} hint="No consent on record" />
+      </div>
 
-      <Card
-        title="Channel preference"
-        sub="Opt-in IS the POPIA lawful-basis gate for reaching a party. Look up a party token to see its channel — SMS / EMAIL / NONE — and opt-in state, then save a change; with no opt-in, every message to that party SUPPRESSES rather than sends. The token is an HMAC pseudonym (P_*), never a name."
-      >
-        <div className="space-y-3">
-          <div className="flex flex-wrap items-end gap-3">
-            <label className="flex flex-col gap-1">
-              <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                Party token
-              </span>
-              <input
-                className={inputClass}
-                value={tokenInput}
-                placeholder="P_… party pseudonym"
-                onChange={(e) => setTokenInput(e.target.value)}
-              />
-            </label>
-            <button
-              type="button"
-              className={smallBtn}
-              disabled={disabled || !tokenInput.trim()}
-              onClick={lookUpPref}
-            >
-              Look up
-            </button>
-          </div>
+      <ViewPills views={views} value={status} label="Status" onChange={(k) => reset(k ? { status: k } : {})} />
+      <div className="mb-3 grid gap-2 rounded-lg border border-line bg-white p-3 shadow-panel sm:grid-cols-2 lg:grid-cols-5">
+        <Input className="lg:col-span-2" placeholder="Claim, claimant reference or words in the message" aria-label="Search notifications" value={value("q")} onChange={(e) => set({ q: e.target.value })} />
+        <Select aria-label="About" value={value("event")} onChange={(e) => set({ event: e.target.value })}>
+          <option value="">About anything</option>
+          {(data?.events ?? []).map((e) => <option key={e} value={e}>{humanise(e)}</option>)}
+        </Select>
+        <Select aria-label="Channel" value={value("channel")} onChange={(e) => set({ channel: e.target.value })}>
+          <option value="">Any channel</option>
+          {Object.entries(NOTIFICATION_CHANNELS).map(([k, label]) => <option key={k} value={k}>{k === "NONE" ? "No channel" : label}</option>)}
+        </Select>
+        {filtered && <div className="flex items-center"><Button size="sm" variant="ghost" icon={X} onClick={() => set(Object.fromEntries(filterKeys.map((k) => [k, null])))}>Clear filters</Button></div>}
+      </div>
+      {error ? <ErrorBlock message={error} onRetry={load} /> : (
+        <DataTable
+          columns={columns} rows={data?.rows ?? []} rowKey={(n) => String(n.id)} loading={loading}
+          empty={<EmptyState title={filtered || status ? "No notification matches" : "No notifications yet"} body={filtered || status ? "Change or clear the filters." : "A message is created when a claim reaches a step the claimant should hear about."} />}
+          footer={<Pager page={page} pageSize={pageSize} total={data?.total ?? 0} unit="notifications" onPage={(p) => set({ page: p > 1 ? String(p) : null }, true)} onPageSize={(n) => set({ size: n === 25 ? null : String(n) })} />}
+        />
+      )}
 
-          {pref && (
-            <div className="text-xs text-slate-600">
-              Current: <CodePill>{pref.party_token}</CodePill> · channel{" "}
-              <CodePill>{pref.channel}</CodePill> ·{" "}
-              {pref.opted_in ? (
-                <span className="font-medium text-emerald-700">opted in</span>
-              ) : (
-                <span className="font-medium text-amber-700">
-                  not opted in — messages SUPPRESS
-                </span>
-              )}
-            </div>
-          )}
-
-          <div className="flex flex-wrap items-end gap-3">
-            <label className="flex flex-col gap-1">
-              <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                Channel
-              </span>
-              <select
-                className={inputClass}
-                value={prefChannel}
-                onChange={(e) => setPrefChannel(e.target.value as NotifChannel)}
-              >
-                {CHANNEL_OPTIONS.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="flex items-center gap-2 pb-1.5 text-sm text-slate-700">
-              <input
-                type="checkbox"
-                checked={prefOptedIn}
-                onChange={(e) => setPrefOptedIn(e.target.checked)}
-              />
-              opted in
-            </label>
-            <button
-              type="button"
-              className={smallBtn}
-              disabled={disabled || (!pref && !tokenInput.trim())}
-              onClick={savePref}
-            >
-              Save
-            </button>
-          </div>
-
-          <p className="text-xs text-slate-400">
-            NONE and an unchecked opt-in mean the same outcome on the outbox: the
-            message is logged as SUPPRESSED, never delivered. Opting in is the
-            party's own act — this form records it, it does not grant consent.
-          </p>
-        </div>
-      </Card>
-
-      {loadError && <ErrorBox message={loadError} />}
-
-      <Card
-        title="Outbox"
-        sub="One row per outbound message: the claim it concerns, the lifecycle event that emitted it, the party's channel, and the delivery status. PENDING is queued, SENT reached the gateway, FAILED could not be delivered, and SUPPRESSED means the party had no opt-in — the privacy-correct outcome, not an error. Delivery itself is external (SMS / e-mail gateway); mark-sent / mark-failed are the manual delivery reconciliation for a PENDING row."
-        right={
-          <div className="flex flex-wrap items-end gap-2">
-            <div>
-              <label className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-slate-400">
-                Status
-              </label>
-              <select
-                className={inputClass}
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
-                aria-label="Filter by status"
-              >
-                {STATUS_OPTIONS.map((s) => (
-                  <option key={s || "all"} value={s}>
-                    {s || "All statuses"}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-slate-400">
-                Search
-              </label>
-              <SearchInput
-                value={q}
-                onChange={setQ}
-                placeholder="Claim, event, channel, message…"
-                className="w-56"
-              />
-            </div>
-            {notifs && (
-              <div className="pb-1 text-xs text-slate-400">
-                <span className="tnum font-semibold text-slate-700">
-                  {num(filtered.length)}
-                </span>{" "}
-                in view
-              </div>
-            )}
-          </div>
-        }
-      >
-        {notifs === null ? (
-          <Loading label="Loading outbox…" />
-        ) : filtered.length === 0 ? (
-          <Empty
-            label={
-              q || statusFilter
-                ? "No notifications match the current status / search."
-                : "No notifications sent yet."
-            }
-          />
-        ) : (
-          <div className="overflow-hidden rounded-md border border-slate-100">
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-slate-100 text-sm">
-                <thead className="bg-slate-50">
-                  <tr>
-                    <th className={`${th} text-left`}>#</th>
-                    <th className={`${th} text-left`}>Claim</th>
-                    <th className={`${th} text-left`}>Event</th>
-                    <th className={`${th} text-left`}>Channel</th>
-                    <th className={`${th} text-left`}>Status</th>
-                    <th className={`${th} text-left`}>Message</th>
-                    <th className={`${th} text-left`}>Created</th>
-                    <th className={`${th} text-left`}>Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {slice.map((n) => (
-                    <tr key={n.id} className="align-top hover:bg-slate-50">
-                      <td className="px-3 py-2 font-mono text-[13px] text-slate-400">
-                        #{n.id}
-                      </td>
-                      <td className="px-3 py-2">
-                        <Link
-                          to={`/claims/${encodeURIComponent(n.claim_id)}`}
-                          className={claimLink}
-                        >
-                          {n.claim_id}
-                        </Link>
-                      </td>
-                      <td className="px-3 py-2">
-                        <CodePill>{n.event}</CodePill>
-                      </td>
-                      <td className="px-3 py-2 text-slate-700">{n.channel}</td>
-                      <td className="px-3 py-2">
-                        <StateChip state={n.status} />
-                        {STATUS_MEANING[n.status] && (
-                          <div className="mt-0.5 max-w-[13rem] text-[10px] leading-snug text-slate-400">
-                            {STATUS_MEANING[n.status]}
-                          </div>
-                        )}
-                      </td>
-                      <td className="max-w-md px-3 py-2 text-xs text-slate-600">
-                        {n.body}
-                      </td>
-                      <td className="px-3 py-2 text-slate-500">
-                        {n.created_at ?? "—"}
-                      </td>
-                      <td className="px-3 py-2">
-                        {n.status === "PENDING" ? (
-                          <div className="flex gap-1">
-                            <button
-                              type="button"
-                              className={smallBtn}
-                              disabled={disabled}
-                              onClick={() =>
-                                run(
-                                  `sent:${n.id}`,
-                                  () => api.notifMarkSent(n.id),
-                                  "Marked sent."
-                                )
-                              }
-                            >
-                              {busyKey === `sent:${n.id}` ? "…" : "mark sent"}
-                            </button>
-                            <button
-                              type="button"
-                              className={smallBtn}
-                              disabled={disabled}
-                              onClick={() =>
-                                run(
-                                  `failed:${n.id}`,
-                                  () => api.notifMarkFailed(n.id),
-                                  "Marked failed."
-                                )
-                              }
-                            >
-                              {busyKey === `failed:${n.id}` ? "…" : "mark failed"}
-                            </button>
-                          </div>
-                        ) : (
-                          <span className="text-slate-300">—</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <Pagination
-              page={page}
-              pageCount={pageCount}
-              total={total}
-              onPage={setPage}
-              unit="notifications"
-            />
-          </div>
-        )}
-        <p className="mt-3 text-xs text-slate-400">
-          Only PENDING rows can be reconciled — SENT / FAILED / SUPPRESSED are
-          terminal. Marking a row records the delivery outcome the external
-          gateway reported; it never changes what the body may contain.
-        </p>
-      </Card>
-
-      {toast && <Toast message={toast} onClose={() => setToast(null)} />}
+      <ConfirmDialog
+        open={marking !== null} onClose={() => setMarking(null)} busy={busy} danger={marking?.as === "failed"}
+        title={marking?.as === "sent" ? "Mark this message as sent?" : "Mark this message as failed?"}
+        confirmLabel={marking?.as === "sent" ? "Mark as sent" : "Mark as failed"}
+        description={marking ? <>Claim <Ref>{marking.row.claim_id}</Ref>. {marking.as === "sent" ? "Use this when the delivery service confirms it went out." : "Use this when delivery did not succeed. It can be marked as sent later."}</> : undefined}
+        onConfirm={mark}
+      />
+      {consentFor !== null && <ConsentDialog token={consentFor} onClose={() => setConsentFor(null)} />}
     </div>
+  );
+}
+
+/** Look up and change one claimant's consent to be contacted, and by which channel. */
+function ConsentDialog({ token, onClose }: { token: string; onClose: () => void }) {
+  const toast = useToast();
+  const [ref, setRef] = useState(token);
+  const [loaded, setLoaded] = useState<string | null>(null);
+  const [channel, setChannel] = useState("NONE");
+  const [agreed, setAgreed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const lookup = useCallback(async (t: string) => {
+    if (!t.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const p = await api.notifPref(t.trim());
+      setLoaded(t.trim()); setChannel(p.channel); setAgreed(p.opted_in);
+    } catch (e) {
+      setError(message(e, "The consent record could not be read."));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+  useEffect(() => { if (token) void lookup(token); }, [token, lookup]);
+
+  const channelError = agreed && channel === "NONE" ? "Choose SMS or email, or untick consent." : null;
+  async function save() {
+    if (!loaded || channelError) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.setNotifPref(loaded, agreed ? channel : "NONE", agreed);
+      toast.success(agreed ? "Consent recorded." : "Consent withdrawn. Messages to this claimant will not be sent.");
+      onClose();
+    } catch (e) {
+      setError(message(e, "The consent could not be saved."));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <Dialog
+      open onClose={onClose} title="Claimant consent" description="A claimant is contacted only if they have agreed, and only by the channel they chose. The Fund holds the claimant's reference here, not their phone number or address."
+      footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" loading={busy} disabled={!loaded || Boolean(channelError)} onClick={save}>Save consent</Button></>}
+    >
+      <div className="space-y-4">
+        <Field label="Claimant reference" required>
+          <div className="flex gap-2">
+            <Input className="font-mono" value={ref} onChange={(e) => { setRef(e.target.value); setLoaded(null); }} onKeyDown={(e) => { if (e.key === "Enter") void lookup(ref); }} />
+            <Button icon={Search} loading={busy && !loaded} disabled={!ref.trim()} onClick={() => lookup(ref)}>Look up</Button>
+          </div>
+        </Field>
+        {loaded && (
+          <>
+            <Checkbox label="The claimant has agreed to be contacted" hint="Untick to withdraw consent. Messages are then recorded but not sent." checked={agreed} onChange={(e) => setAgreed(e.target.checked)} />
+            <Field label="Channel" error={channelError}>
+              <Select value={agreed ? channel : "NONE"} disabled={!agreed} onChange={(e) => setChannel(e.target.value)}>
+                <option value="NONE">None</option><option value="SMS">SMS</option><option value="EMAIL">Email</option>
+              </Select>
+            </Field>
+          </>
+        )}
+        {error && <p className="rounded-md border border-bad-line bg-bad-bg px-3 py-2 text-[13px] text-bad-fg" role="alert">{error}</p>}
+      </div>
+    </Dialog>
   );
 }

@@ -76,11 +76,15 @@ def precision_by_signal(db: Session) -> list[dict]:
             if lab:
                 agg[code]["labeled"] += 1
                 agg[code]["adverse"] += int(lab == "ADVERSE")
+    # the mode in force is the administrator's override where one is in effect, else the default;
+    # without this a change already applied would be suggested again
+    from . import reference_data                       # lazy import: avoid a service-layer cycle
+    in_force = {code: mode.name for code, mode in reference_data.build_mode_overrides(db).items()}
     out = []
     for code, s in sorted(agg.items()):
         meta = R.get(code)
         w = wilson(s["adverse"], s["labeled"])
-        current = MODE.get(code).name if code in MODE else "SCORED"
+        current = in_force.get(code) or (MODE.get(code).name if code in MODE else "SCORED")
         out.append({
             "signal": code,
             "category": meta.category.name if meta else None,
@@ -135,7 +139,7 @@ def draw_recall_qa(db: Session, user: dict, n: int = 30) -> dict:
         if cid in existing:
             continue
         cases_service.open_case(db, user, lane="REVIEW",
-                                reason="Blind QA — recall sample (§11)",
+                                reason="Blind QA: a claim that was cleared automatically, reviewed to measure what the engine misses",
                                 claim_id=cid, priority=4)
         drawn += 1
     return {"drawn": drawn, "sampled": len(sample), "skipped": len(sample) - drawn}

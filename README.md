@@ -30,7 +30,7 @@ React SPA (ui/)  ──/api──►  FastAPI JSON API (server/)  ──►  eng
   scoring, disposition, payments, pipeline).
 - **`server/`** — FastAPI. `routers → services → models`. One shared reference resolver; the app
   reads the immutable corpus and writes operational tables.
-- **`ui/`** — React 19 + React Router 7 + Tailwind (Vite).
+- **`ui/`** — React 19 + React Router 7 + Tailwind (Vite). Every page is built from the component set in `ui/src/ds/` (buttons, fields, a data table with sorting and paging, dialogs, toasts, plain-language labels) inside one shell (`ui/src/components/Layout.tsx`). Pages are in `ui/src/pages/`, with the administration screens under `pages/admin/` and the claim record's Workflow and medical reports under `pages/claim/`. Each page is a separate chunk loaded on demand. Check a change with `npm run build`, which type-checks more strictly than `tsc --noEmit`.
 - **DB** — SQLite by default (hermetic tests + local run); PostgreSQL 16 in production (set
   `RIE_DATABASE_URL`). Canonical DDL in [`db/schema.sql`](db/schema.sql).
 
@@ -85,7 +85,7 @@ version (closed the day before); the engine prices every line at the version in 
 never reprices history. A key without versions keeps its undated row from the loader, in force on
 every date; its first dated change materialises that row as the `baseline` version.
 
-Maintain them under **Admin → Dated rates** or over `/api/rates` (ADMIN): add / supersede,
+Maintain them under **Administration → Dated rates** or over `/api/rates` (ADMIN): add / supersede,
 percentage increase (one key or every key in a filter), correct, retire, CSV import and export.
 Maintenance is forward-only and every change writes `ref_rate_log` and the admin audit log.
 Existing databases need `alembic upgrade head` (migration `d4b7e2a91c35`).
@@ -108,7 +108,7 @@ through `RefBook.code_rules` ([`engine/coding.py`](engine/coding.py)):
 `python3 db/load_reference.py` seeds the once-only codes from the tariff descriptions and the standard
 time modifiers the tariff carries. It also loads CIE's list of codes that must not be priced at a flat
 rate (percentage modifiers, cost-of-material codes) into `ref_non_bench`, so those lines go to review.
-Code 3575 is excluded from the once-only seed because its wording was misread from a neighbouring code. Maintain them under **Admin → Coding rules** or over
+Code 3575 is excluded from the once-only seed because its wording was misread from a neighbouring code. Maintain them under **Administration → Coding rules** or over
 `/api/admin/code-rules` (ADMIN); a rule set by hand survives a reload. **Before go-live, confirm with
 RAF that time-modifier quantities are billed in minutes, and review the seeded once-only list: the
 descriptions are OCR text.**
@@ -127,7 +127,7 @@ reprice a line. An encounter is one provider treating the claimant on one day. T
 
 The thresholds were calibrated on COIDA claims, so the four advisory signals (`LAUNCH_ADVISORY`)
 are shown to reviewers but carry no points and never hold a payment. Promote one to scored under
-**Admin → Signal modes** once Governance shows its precision on RAF claims.
+**Administration → Signal modes** once Governance shows its precision on RAF claims.
 
 The day and week screens skip a claim submitted with `"facility": true` (a hospital account). The
 server supplies the cross-claim counts (`pipeline_service.billing_activity`). **Coding → Price drift**
@@ -204,7 +204,7 @@ Ported from CIE's provider-intake standard. The full interface is specified in
 [`docs/provider-interface.md`](docs/provider-interface.md).
 
 - **A signing key per party.** A provider's system, or a switch, signs every request with its own
-  ES256 private key. The Fund holds only the public key, registered under **Admin → Channel keys**
+  ES256 private key. The Fund holds only the public key, registered under **Administration → Channel access**
   (`/api/admin/rails-parties`), so a signature identifies its signer
   ([`server/rails_auth.py`](server/rails_auth.py)). Suspending a party or rotating its key takes
   effect at once.
@@ -246,7 +246,7 @@ intake the register sets three fund-side facts that a submitter must not assert 
 A practice the register does not know leaves the claim as submitted. Set
 `RIE_PROVIDER_REGISTER_ENFORCED=1` to refuse unknown practices too, but only once the register is
 loaded, or every claim is held. The facts are fixed at submission: a rescore does not re-read the
-register. Maintain it under **Admin → Practice register** or over `/api/admin/practices` (add,
+register. Maintain it on the **Practices** page or over `/api/admin/practices` (add,
 update, status with a reason, CSV import); any operator can read `/api/practices`. `RegisterFeed`
 is the seam for a live feed and is inert today. Existing databases need `alembic upgrade head`
 (migration `c9a4e7f1b632`).
@@ -258,8 +258,8 @@ is the seam for a live feed and is inert today. Existing databases need `alembic
 | GET | `/healthz` | liveness + DB check |
 | POST | `/api/auth/login` · `/logout` · GET `/me` | session cookie |
 | POST | `/api/claims` | submit → score → persist (roles HANDLER/MEDICAL_OFFICER) |
-| GET | `/api/claims?band=&disposition=` | determinations list |
-| GET | `/api/claims/{id}` | claim + latest determination |
+| GET | `/api/claims?band=&disposition=&claim_type=&eligible=&provider_id=&lodged_from=&lodged_to=&q=&sort=&direction=` | claims worklist: latest determination per claim with billed total and practices; returns `{rows, total}` |
+| GET | `/api/claims/{id}` | claim + latest determination, adjudicated lines, determination history, payment and practice identities |
 | GET | `/api/accidents` · `/{id}` | accident graph with live convergence |
 | GET | `/api/reasons` | reason catalogue (code, maturity, basis, mode) |
 | GET | `/api/dashboard` | band/disposition mix, exposure, eligibility |
@@ -267,10 +267,26 @@ is the seam for a live feed and is inert today. Existing databases need `alembic
 | POST | `/api/rates` · `/increase` · `/bulk-increase` · `/import` · `/{id}/adjust` · `/{id}/retire` | dated rate maintenance (ADMIN) |
 | GET · POST · DELETE | `/api/admin/code-rules` · `/api/admin/code-rules/{code}` | coding rules per tariff code (ADMIN) |
 | GET | `/api/coding/drift?min_months=&min_lines=` | providers whose billing ratio is rising |
+| GET | `/api/payments/queue` | claims cleared for payment and not yet paid, with how each would be paid and why one cannot be added (`blocked`) |
+| GET | `/api/payments/runs?status=&q=&direction=` | payment-run worklist: `{rows, total, counts}` |
+| GET · POST | `/api/payments/batches` · `/{id}` | list / create / read a payment run (HANDLER, ADMIN create) |
+| POST · DELETE | `/api/payments/batches/{id}/instructions` · `/{instruction_id}` | add a claim to an open run / remove it (logged) |
+| PATCH | `/api/payments/batches/{id}` | change the note on an open run (logged) |
+| POST | `/api/payments/batches/{id}/approve` · `/pay` · `/cancel` | approve (ADMIN, not the assembler), release (ADMIN, a third person), cancel |
 | GET | `/api/remittances?provider_id=` · `/{ref}` · `/{ref}/xml` · `/{ref}/print` | remittance advice: list, detail, XML, print page |
+| GET | `/api/remittances/search?q=&provider_id=&status=&batch_id=&date_from=&date_to=` | remittance worklist for the operator screens: `{rows, total}` |
 | POST | `/api/remittances/issue/{batch_id}` | issue advice for a paid batch that has none (ADMIN) |
-| GET | `/api/practices?q=&status=` · `/summary` · `/{provider_id}` | the practice register: list, counts, one practice's identity |
+| GET | `/api/practices?q=&status=&discipline=&setting=&practice_type=&verified=&sort=&direction=` · `/summary` · `/disciplines` · `/{provider_id}` | the practice register: list, counts, disciplines in use, one practice's identity |
+| GET | `/api/practices/unregistered?q=` | practice numbers billing the Fund without a register entry, with claims and billed total |
+| GET | `/api/practices/{provider_id}/activity` | one practice's billing and payment totals, channel access, change history and billing risk |
 | POST | `/api/admin/practices` · `/import` · `/{provider_id}/status` | maintain the practice register (ADMIN) |
+| GET | `/api/dashboard/work` | what is waiting in each queue for the signed-in user |
+| GET | `/api/cases/search` · `/api/disputes/search` · `/api/notifications/search` | worklists with filters, sorting and paging: `{rows, total, counts}` |
+| PATCH | `/api/cases/{id}` · `/api/disputes/{id}` | correct an open case (priority, reason, amount) or an open dispute's grounds; logged |
+| GET | `/api/cases/{id}/history` · `/api/disputes/{id}/history` | every transition and edit on one item, newest first |
+| GET | `/api/claims/{id}/workflow/history` | every workflow step on a claim across its machines (lifecycle, merits, serious injury, undertakings, invoices, litigation) |
+| GET | `/api/admin/audit/search?area=&actor=&q=&date_from=&date_to=` · `/api/admin/audit/facets` | the audit log, filtered and paged (`{rows, total}`), and its filter values (ADMIN) |
+| POST | `/api/admin/users` · `/{username}/role` · `/active` · `/password` | users: add, change role, activate or deactivate, reset password (ADMIN). The last active administrator cannot be demoted or deactivated |
 | GET | `/api/medical-reports?claim_id=&provider_id=` · `/forms` · `/documentation/{claim_id}` · `/{ref}` · `/{ref}/xml` · `/{ref}/print` | medical reports on file: list, catalogue, per-claim status, detail, XML, print page |
 
 A determination record: `{claim_id, accident_id, accident_action, convergence, validated,

@@ -1,684 +1,173 @@
-// Disputes — the objection register, the CIE s91 pattern generalised across the
-// three RAF challenge paths (SPECIFICATION §168, §215; the s91 W.G.29 / 180-day
-// objection re-expressed).
-//
-// A claimant, provider or attorney lodges an objection on a subject — MERITS,
-// QUANTUM, TARIFF, REPUDIATION or SERIOUS_INJURY. The Fund takes it under
-// reconsideration and either upholds, rejects or resolves it internally, OR
-// refers it out: a SERIOUS_INJURY objection goes to the HPCSA Appeal Tribunal
-// (RAF 4, ≥30% WPI / narrative test — §67); anything else opens a litigation
-// record. Every stage carries a statutory deadline; the backend owns the
-// transition guards and this page surfaces its 403/409 verbatim.
+// Disputes. Every objection to a decision of the Fund: who raised it, about what, where it
+// stands and by when it must be dealt with. Each dispute opens as its own record.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
-import { api, ApiError } from "../api";
-import {
-  Card,
-  Stat,
-  Loading,
-  ErrorBox,
-  Empty,
-  Pagination,
-  SearchInput,
-  Toast,
-  StateChip,
-  matchQ,
-  usePaged,
-} from "../components/ui";
-import { num } from "../format";
-import type {
-  DisputeItem,
-  DisputeAnalytics,
-  DisputeSubject,
-  DisputeRaiser,
-} from "../types";
+import { Plus, X } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { ApiError, api } from "../api";
+import { DataTable, Pager, type Column, type Sort } from "../ds/DataTable";
+import { DISPUTE_CHANNELS, DISPUTE_RAISERS, DISPUTE_STATUS, DISPUTE_SUBJECTS, dueText, shortDate, workError } from "../ds/labels";
+import { Dialog, useToast } from "../ds/overlays";
+import { Badge, Button, EmptyState, ErrorBlock, Field, Input, PageHeader, Ref, Select, Stat, Textarea, cx } from "../ds/primitives";
+import type { DisputeItem, DisputeSearch } from "../types";
+import { ViewPills, useListParams } from "./work/shared";
 
-const th = "px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500";
-const inputCls =
-  "rounded-md border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-slate-500 focus:ring-1 focus:ring-slate-500";
-const primaryBtn =
-  "rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed";
-const smallBtn =
-  "rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-40";
-
-const SUBJECTS: DisputeSubject[] = [
-  "MERITS",
-  "QUANTUM",
-  "TARIFF",
-  "REPUDIATION",
-  "SERIOUS_INJURY",
-];
-const RAISERS: DisputeRaiser[] = ["CLAIMANT", "PROVIDER", "ATTORNEY"];
-const STATUSES = [
-  "LODGED",
-  "UNDER_RECONSIDERATION",
-  "UPHELD",
-  "REJECTED",
-  "REFERRED",
-  "RESOLVED",
-  "WITHDRAWN",
-];
-const REFER_CHANNELS = ["INTERNAL", "HPCSA_TRIBUNAL", "LITIGATION"];
-
-// What each subject means for the raiser, and where a referral of it lands.
-const SUBJECT_HINT: Record<DisputeSubject, string> = {
-  MERITS: "liability / apportionment (§4c) — refers to litigation",
-  QUANTUM: "the assessed award (§5) — refers to litigation",
-  TARIFF: "a repriced line (RPL / SEP) — refers to litigation",
-  REPUDIATION: "an s19 / no-nexus rejection — refers to litigation",
-  SERIOUS_INJURY: "the RAF 4 gate (§67) — refers to the HPCSA tribunal",
+const VIEW_PARAMS: Record<string, Record<string, string | boolean>> = {
+  "": { open_only: true }, new: { status: "LODGED" }, overdue: { overdue: true }, referred: { status: "REFERRED" }, all: {},
 };
-
-// Where the outcome text on a closed dispute comes from, per action.
-const ACTION_HINT: Record<string, string> = {
-  reconsider: "take under reconsideration (no note)",
-  withdraw: "raiser drops the objection (no note)",
-  refer: "hand out — HPCSA tribunal or a litigation record",
-  uphold: "objection succeeds — record the outcome",
-  reject: "objection fails — record the outcome",
-  resolve: "settled internally — record the outcome",
-};
-
-type ToastState = { kind: "success" | "error"; message: string } | null;
-type FormFor = { id: number; action: string } | null;
+const OPEN_STATES = ["LODGED", "UNDER_RECONSIDERATION", "REJECTED", "REFERRED"];
+const message = (e: unknown, fallback: string) => (e instanceof ApiError ? workError(e.message) : fallback);
 
 export default function DisputesPage() {
+  const navigate = useNavigate();
+  const toast = useToast();
+  const { value, page, pageSize, set, reset, query } = useListParams();
+  const [data, setData] = useState<DisputeSearch | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [lodging, setLodging] = useState(false);
+  const [form, setForm] = useState({ claim_id: "", subject: "TARIFF", raised_by: "PROVIDER", grounds: "" });
+  const [attempted, setAttempted] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
-  const [analytics, setAnalytics] = useState<DisputeAnalytics | null>(null);
-  const [items, setItems] = useState<DisputeItem[] | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-
-  const [subject, setSubject] = useState<string>("");
-  const [status, setStatus] = useState<string>("");
-
-  const [lodgeClaimId, setLodgeClaimId] = useState<string>("");
-  const [lodgeSubject, setLodgeSubject] = useState<DisputeSubject>("MERITS");
-  const [lodgeRaisedBy, setLodgeRaisedBy] = useState<DisputeRaiser>("CLAIMANT");
-  const [lodgeGrounds, setLodgeGrounds] = useState<string>("");
-
-  const [formFor, setFormFor] = useState<FormFor>(null);
-  const [outcomeText, setOutcomeText] = useState<string>("");
-  const [referChannel, setReferChannel] = useState<string>("");
-
-  const [busyKey, setBusyKey] = useState<string | null>(null);
-  const [toast, setToast] = useState<ToastState>(null);
+  const view = value("view") in VIEW_PARAMS ? value("view") : "";
+  const sort: Sort = { key: value("sort") || "opened", direction: value("dir") === "asc" ? "asc" : "desc" };
+  const filterKeys = ["q", "subject", "raised_by", "status"];
+  const filtered = filterKeys.some((k) => value(k));
 
   const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
     try {
-      setLoadError(null);
-      const [a, list] = await Promise.all([
-        api.disputeAnalytics(),
-        api.disputes({
-          subject: subject || undefined,
-          status: status || undefined,
-        }),
-      ]);
-      setAnalytics(a);
-      setItems(list);
+      setData(await api.disputeSearch({
+        ...VIEW_PARAMS[view], ...(value("status") ? { status: value("status"), open_only: undefined } : {}),
+        q: value("q"), subject: value("subject"), raised_by: value("raised_by"),
+        sort: sort.key, direction: sort.direction, limit: pageSize, offset: (page - 1) * pageSize,
+      }));
     } catch (e) {
-      setLoadError(e instanceof ApiError ? e.message : "Failed to load disputes.");
+      setError(message(e, "The disputes could not be loaded."));
+    } finally {
+      setLoading(false);
     }
-  }, [subject, status]);
+    // `query` is the whole view, filter, sort and page state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query]);
+  useEffect(() => { void load(); }, [load]);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const c = data?.counts;
+  const closedCount = c ? (c.UPHELD ?? 0) + (c.RESOLVED ?? 0) + (c.WITHDRAWN ?? 0) : undefined;
+  const views = [
+    { key: "", label: "Open", count: c?.OPEN },
+    { key: "new", label: "New", count: c?.LODGED },
+    { key: "overdue", label: "Past deadline", count: c?.OVERDUE, alert: true },
+    { key: "referred", label: "Referred", count: c?.REFERRED },
+    { key: "all", label: "All", count: c && closedCount != null ? c.OPEN + closedCount : undefined },
+  ];
 
-  const run = useCallback(
-    async (key: string, fn: () => Promise<unknown>, okMsg: string) => {
-      setBusyKey(key);
-      try {
-        await fn();
-        await load();
-        setToast({ kind: "success", message: okMsg });
-      } catch (e) {
-        setToast({
-          kind: "error",
-          message: e instanceof ApiError ? e.message : "Request failed.",
-        });
-      } finally {
-        setBusyKey(null);
+  const errors = { claim: !form.claim_id.trim() ? "Enter the claim reference." : null, grounds: !form.grounds.trim() ? "Record the grounds of the objection." : null };
+  async function lodge() {
+    setAttempted(true);
+    if (errors.claim || errors.grounds) return;
+    setBusy(true);
+    setFormError(null);
+    try {
+      if (!(await api.getClaim(form.claim_id.trim()).then(() => true, () => false))) {
+        setFormError("There is no claim with that reference.");
+        return;
       }
-    },
-    [load],
-  );
-
-  const openForm = (id: number, action: string) => {
-    setFormFor({ id, action });
-    setOutcomeText("");
-    setReferChannel("");
-  };
-
-  const closeForm = () => setFormFor(null);
-
-  const doAction = (item: DisputeItem, action: string) => {
-    if (action === "reconsider" || action === "withdraw") {
-      void run(
-        `${action}-${item.id}`,
-        () => api.disputeAction(item.id, action),
-        `Dispute #${item.id} ${action}.`,
-      );
-      return;
+      const made = await api.lodgeDispute({ claim_id: form.claim_id.trim(), subject: form.subject, raised_by: form.raised_by, grounds: form.grounds.trim() });
+      toast.success(`Dispute ${made.id} lodged.`);
+      navigate(`/disputes/${made.id}`);
+    } catch (e) {
+      setFormError(message(e, "The dispute could not be lodged."));
+    } finally {
+      setBusy(false);
     }
-    openForm(item.id, action);
-  };
-
-  const submitRefer = (item: DisputeItem) => {
-    void run(
-      `refer-${item.id}`,
-      () =>
-        api.disputeAction(item.id, "refer", {
-          channel: referChannel || undefined,
-        }),
-      `Dispute #${item.id} referred.`,
-    ).then(closeForm);
-  };
-
-  const submitOutcome = (item: DisputeItem, action: string) => {
-    void run(
-      `${action}-${item.id}`,
-      () => api.disputeAction(item.id, action, { outcome: outcomeText }),
-      `Dispute #${item.id} ${action}.`,
-    ).then(closeForm);
-  };
-
-  const submitLodge = () => {
-    void run(
-      "lodge",
-      () =>
-        api.lodgeDispute({
-          claim_id: lodgeClaimId,
-          subject: lodgeSubject,
-          raised_by: lodgeRaisedBy,
-          grounds: lodgeGrounds || undefined,
-        }),
-      "Dispute lodged.",
-    ).then(() => {
-      setLodgeClaimId("");
-      setLodgeGrounds("");
-    });
-  };
-
-  const busy = busyKey !== null;
-  const [search, setSearch] = useState("");
-  const filtered = useMemo(
-    () =>
-      (items ?? []).filter((it) =>
-        matchQ(search, it.claim_id, it.subject, it.raised_by, it.status,
-               it.channel, it.outcome, `#${it.id}`),
-      ),
-    [items, search],
-  );
-  const { page, setPage, pageCount, total, slice } = usePaged(filtered, 20);
-
-  // Presentational-only read-outs derived from what's already loaded.
-  const closed = analytics ? analytics.n - analytics.open : 0;
-  const overdueCount = (items ?? []).filter((it) => it.overdue).length;
-  const filtersActive = Boolean(subject || status);
-
-  if (items === null || analytics === null) {
-    if (loadError) return <ErrorBox message={loadError} />;
-    return <Loading />;
   }
 
+  const columns: Column<DisputeItem>[] = [
+    { key: "opened", header: "Dispute", sortable: true, render: (r) => <div><div className="font-medium text-ink-900">Dispute {r.id}</div><div className="text-xs text-ink-500">Lodged {shortDate(r.opened_at)}</div></div> },
+    { key: "claim", header: "Claim", render: (r) => <Ref className="text-ink-700">{r.claim_id}</Ref> },
+    { key: "subject", header: "About", render: (r) => <div><div className="text-ink-800">{DISPUTE_SUBJECTS[r.subject] ?? r.subject}</div><div className="text-xs text-ink-500">Raised by the {(DISPUTE_RAISERS[r.raised_by] ?? r.raised_by).toLowerCase()}</div></div> },
+    { key: "status", header: "Status", render: (r) => (
+      <div>
+        <Badge tone={DISPUTE_STATUS[r.status]?.tone ?? "neutral"} dot>{DISPUTE_STATUS[r.status]?.label ?? r.status}</Badge>
+        {r.channel && r.channel !== "INTERNAL" && <div className="mt-1 text-xs text-ink-500">{DISPUTE_CHANNELS[r.channel] ?? r.channel}</div>}
+      </div>
+    ) },
+    { key: "deadline", header: "Deadline", sortable: true, render: (r) => !OPEN_STATES.includes(r.status) ? <span className="text-ink-400">—</span> : (
+      <div><div className={cx(r.overdue ? "font-medium text-bad-fg" : "text-ink-700")}>{dueText(r.days_to_deadline, r.overdue)}</div><div className="text-xs text-ink-500">{shortDate(r.deadline)}</div></div>
+    ) },
+    { key: "outcome", header: "Outcome", render: (r) => <span className="block max-w-[34ch] truncate text-[13px] text-ink-600" title={r.outcome ?? ""}>{r.outcome || "—"}</span> },
+  ];
+
   return (
-    <div className="space-y-4">
-      <header>
-        <h1 className="text-xl font-semibold text-slate-900">Disputes</h1>
-        <p className="mt-0.5 max-w-3xl text-sm text-slate-500">
-          The objection register — the CIE s91 objection (W.G.29, 180-day window)
-          generalised across the three RAF challenge paths (§168, §215). A
-          claimant, provider or attorney objects on a subject (MERITS, QUANTUM,
-          TARIFF, REPUDIATION, SERIOUS_INJURY); the Fund reconsiders and upholds,
-          rejects or resolves it — or refers it out: SERIOUS_INJURY to the HPCSA
-          Appeal Tribunal (RAF 4, §67), everything else to a litigation record.
-          Each stage carries a statutory deadline; the backend owns the transition
-          guards.
-        </p>
-      </header>
-
-      {loadError && <ErrorBox message={loadError} />}
-
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <Stat
-          label="Total"
-          value={num(analytics.n)}
-          sub="every objection ever lodged"
-        />
-        <Stat
-          label="Open"
-          value={num(analytics.open)}
-          accent={analytics.open > 0 ? "text-amber-600" : "text-slate-900"}
-          sub={`${num(closed)} closed · in-flight, awaiting a decision`}
-        />
-        <Stat
-          label="Overdue"
-          value={num(overdueCount)}
-          accent={overdueCount > 0 ? "text-rose-600" : "text-slate-900"}
-          sub="past this stage's deadline (loaded set)"
-        />
-        <Stat
-          label="Subjects seen"
-          value={num(Object.keys(analytics.by_subject).length)}
-          sub={`of ${SUBJECTS.length} objection subjects`}
-        />
+    <div>
+      <PageHeader
+        crumbs={[{ label: "Work" }, { label: "Disputes" }]}
+        title="Disputes"
+        subtitle="Objections to a decision of the Fund. Each is reconsidered internally first; legal may refer one to the HPCSA tribunal or to court."
+        actions={<Button variant="primary" icon={Plus} onClick={() => { setForm({ claim_id: "", subject: "TARIFF", raised_by: "PROVIDER", grounds: "" }); setAttempted(false); setFormError(null); setLodging(true); }}>Lodge a dispute</Button>}
+      />
+      <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Stat label="Open" value={c ? c.OPEN : "…"} />
+        <Stat label="New, not yet started" value={c ? c.LODGED : "…"} tone={c?.LODGED ? "warn" : undefined} />
+        <Stat label="Past their deadline" value={c ? c.OVERDUE : "…"} tone={c?.OVERDUE ? "bad" : undefined} />
+        <Stat label="Upheld" value={c ? c.UPHELD : "…"} hint={closedCount != null ? `of ${closedCount} closed` : undefined} />
       </div>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <Card
-          title="By subject"
-          sub="What claimants and providers push back on. MERITS/QUANTUM/TARIFF/REPUDIATION objections refer to litigation; SERIOUS_INJURY refers to the HPCSA tribunal. A concentration in one subject points at where determinations are being contested."
-        >
-          <div className="flex flex-wrap gap-2">
-            {Object.keys(analytics.by_subject).length === 0 ? (
-              <span className="text-sm text-slate-400">—</span>
-            ) : (
-              Object.entries(analytics.by_subject)
-                .sort((a, b) => b[1] - a[1])
-                .map(([k, v]) => (
-                  <span
-                    key={k}
-                    className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700"
-                  >
-                    {k}
-                    <span className="tnum rounded-full bg-white px-1.5 text-slate-500">
-                      {num(v)}
-                    </span>
-                  </span>
-                ))
-            )}
-          </div>
-        </Card>
-        <Card
-          title="By channel"
-          sub="Where objections resolve. INTERNAL is the Fund's own reconsideration; HPCSA_TRIBUNAL and LITIGATION are external referrals (LEGAL-only). Objections with no channel yet are still internal — not referred."
-        >
-          <div className="flex flex-wrap gap-2">
-            {Object.keys(analytics.by_channel).length === 0 ? (
-              <span className="text-sm text-slate-400">—</span>
-            ) : (
-              Object.entries(analytics.by_channel)
-                .sort((a, b) => b[1] - a[1])
-                .map(([k, v]) => (
-                  <span
-                    key={k}
-                    className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700"
-                  >
-                    {k}
-                    <span className="tnum rounded-full bg-white px-1.5 text-slate-500">
-                      {num(v)}
-                    </span>
-                  </span>
-                ))
-            )}
-          </div>
-        </Card>
+      <ViewPills views={views} value={view} label="Views" onChange={(k) => reset(k ? { view: k } : {})} />
+      <div className="mb-3 grid gap-2 rounded-lg border border-line bg-white p-3 shadow-panel sm:grid-cols-2 lg:grid-cols-5">
+        <Input className="lg:col-span-2" placeholder="Dispute number, claim or grounds" aria-label="Search disputes" value={value("q")} onChange={(e) => set({ q: e.target.value })} />
+        <Select aria-label="About" value={value("subject")} onChange={(e) => set({ subject: e.target.value })}>
+          <option value="">About anything</option>
+          {Object.entries(DISPUTE_SUBJECTS).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+        </Select>
+        <Select aria-label="Raised by" value={value("raised_by")} onChange={(e) => set({ raised_by: e.target.value })}>
+          <option value="">Raised by anyone</option>
+          {Object.entries(DISPUTE_RAISERS).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+        </Select>
+        <Select aria-label="Status" value={value("status")} onChange={(e) => set({ status: e.target.value })}>
+          <option value="">Any status in this view</option>
+          {Object.entries(DISPUTE_STATUS).map(([k, s]) => <option key={k} value={k}>{s.label}</option>)}
+        </Select>
+        {filtered && <div className="flex items-center lg:col-span-5"><Button size="sm" variant="ghost" icon={X} onClick={() => set(Object.fromEntries(filterKeys.map((k) => [k, null])))}>Clear filters</Button></div>}
       </div>
-
-      <Card
-        title="Filters"
-        sub={
-          filtersActive
-            ? "Subject and status filter the register server-side; search narrows the loaded page. Filtering by a subject or status."
-            : "Subject and status filter the register server-side; the search box narrows the loaded page by claim, channel, outcome or #id."
-        }
-        right={
-          <SearchInput
-            value={search}
-            onChange={setSearch}
-            placeholder="Claim, subject, channel, #id…"
-            className="w-64"
-          />
-        }
-      >
-        <div className="flex flex-wrap items-end gap-3">
-          <label className="flex flex-col gap-1 text-xs font-medium text-slate-500">
-            Subject
-            <select
-              className={inputCls}
-              value={subject}
-              onChange={(e) => setSubject(e.target.value)}
-            >
-              <option value="">All subjects</option>
-              {SUBJECTS.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="flex flex-col gap-1 text-xs font-medium text-slate-500">
-            Status
-            <select
-              className={inputCls}
-              value={status}
-              onChange={(e) => setStatus(e.target.value)}
-            >
-              <option value="">All statuses</option>
-              {STATUSES.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-      </Card>
-
-      <Card
-        title="Lodge dispute"
-        sub="Open an objection against a claim. Any raiser — CLAIMANT, PROVIDER or ATTORNEY — may lodge; the subject fixes which path a referral later takes (SERIOUS_INJURY → HPCSA tribunal, all others → litigation). Referral itself is a LEGAL-only step taken from the register below, never here."
-      >
-        <div className="flex flex-wrap items-end gap-3">
-          <label className="flex flex-col gap-1 text-xs font-medium text-slate-500">
-            Claim ID
-            <input
-              className={inputCls}
-              value={lodgeClaimId}
-              onChange={(e) => setLodgeClaimId(e.target.value)}
-              placeholder="CLM-…"
-            />
-          </label>
-          <label className="flex flex-col gap-1 text-xs font-medium text-slate-500">
-            Subject
-            <select
-              className={inputCls}
-              value={lodgeSubject}
-              onChange={(e) => setLodgeSubject(e.target.value as DisputeSubject)}
-            >
-              {SUBJECTS.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="flex flex-col gap-1 text-xs font-medium text-slate-500">
-            Raised by
-            <select
-              className={inputCls}
-              value={lodgeRaisedBy}
-              onChange={(e) => setLodgeRaisedBy(e.target.value as DisputeRaiser)}
-            >
-              {RAISERS.map((r) => (
-                <option key={r} value={r}>
-                  {r}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="flex flex-1 flex-col gap-1 text-xs font-medium text-slate-500">
-            Grounds
-            <input
-              className={inputCls}
-              value={lodgeGrounds}
-              onChange={(e) => setLodgeGrounds(e.target.value)}
-              placeholder="optional — the basis for the objection"
-            />
-          </label>
-          <button
-            type="button"
-            className={primaryBtn}
-            disabled={busy || !lodgeClaimId.trim()}
-            onClick={submitLodge}
-          >
-            {busyKey === "lodge" ? "Lodging…" : "Lodge"}
-          </button>
-        </div>
-        <p className="mt-2 text-xs text-slate-400">
-          Selected: a{" "}
-          <span className="font-medium text-slate-500">{lodgeSubject}</span>{" "}
-          objection — {SUBJECT_HINT[lodgeSubject]}.
-        </p>
-      </Card>
-
-      <Card
-        title="Objection register"
-        sub="One row per objection: its subject and who raised it, the current state and (once referred) its channel, the deadline for the stage it is in, the linked litigation / tribunal ref, and any recorded outcome. A rose deadline is overdue; a plain count is days remaining. Actions are the exact transitions the backend allows from this state — it stays authoritative and rejects the rest (403/409)."
-        right={
-          <span className="tnum text-xs text-slate-400">
-            {num(filtered.length)} shown
-            {overdueCount > 0 && (
-              <span className="ml-1.5 rounded-full bg-rose-100 px-1.5 py-0.5 font-medium text-rose-700">
-                {num(overdueCount)} overdue
-              </span>
-            )}
-          </span>
-        }
-      >
-        {filtered.length === 0 ? (
-          <Empty
-            label={
-              search || filtersActive
-                ? "No disputes match the current filters."
-                : "No disputes yet."
-            }
-          />
-        ) : (
-          <div className="overflow-hidden rounded-md border border-slate-100">
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-slate-100 text-sm">
-                <thead className="bg-slate-50">
-                  <tr>
-                    <th className={`${th} text-right`}>#</th>
-                    <th className={`${th} text-left`}>Claim</th>
-                    <th className={`${th} text-left`}>Subject</th>
-                    <th className={`${th} text-left`}>Raised by</th>
-                    <th className={`${th} text-left`}>Status</th>
-                    <th className={`${th} text-left`}>Channel</th>
-                    <th className={`${th} text-left`}>Deadline</th>
-                    <th className={`${th} text-left`}>Ref</th>
-                    <th className={`${th} text-left`}>Outcome</th>
-                    <th className={`${th} text-left`}>Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {slice.map((item) => (
-                    <tr key={item.id} className="align-top hover:bg-slate-50">
-                      <td className="tnum px-3 py-2 text-right text-slate-400">
-                        {item.id}
-                      </td>
-                      <td className="px-3 py-2">
-                        <Link
-                          to={`/claims/${encodeURIComponent(item.claim_id)}`}
-                          className="font-mono text-[13px] text-slate-900 hover:text-blue-600 hover:underline"
-                        >
-                          {item.claim_id}
-                        </Link>
-                      </td>
-                      <td className="px-3 py-2">
-                        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium text-slate-700">
-                          {item.subject}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2 text-slate-600">{item.raised_by}</td>
-                      <td className="px-3 py-2">
-                        <StateChip state={item.status} />
-                      </td>
-                      <td className="px-3 py-2">
-                        {item.channel ? (
-                          <span className="text-[11px] font-medium text-slate-600">
-                            {item.channel}
-                          </span>
-                        ) : (
-                          <span className="text-slate-400" title="not referred — still internal">
-                            —
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2">
-                        {item.overdue ? (
-                          <span
-                            className="inline-flex items-center rounded-full bg-rose-100 px-2 py-0.5 text-xs font-medium text-rose-700"
-                            title={item.deadline ?? undefined}
-                          >
-                            overdue
-                          </span>
-                        ) : item.days_to_deadline !== null ? (
-                          <span
-                            className="tnum text-xs text-slate-500"
-                            title={item.deadline ?? undefined}
-                          >
-                            {num(item.days_to_deadline)}d left
-                          </span>
-                        ) : (
-                          <span className="text-slate-400" title="no deadline at this state">
-                            —
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2">
-                        {item.linked_ref ? (
-                          <span className="font-mono text-[11px] text-slate-600">
-                            {item.linked_ref}
-                          </span>
-                        ) : (
-                          <span className="text-slate-400">—</span>
-                        )}
-                      </td>
-                      <td className="max-w-[14rem] px-3 py-2 text-slate-600">
-                        {item.outcome ?? (
-                          <span className="text-slate-400">—</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2">
-                        <div className="flex flex-col gap-2">
-                          {item.actions.length === 0 ? (
-                            <span className="text-[11px] text-slate-400">
-                              closed — no transitions
-                            </span>
-                          ) : (
-                            <div className="flex flex-wrap gap-1.5">
-                              {item.actions.map((action) => (
-                                <button
-                                  key={action}
-                                  type="button"
-                                  className={smallBtn}
-                                  disabled={busy}
-                                  title={ACTION_HINT[action] ?? action}
-                                  onClick={() => doAction(item, action)}
-                                >
-                                  {busyKey === `${action}-${item.id}`
-                                    ? "…"
-                                    : action}
-                                </button>
-                              ))}
-                            </div>
-                          )}
-                          {formFor && formFor.id === item.id && formFor.action === "refer" && (
-                            <div className="flex flex-col gap-1 rounded-md border border-slate-200 bg-slate-50/60 p-2">
-                              <span className="text-[10px] font-medium uppercase tracking-wide text-slate-400">
-                                refer channel
-                              </span>
-                              <div className="flex flex-wrap items-center gap-1.5">
-                                <select
-                                  className={inputCls}
-                                  value={referChannel}
-                                  onChange={(e) => setReferChannel(e.target.value)}
-                                >
-                                  <option value="">auto (by subject)</option>
-                                  {REFER_CHANNELS.map((c) => (
-                                    <option key={c} value={c}>
-                                      {c}
-                                    </option>
-                                  ))}
-                                </select>
-                                <button
-                                  type="button"
-                                  className={smallBtn}
-                                  disabled={busy}
-                                  onClick={() => submitRefer(item)}
-                                >
-                                  Confirm
-                                </button>
-                                <button
-                                  type="button"
-                                  className={smallBtn}
-                                  disabled={busy}
-                                  onClick={closeForm}
-                                >
-                                  Cancel
-                                </button>
-                              </div>
-                              <span className="text-[10px] text-slate-400">
-                                Leave on auto to route by subject: SERIOUS_INJURY →
-                                HPCSA tribunal, else litigation.
-                              </span>
-                            </div>
-                          )}
-                          {formFor &&
-                            formFor.id === item.id &&
-                            (formFor.action === "uphold" ||
-                              formFor.action === "reject" ||
-                              formFor.action === "resolve") && (
-                              <div className="flex flex-col gap-1 rounded-md border border-slate-200 bg-slate-50/60 p-2">
-                                <span className="text-[10px] font-medium uppercase tracking-wide text-slate-400">
-                                  {formFor.action} — outcome
-                                </span>
-                                <div className="flex flex-wrap items-center gap-1.5">
-                                  <input
-                                    className={inputCls}
-                                    value={outcomeText}
-                                    onChange={(e) => setOutcomeText(e.target.value)}
-                                    placeholder="outcome / reasons"
-                                  />
-                                  <button
-                                    type="button"
-                                    className={smallBtn}
-                                    disabled={busy}
-                                    onClick={() => submitOutcome(item, formFor.action)}
-                                  >
-                                    Confirm
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className={smallBtn}
-                                    disabled={busy}
-                                    onClick={closeForm}
-                                  >
-                                    Cancel
-                                  </button>
-                                </div>
-                              </div>
-                            )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <Pagination
-              page={page}
-              pageCount={pageCount}
-              total={total}
-              onPage={setPage}
-              unit="disputes"
-            />
-          </div>
-        )}
-
-        <div className="mt-3 rounded-md border border-slate-100 bg-slate-50/60 p-3 text-xs leading-relaxed text-slate-500">
-          <span className="font-semibold text-slate-600">Workflow.</span>{" "}
-          LODGED → <span className="font-medium">reconsider</span> takes it
-          UNDER_RECONSIDERATION, from where it may{" "}
-          <span className="font-medium">uphold</span> /{" "}
-          <span className="font-medium">reject</span> /{" "}
-          <span className="font-medium">resolve</span> internally, or{" "}
-          <span className="font-medium">refer</span> out; the raiser may{" "}
-          <span className="font-medium">withdraw</span> while it is still open.{" "}
-          <span className="font-medium">refer</span> is LEGAL-only —
-          SERIOUS_INJURY opens an HPCSA Appeal Tribunal referral (RAF 4, §67), any
-          other subject opens a litigation record; the linked ref then appears in
-          the Ref column. The backend enforces every guard and is authoritative:
-          a disallowed transition returns 403/409 and surfaces as a toast.
-        </div>
-      </Card>
-
-      {toast && (
-        <Toast tone={toast.kind} message={toast.message} onClose={() => setToast(null)} />
+      {error ? <ErrorBlock message={error} onRetry={load} /> : (
+        <DataTable
+          columns={columns} rows={data?.rows ?? []} rowKey={(r) => String(r.id)} loading={loading}
+          sort={sort} onSort={(s) => set({ sort: s.key === "opened" ? null : s.key, dir: s.direction === "asc" ? "asc" : null }, true)}
+          onRowClick={(r) => navigate(`/disputes/${r.id}`)}
+          empty={<EmptyState title={filtered ? "No dispute matches" : view === "" ? "No open disputes" : "Nothing in this view"} body={filtered ? "Change or clear the filters." : "A dispute is lodged here, or arrives from a practice over the provider channel."} />}
+          footer={<Pager page={page} pageSize={pageSize} total={data?.total ?? 0} unit="disputes" onPage={(p) => set({ page: p > 1 ? String(p) : null }, true)} onPageSize={(n) => set({ size: n === 25 ? null : String(n) })} />}
+        />
       )}
+
+      <Dialog
+        open={lodging} onClose={() => setLodging(false)} wide title="Lodge a dispute" description="The deadline is set 180 days from today."
+        footer={<><Button onClick={() => setLodging(false)}>Cancel</Button><Button variant="primary" loading={busy} onClick={lodge}>Lodge dispute</Button></>}
+      >
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Claim reference" required error={attempted ? errors.claim : null} className="sm:col-span-2">
+            <Input className="font-mono" value={form.claim_id} onChange={(e) => setForm({ ...form, claim_id: e.target.value })} />
+          </Field>
+          <Field label="What is disputed" required hint={form.subject === "SERIOUS_INJURY" ? "A referral of this kind goes to the HPCSA tribunal." : "A referral of this kind goes to court."}>
+            <Select value={form.subject} onChange={(e) => setForm({ ...form, subject: e.target.value })}>
+              {Object.entries(DISPUTE_SUBJECTS).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+            </Select>
+          </Field>
+          <Field label="Raised by" required>
+            <Select value={form.raised_by} onChange={(e) => setForm({ ...form, raised_by: e.target.value })}>
+              {Object.entries(DISPUTE_RAISERS).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+            </Select>
+          </Field>
+          <Field label="Grounds" required error={attempted ? errors.grounds : null} className="sm:col-span-2">
+            <Textarea rows={4} maxLength={2000} value={form.grounds} onChange={(e) => setForm({ ...form, grounds: e.target.value })} placeholder="What the objector says is wrong, and why" />
+          </Field>
+          {formError && <p className="rounded-md border border-bad-line bg-bad-bg px-3 py-2 text-[13px] text-bad-fg sm:col-span-2" role="alert">{formError}</p>}
+        </div>
+      </Dialog>
     </div>
   );
 }

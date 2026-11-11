@@ -68,26 +68,26 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-100 px-4">
+    <div className="flex min-h-screen items-center justify-center bg-paper px-4">
       <div className="w-full max-w-sm">
         <div className="mb-6 flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-900 text-sm font-bold text-white">
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-ink-900 text-sm font-bold text-white">
             RIE
           </div>
           <div>
-            <div className="text-lg font-semibold text-slate-900">
+            <div className="text-lg font-semibold text-ink-900">
               RAF Integrity Engine
             </div>
-            <div className="text-xs text-slate-500">Operator sign-in</div>
+            <div className="text-xs text-ink-500">Operator sign-in</div>
           </div>
         </div>
 
         <form
           onSubmit={onSubmit}
-          className="space-y-4 rounded-lg border border-slate-200 bg-white p-6 shadow-sm"
+          className="space-y-4 rounded-lg border border-ink-200 bg-white p-6 shadow-sm"
         >
           <div>
-            <label className="mb-1 block text-xs font-medium text-slate-600">
+            <label className="mb-1 block text-xs font-medium text-ink-600">
               Username
             </label>
             <input
@@ -95,12 +95,12 @@ export default function LoginPage() {
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               autoComplete="username"
-              className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-1 focus:ring-slate-500"
+              className="w-full rounded-md border border-ink-300 px-3 py-2 text-sm outline-none focus:border-ink-500 focus:ring-1 focus:ring-ink-500"
               placeholder="handler"
             />
           </div>
           <div>
-            <label className="mb-1 block text-xs font-medium text-slate-600">
+            <label className="mb-1 block text-xs font-medium text-ink-600">
               Password
             </label>
             <input
@@ -108,13 +108,13 @@ export default function LoginPage() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               autoComplete="current-password"
-              className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-1 focus:ring-slate-500"
+              className="w-full rounded-md border border-ink-300 px-3 py-2 text-sm outline-none focus:border-ink-500 focus:ring-1 focus:ring-ink-500"
               placeholder="••••••••"
             />
           </div>
 
           {error && (
-            <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+            <div className="rounded-md border border-bad-line bg-bad-bg px-3 py-2 text-sm text-bad-fg">
               {error}
             </div>
           )}
@@ -122,15 +122,15 @@ export default function LoginPage() {
           <button
             type="submit"
             disabled={busy || !username || !password}
-            className="w-full rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+            className="w-full rounded-md bg-ink-900 px-3 py-2 text-sm font-semibold text-white transition hover:bg-ink-800 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {busy ? "Signing in…" : "Sign in"}
           </button>
         </form>
 
         {devEnv && (
-        <div className="mt-4 rounded-lg border border-slate-200 bg-white p-3">
-          <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-slate-400">
+        <div className="mt-4 rounded-lg border border-ink-200 bg-white p-3">
+          <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-ink-400">
             Dev logins (username == password)
           </div>
           <div className="flex flex-wrap gap-1.5">
@@ -139,7 +139,7 @@ export default function LoginPage() {
                 key={u}
                 type="button"
                 onClick={() => quickFill(u)}
-                className="rounded border border-slate-200 bg-slate-50 px-2 py-1 font-mono text-xs text-slate-600 transition hover:bg-slate-100"
+                className="rounded border border-ink-200 bg-ink-50 px-2 py-1 font-mono text-xs text-ink-600 transition hover:bg-ink-100"
               >
                 {u}
               </button>

@@ -1,440 +1,293 @@
-// The full determination record for one claim — the engine's reasoning made
-// auditable (domain-logic §2, §5, §9, §11). Head figures + band/disposition,
-// the reasons that fired (each joined to its catalogue entry: basis, maturity,
-// category, mode, points, from /api/reasons), the SHADOW signals held below the
-// line, the gates/holds that block eligibility, and the stamped provenance. The
-// operational workflow (lifecycle, merits, the offer that computes the six heads
-// of damage, SI, undertaking, litigation) is the interactive panel below; the
-// immutable claim corpus — party, accident, and the billing lines each medical
-// head is priced from — closes the page.
+// The claim record. A handler opens it to answer three things: can this be paid, how much, and
+// what is in the way. The header and the summary row answer those; the tabs hold the evidence —
+// each adjudicated line, the documents, the payment trail, the workflow and the history.
 
-import { useEffect, useState, type ReactNode } from "react";
+import { AlertTriangle, CheckCircle2, Printer, RefreshCcw } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { ApiError, api } from "../api";
+import { useAuth } from "../auth";
+import MedicalReports from "./claim/MedicalReports";
+import ClaimWorkflow from "./claim/Workflow";
+import { DataTable, type Column } from "../ds/DataTable";
 import {
-  BandChip,
-  Card,
-  CodePill,
-  DispositionChip,
-  ErrorBox,
-  Loading,
-  MaturityChip,
-  ModeChip,
-  YesNo,
-} from "../components/ui";
-import MedicalReportsCard from "../components/MedicalReports";
-import WorkflowPanel from "../components/Workflow";
-import { num, pct, rand } from "../format";
-import type { ClaimDetail, Reason } from "../types";
+  CLAIM_TYPES, claimStatus, DISPOSITIONS, DOCUMENTS, HOLDS, PAYMENT_STATUS, reasonLabel, REQUIRED_DOCUMENTS, RISK, shortDate,
+} from "../ds/labels";
+import { ConfirmDialog, useToast } from "../ds/overlays";
+import { Badge, Button, EmptyState, ErrorBlock, Facts, LoadingBlock, PageHeader, Panel, Ref, Stat, Tabs } from "../ds/primitives";
+import { rand } from "../format";
+import type { AdjudicatedLine, ClaimDetail, DeterminationSummary, Reason } from "../types";
+
+type Tab = "overview" | "lines" | "documents" | "payments" | "workflow" | "history" | "technical";
+
+const LINE_COLUMNS: Column<AdjudicatedLine>[] = [
+  { key: "date", header: "Service date", render: (l) => <span className="whitespace-nowrap">{shortDate(l.service_date)}</span> },
+  { key: "provider", header: "Practice", render: (l) => <Ref>{l.provider_id || "—"}</Ref> },
+  { key: "code", header: "Code", render: (l) => <span><Ref className="font-medium">{l.code}</Ref> <span className="text-xs text-ink-500">{l.kind === "NAPPI" ? "medicine" : "tariff"}</span></span> },
+  { key: "billed", header: "Billed", align: "right", render: (l) => <span className="tnum">{rand(l.billed)}</span> },
+  { key: "reference", header: "Reference", align: "right", render: (l) => <span className="tnum text-ink-500">{l.reference == null ? "none" : rand(l.reference)}</span> },
+  { key: "paid", header: "Payable", align: "right", render: (l) => <span className="tnum font-semibold">{rand(l.payable)}</span> },
+  {
+    key: "why", header: "Outcome", width: "30%",
+    render: (l) =>
+      l.reasons.length === 0 ? <span className="text-ok-fg">Paid as billed</span> : (
+        <div className="space-y-0.5">
+          {l.reduced > 0 && <div className="tnum text-bad-fg">−{rand(l.reduced)}</div>}
+          {l.reasons.map((r) => <div key={r} className="text-ink-700">{reasonLabel(r)}</div>)}
+          {l.needs_review && <Badge tone="info">Needs a reviewer</Badge>}
+        </div>
+      ),
+  },
+];
+
+const HISTORY_COLUMNS: Column<DeterminationSummary>[] = [
+  { key: "when", header: "Determined", render: (h) => shortDate(h.created_at) },
+  { key: "status", header: "Status", render: (h) => { const s = claimStatus(h); return <Badge tone={s.tone} dot>{s.label}</Badge>; } },
+  { key: "risk", header: "Risk", render: (h) => <Badge tone={RISK[h.band].tone}>{RISK[h.band].label}</Badge> },
+  { key: "payable", header: "Payable", align: "right", render: (h) => <span className="tnum font-medium">{rand(h.net_payable)}</span> },
+  { key: "findings", header: "Findings", width: "36%", render: (h) => h.reasons.length ? h.reasons.map(reasonLabel).join(", ") : "None" },
+  { key: "engine", header: "Engine", render: (h) => <Ref className="text-ink-500">{h.engine_version}</Ref> },
+];
 
 export default function ClaimDetailPage() {
-  const { id } = useParams<{ id: string }>();
-  const [detail, setDetail] = useState<ClaimDetail | null>(null);
-  const [reasons, setReasons] = useState<Map<string, Reason>>(new Map());
+  const { id = "" } = useParams();
+  const { user } = useAuth();
+  const toast = useToast();
+  const [data, setData] = useState<ClaimDetail | null>(null);
+  const [catalogue, setCatalogue] = useState<Record<string, Reason>>({});
   const [error, setError] = useState<string | null>(null);
+  const [tab, setTab] = useState<Tab>("overview");
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    if (!id) return;
-    let alive = true;
-    setDetail(null);
+  const load = useCallback(async () => {
     setError(null);
-    Promise.all([api.getClaim(id), api.reasons()])
-      .then(([d, catalogue]) => {
-        if (!alive) return;
-        setDetail(d);
-        setReasons(new Map(catalogue.map((r) => [r.code, r])));
-      })
-      .catch((e) =>
-        alive && setError(e instanceof ApiError ? e.message : "Failed to load"),
-      );
-    return () => {
-      alive = false;
-    };
+    try {
+      const [detail, reasons] = await Promise.all([api.getClaim(id), api.reasons()]);
+      setData(detail);
+      setCatalogue(Object.fromEntries(reasons.map((r) => [r.code, r])));
+    } catch (e) {
+      setError(e instanceof ApiError && e.status === 404 ? "There is no claim with that reference." : e instanceof ApiError ? e.message : "The claim could not be loaded.");
+    }
   }, [id]);
 
-  if (error) return <ErrorBox message={error} />;
-  if (!detail) return <Loading label="Loading determination…" />;
+  useEffect(() => { setData(null); void load(); }, [load]);
 
-  const d = detail.determination;
-  const claim = detail.claim;
-  const raw = claim?.raw;
-  const lines = raw?.lines ?? [];
+  async function redetermine(note: string) {
+    setBusy(true);
+    try {
+      await api.rescoreClaim(id, note);
+      toast.success("Claim re-determined against the current reference data.");
+      setConfirming(false);
+      await load();
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : "The claim could not be re-determined.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const crumbs = [{ label: "Work" }, { label: "Claims", to: "/claims" }, { label: id }];
+  if (error) return <div><PageHeader crumbs={crumbs} title={<Ref className="text-[26px]">{id}</Ref>} /><ErrorBlock message={error} onRetry={load} /></div>;
+  if (!data) return <div><PageHeader crumbs={crumbs} title={<Ref className="text-[26px]">{id}</Ref>} /><LoadingBlock label="Loading claim" /></div>;
+
+  const { claim, determination: d, lines, history, payment, billed, practices } = data;
+  const status = claimStatus(d);
+  const risk = RISK[d.band];
+  const pay = PAYMENT_STATUS[payment.status] ?? { label: payment.status, tone: "neutral" as const };
+  const documents = claim?.raw.documents ?? {};
+  const required = REQUIRED_DOCUMENTS[claim?.claim_type ?? ""] ?? [];
+  const missing = required.filter((k) => !documents[k]);
+  const reduced = Math.max(0, billed - d.net_payable);
+  const advisory = new Set(d.advisory_signals);
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <header>
-        <div className="flex flex-wrap items-center gap-3">
-          <Link
-            to="/claims"
-            className="text-sm text-slate-400 transition hover:text-slate-700"
-          >
-            ← Claims
-          </Link>
-          <h1 className="font-mono text-xl font-semibold text-slate-900">
-            {d.claim_id}
-          </h1>
-          <BandChip band={d.band} />
-          <DispositionChip disposition={d.disposition} />
-          {d.validated && (
-            <span className="rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-500">
-              validated
-            </span>
-          )}
-          {d.needs_review && (
-            <span
-              className="rounded bg-fuchsia-100 px-2 py-0.5 text-xs font-medium text-fuchsia-800"
-              title="A billed code has no benchmark (or an interdicted/endogenous overage) — R&N review before payment (§3)"
-            >
-              needs R&N review
-            </span>
-          )}
-          {d.accident_candidate && (
-            <span
-              className="rounded bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-800"
-              title="WORKLIST — the engine found a fuzzy accident match but did not join it; a human confirms or dismisses"
-            >
-              worklist · candidate{" "}
-              <span className="font-mono">{d.accident_candidate}</span>
-            </span>
-          )}
-        </div>
-        <p className="mt-1 max-w-3xl text-sm text-slate-500">
-          The full determination record for this claim — the engine's reasoning
-          made auditable. The{" "}
-          <span className="font-medium text-slate-600">band</span> is the risk
-          read off the score (GREEN [0,25) · AMBER [25,50) · RED [50,∞)); the{" "}
-          <span className="font-medium text-slate-600">disposition</span> is the
-          worst-wins routing verdict (§9). Below: which reasons fired and at what
-          maturity/mode, the gates/holds that block eligibility, and the billing
-          lines each medical head is priced from — payable = min(billed,
-          reference) (§3), summed across the six heads after apportionment and
-          caps to the net payable (§5).
-        </p>
-      </header>
+    <div>
+      <PageHeader
+        crumbs={crumbs}
+        title={<Ref className="text-[26px]">{d.claim_id}</Ref>}
+        meta={<><Badge tone={status.tone} dot>{status.label}</Badge><Badge tone={risk.tone}>{risk.label} risk</Badge></>}
+        subtitle={claim ? `${CLAIM_TYPES[claim.claim_type] ?? claim.claim_type}, lodged ${shortDate(claim.lodged_on)} for an accident on ${shortDate(claim.accident_date)}.` : "This determination has no claim record."}
+        actions={user?.role === "ADMIN" && claim ? <Button icon={RefreshCcw} onClick={() => setConfirming(true)}>Re-determine</Button> : undefined}
+      />
 
-      {/* Head figures */}
-      <Card
-        title="Determination"
-        sub="The headline of this claim's assessment. Score is the sum of SCORED reasons' points — it sets the band; convergence (0–100) is how strongly the accident is corroborated across independent evidence (§6.0). Medical payable is the two medical heads; net payable is Σ payable across all six heads after apportionment and caps (§5). Eligible to pay is the pay-gate — every gate cleared, no open hold."
-      >
-        <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
-          <Figure label="Score" value={String(d.score)} />
-          <Figure
-            label="Convergence"
-            value={`${Math.round(pct(d.convergence))}`}
-          />
-          <Figure label="Medical payable" value={rand(d.medical_payable)} />
-          <Figure label="Net payable" value={rand(d.net_payable)} accent />
-          <Figure
-            label="Eligible to pay"
-            value={d.eligible_to_pay ? "Yes" : "No"}
-            accent={d.eligible_to_pay}
-          />
-          <Figure label="Accident action" value={d.accident_action} mono />
-        </div>
-      </Card>
-
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        {/* Reasons (joined to catalogue) */}
-        <div className="lg:col-span-2">
-          <Card
-            title="Reasons"
-            sub="Each reason is a rule that fired, carrying a maturity (GROUNDED / HEURISTIC / UNVALIDATED — the basis grade from the reason register, §10) and a mode (SHADOW / ADVISORY / SCORED, §11). The score above is the sum of the SCORED reasons' points; a hard gate repudiates the claim regardless of score. The basis line is the citation the determination rests on."
-          >
-            {d.reasons.length === 0 ? (
-              <div className="text-sm text-slate-400">
-                No reasons fired — a clean determination.
-              </div>
-            ) : (
-              <ul className="space-y-2">
-                {d.reasons.map((code) => {
-                  const meta = reasons.get(code);
-                  const advisory = (d.advisory_signals ?? []).includes(code);
-                  return (
-                    <li
-                      key={code}
-                      className="rounded-md border border-slate-100 bg-slate-50/60 p-3"
-                    >
-                      <div className="flex flex-wrap items-center gap-2">
-                        <CodePill>{code}</CodePill>
-                        {advisory && (
-                          <span
-                            className="rounded bg-sky-100 px-1.5 py-0.5 text-[11px] font-medium text-sky-700"
-                            title="ADVISORY on this determination: visible, zero points, no say in the disposition (§11)"
-                          >
-                            advisory · not dispositive
-                          </span>
-                        )}
-                        {meta && (
-                          <>
-                            <span className="text-xs font-medium text-slate-500">
-                              {meta.category}
-                            </span>
-                            <MaturityChip maturity={meta.maturity} />
-                            <ModeChip mode={meta.mode} />
-                            {meta.hard && (
-                              <span className="rounded bg-rose-100 px-1.5 py-0.5 text-[11px] font-medium text-rose-700">
-                                hard gate
-                              </span>
-                            )}
-                            {meta.points > 0 && (
-                              <span className="tnum text-[11px] text-slate-400">
-                                +{meta.points} pts
-                              </span>
-                            )}
-                          </>
-                        )}
-                      </div>
-                      {meta?.basis && (
-                        <div className="mt-1.5 text-xs leading-relaxed text-slate-500">
-                          {meta.basis}
-                        </div>
-                      )}
-                      {!meta && (
-                        <div className="mt-1.5 text-xs italic text-slate-400">
-                          Not in reason catalogue.
-                        </div>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </Card>
-
-          {/* Shadow signals — muted */}
-          <div className="mt-6">
-            <Card
-              title="Shadow signals"
-              sub="Fired but held below the line: computed and stored, contributing zero points and invisible to handlers — the SHADOW rung before a signal is promoted to ADVISORY, then to SCORED once its measured precision clears the floor (§11). Watched here, not yet counted."
-            >
-              {d.shadow_signals.length === 0 ? (
-                <div className="text-sm text-slate-400">
-                  No shadow signals.
-                </div>
-              ) : (
-                <div className="flex flex-wrap gap-2">
-                  {d.shadow_signals.map((code) => {
-                    const meta = reasons.get(code);
-                    return (
-                      <span
-                        key={code}
-                        title={meta?.basis || undefined}
-                        className="inline-flex items-center gap-1.5 rounded border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-slate-400"
-                      >
-                        <span className="font-mono">{code}</span>
-                        {meta && (
-                          <span className="text-slate-300">
-                            {meta.category}
-                          </span>
-                        )}
-                      </span>
-                    );
-                  })}
-                </div>
-              )}
-            </Card>
-          </div>
-        </div>
-
-        {/* Side column: holds + provenance */}
-        <div className="space-y-6">
-          <Card
-            title="Holds"
-            sub="Gates that block eligibility to pay until cleared — an unmet compliance, liability, or authorisation condition (§4). While any hold stands, the claim cannot join a payment batch no matter what the heads compute to."
-          >
-            {d.holds.length === 0 ? (
-              <div className="text-sm text-slate-400">
-                No holds — nothing blocking eligibility.
-              </div>
-            ) : (
-              <ul className="space-y-1.5">
-                {d.holds.map((h, i) => (
-                  <li
-                    key={i}
-                    className="rounded border border-amber-200 bg-amber-50 px-2.5 py-1.5 font-mono text-xs text-amber-800"
-                  >
-                    {h}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Card>
-
-          <Card
-            title="Provenance"
-            sub="What produced this determination, stamped onto it: the engine build, the effective ruleset, and the reference edition priced against. The record is reproducible — re-run the same claim through these versions and it lands the same way (P5)."
-          >
-            <dl className="space-y-1.5 text-xs">
-              <Row k="Accident" v={d.accident_id} mono />
-              {d.accident_candidate && (
-                <Row k="Worklist candidate" v={d.accident_candidate} mono />
-              )}
-              <Row k="Engine" v={d.engine_version} mono />
-              <Row k="Ruleset" v={d.ruleset_effective} mono />
-              <Row k="Reference" v={d.reference_edition} mono />
-              {d.created_at && (
-                <Row k="Determined" v={new Date(d.created_at).toLocaleString()} />
-              )}
-            </dl>
-          </Card>
-        </div>
+      <div className="mb-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <Stat label="Billed" value={rand(billed)} hint={`${lines.length} line${lines.length === 1 ? "" : "s"}`} />
+        <Stat label="Payable" value={rand(d.net_payable)} tone={d.eligible_to_pay ? "ok" : undefined} hint={!d.eligible_to_pay ? "Not payable yet" : Number(d.net_payable) > 0 ? "Cleared for payment" : "Nothing to pay after adjustment"} />
+        <Stat label="Reduced" value={reduced > 0 ? rand(reduced) : "None"} tone={reduced > 0 ? "bad" : undefined} hint={reduced > 0 ? "See the Lines tab for each reason" : "Paid as billed"} />
+        <Stat label="Payment" value={<span className="text-base">{pay.label}</span>} hint={payment.amount != null ? rand(payment.amount) : undefined} />
       </div>
 
-      {/* Operational workflow — five state machines + offer */}
-      <div>
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
-          Operational workflow
-        </h2>
-        <p className="mt-0.5 max-w-3xl text-xs text-slate-400">
-          The claim's live state machines (§8) — lifecycle, merits, serious
-          injury, undertaking, litigation — and the offer that computes the six
-          heads of damage (§5). Each panel shows only the transitions currently
-          allowed from its state; the backend stays authoritative on role and
-          legality.
-        </p>
-        <div className="mt-3">
-          <WorkflowPanel claimId={d.claim_id} />
-        </div>
-      </div>
+      <Tabs<Tab>
+        value={tab} onChange={setTab}
+        tabs={[
+          { key: "overview", label: "Overview" }, { key: "lines", label: "Lines", count: lines.length },
+          { key: "documents", label: "Documents", count: missing.length || undefined }, { key: "payments", label: "Payments" },
+          { key: "workflow", label: "Workflow" }, { key: "history", label: "History", count: history.length }, { key: "technical", label: "Technical" },
+        ]}
+      />
 
-      <MedicalReportsCard claimId={d.claim_id} />
-
-      {/* Raw claim */}
-      <Card
-        title="Claim"
-        sub="The immutable corpus record the determination was computed from — claim type, party, accident, merits, and the billing lines. Each line prices to payable = min(billed, reference) for its discipline on the service date; a line over reference is repriced, not rejected (§3), and the payable lines sum into the past-medical head (§5a)."
-      >
-        {!claim ? (
-          <div className="text-sm text-slate-400">
-            Claim record unavailable.
-          </div>
-        ) : (
-          <div className="space-y-4">
-            <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm md:grid-cols-4">
-              <Row k="Type" v={claim.claim_type} mono />
-              <Row k="Party" v={claim.party_token} mono />
-              <Row k="Accident date" v={claim.accident_date} />
-              <Row k="Lodged on" v={claim.lodged_on} />
-              {raw?.case_number_raw && (
-                <Row k="Case number" v={raw.case_number_raw} mono />
-              )}
-              {raw?.fault_pct != null && (
-                <Row k="Fault %" v={`${raw.fault_pct}`} />
-              )}
-              {raw?.merits_accepted !== undefined && (
-                <Row
-                  k="Merits"
-                  v={
-                    raw.merits_accepted === null
-                      ? "pending"
-                      : raw.merits_accepted
-                        ? "accepted"
-                        : "rejected"
-                  }
-                />
-              )}
-              {raw?.payee_verified !== undefined && (
-                <Row k="Payee verified" v={<YesNo value={raw.payee_verified} />} />
-              )}
-            </dl>
-
-            {lines.length > 0 && (
-              <div className="overflow-x-auto rounded-md border border-slate-200">
-                <table className="min-w-full divide-y divide-slate-200 text-sm">
-                  <thead className="bg-slate-50">
-                    <tr className="text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      <th className="px-3 py-2">Kind</th>
-                      <th className="px-3 py-2">Code</th>
-                      <th className="px-3 py-2 text-right">Qty</th>
-                      <th className="px-3 py-2 text-right">Amount</th>
-                      <th className="px-3 py-2">Discipline</th>
-                      <th className="px-3 py-2">Service date</th>
-                      <th className="px-3 py-2">Provider</th>
-                      <th className="px-3 py-2">Dx</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {lines.map((l, i) => (
-                      <tr key={i}>
-                        <td className="px-3 py-2 text-slate-600">{l.kind}</td>
-                        <td className="px-3 py-2 font-mono text-slate-800">
-                          {l.code}
-                        </td>
-                        <td className="tnum px-3 py-2 text-right text-slate-600">
-                          {num(l.qty)}
-                        </td>
-                        <td className="tnum px-3 py-2 text-right text-slate-800">
-                          {rand(l.amount)}
-                        </td>
-                        <td className="px-3 py-2 text-slate-600">
-                          {l.discipline || "—"}
-                        </td>
-                        <td className="px-3 py-2 text-slate-600">
-                          {l.service_date}
-                        </td>
-                        <td className="px-3 py-2 font-mono text-xs text-slate-500">
-                          {l.provider_id}
-                        </td>
-                        <td className="px-3 py-2 text-slate-500">
-                          {l.dx || "—"}
-                        </td>
-                      </tr>
+      <div className="mt-4 animate-rise" key={tab}>
+        {tab === "overview" && (
+          <div className="grid gap-4 lg:grid-cols-3">
+            <div className="space-y-4 lg:col-span-2">
+              <Panel title={d.eligible_to_pay ? "Nothing is holding this claim" : "What is holding this claim"} description={d.eligible_to_pay ? undefined : DISPOSITIONS[d.disposition]?.help} flush>
+                {d.holds.length === 0 ? (
+                  <div className="flex items-center gap-2 px-4 py-4 text-sm text-ok-fg"><CheckCircle2 size={16} /> {Number(d.net_payable) > 0 ? "Every gate is cleared. The claim can go into a payment run." : "Every gate is cleared, but nothing is payable after adjustment. See the Lines tab."}</div>
+                ) : (
+                  <ul className="divide-y divide-line">
+                    {d.holds.map((h) => (
+                      <li key={h} className="flex items-start gap-3 px-4 py-3">
+                        <AlertTriangle size={16} className="mt-0.5 shrink-0 text-warn-fg" />
+                        <div>
+                          <div className="text-sm font-medium text-ink-900">{HOLDS[h]?.label ?? h.replace(/_/g, " ")}</div>
+                          <div className="text-[13px] text-ink-500">{HOLDS[h]?.action ?? "Resolve this before payment."}</div>
+                        </div>
+                      </li>
                     ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+                  </ul>
+                )}
+              </Panel>
+
+              <Panel title="Findings" description="Each rule that fired on this claim, with the basis it rests on." flush>
+                {d.reasons.length === 0 ? <EmptyState icon={CheckCircle2} title="No findings" body="No rule fired on this claim." /> : (
+                  <ul className="divide-y divide-line">
+                    {d.reasons.map((code) => {
+                      const meta = catalogue[code];
+                      return (
+                        <li key={code} className="flex flex-wrap items-start justify-between gap-2 px-4 py-3">
+                          <div className="min-w-0">
+                            <div className="text-sm font-medium text-ink-900">{reasonLabel(code)}</div>
+                            <div className="text-[13px] text-ink-500">{(meta?.basis ?? "").replace(/^§\S+\s*[—-]\s*/, "")}</div>
+                            <Ref className="text-xs text-ink-400">{code}</Ref>
+                          </div>
+                          <div className="flex shrink-0 gap-1.5">
+                            {meta?.category === "ADJUSTED" ? <Badge tone="warn">Reduces payment</Badge> : meta?.hard && <Badge tone="bad">Blocks payment</Badge>}
+                            {advisory.has(code) && <Badge tone="info">Advisory</Badge>}
+                            {meta && !meta.hard && !advisory.has(code) && meta.points > 0 && <Badge>{meta.points} points</Badge>}
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </Panel>
+            </div>
+
+            <div className="space-y-4">
+              <Panel title="Claim">
+                <Facts items={[
+                  { label: "Type", value: claim ? CLAIM_TYPES[claim.claim_type] ?? claim.claim_type : "—" },
+                  { label: "Claimant", value: <Ref>{claim?.party_token ?? "—"}</Ref> },
+                  { label: "Accident date", value: shortDate(claim?.accident_date) },
+                  { label: "Lodged", value: shortDate(claim?.lodged_on) },
+                  { label: "Police case number", value: claim?.raw.case_number_raw ?? "Not supplied" },
+                  { label: "Accident record", value: <Link className="text-brand-700 hover:underline" to="/accidents"><Ref>{d.accident_id}</Ref></Link> },
+                ]} />
+              </Panel>
+              <Panel title="Billed by" flush>
+                {practices.length === 0 ? <EmptyState title="No practice on this claim" /> : (
+                  <ul className="divide-y divide-line">
+                    {practices.map((p) => (
+                      <li key={p.provider_id} className="flex items-start justify-between gap-2 px-4 py-3">
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-medium text-ink-900">{p.practice_name || "Not in the practice register"}</div>
+                          <div className="text-xs text-ink-500"><Link to={`/practices/${encodeURIComponent(p.provider_id)}`} className="text-brand-700 hover:underline"><Ref>{p.provider_id}</Ref></Link>{p.discipline ? ` · ${p.discipline}` : ""}</div>
+                        </div>
+                        {p.known ? <Badge tone={p.may_bill ? "ok" : "bad"}>{p.may_bill ? "Active" : p.status === "DEREGISTERED" ? "Deregistered" : "Suspended"}</Badge> : <Badge tone="warn">Not registered</Badge>}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </Panel>
+            </div>
           </div>
         )}
-      </Card>
-    </div>
-  );
-}
 
-function Figure({
-  label,
-  value,
-  accent = false,
-  mono = false,
-}: {
-  label: string;
-  value: string;
-  accent?: boolean;
-  mono?: boolean;
-}) {
-  return (
-    <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
-      <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
-        {label}
-      </div>
-      <div
-        className={`tnum mt-0.5 text-lg font-semibold ${
-          accent ? "text-emerald-600" : "text-slate-900"
-        } ${mono ? "font-mono text-sm" : ""}`}
-      >
-        {value}
-      </div>
-    </div>
-  );
-}
+        {tab === "lines" && (
+          <DataTable
+            columns={LINE_COLUMNS} rows={lines} rowKey={(l) => String(l.id)}
+            empty={<EmptyState title="No billing lines" body="This claim carries no medical account." />}
+            footer={<div className="tnum flex flex-wrap justify-end gap-x-6 gap-y-1 text-[13px] text-ink-600">
+              <span>Billed <strong className="text-ink-900">{rand(billed)}</strong></span>
+              <span>Line payable <strong className="text-ink-900">{rand(lines.reduce((s, l) => s + l.payable, 0))}</strong></span>
+              <span>Net payable <strong className="text-ink-900">{rand(d.net_payable)}</strong></span>
+            </div>}
+          />
+        )}
 
-function Row({
-  k,
-  v,
-  mono = false,
-}: {
-  k: string;
-  v: ReactNode;
-  mono?: boolean;
-}) {
-  return (
-    <div className="flex justify-between gap-3">
-      <dt className="text-slate-400">{k}</dt>
-      <dd className={`text-right text-slate-800 ${mono ? "font-mono" : ""}`}>
-        {v}
-      </dd>
+        {tab === "documents" && (
+          <div className="space-y-4">
+            <Panel title="Supporting documents" description={required.length ? `A ${(CLAIM_TYPES[claim?.claim_type ?? ""] ?? "claim").toLowerCase()} needs each of these before it can be paid.` : undefined} flush>
+              {required.length === 0 ? <EmptyState title="No checklist for this claim" /> : (
+                <ul className="divide-y divide-line">
+                  {required.map((k) => (
+                    <li key={k} className="flex items-center justify-between px-4 py-3">
+                      <span className="text-sm text-ink-900">{DOCUMENTS[k] ?? k}</span>
+                      <Badge tone={documents[k] ? "ok" : "bad"} dot>{documents[k] ? "Received" : "Outstanding"}</Badge>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Panel>
+            <MedicalReports claimId={d.claim_id} />
+          </div>
+        )}
+
+        {tab === "payments" && (
+          <Panel title="Payment" flush>
+            <div className="px-4 py-4">
+              <Facts items={[
+                { label: "Status", value: <Badge tone={pay.tone} dot>{pay.label}</Badge> },
+                { label: "Payment run", value: payment.batch_id != null ? <Link className="text-brand-700 hover:underline" to={`/payments/runs/${payment.batch_id}`}>Payment run {payment.batch_id}</Link> : "—" },
+                { label: "Amount instructed", value: payment.amount != null ? <span className="tnum">{rand(payment.amount)}</span> : "—" },
+                { label: "Cleared for payment", value: d.eligible_to_pay ? "Yes" : "No" },
+                { label: "Net payable", value: <span className="tnum">{rand(d.net_payable)}</span> },
+              ]} />
+            </div>
+            <div className="border-t border-line">
+              {payment.remittances.length === 0 ? <EmptyState title="No remittance advice yet" body="An advice is issued to the practice when the payment run is paid." /> : (
+                <ul className="divide-y divide-line">
+                  {payment.remittances.map((ref) => (
+                    <li key={ref} className="flex items-center justify-between px-4 py-3">
+                      <div><div className="text-sm font-medium text-ink-900">Remittance advice</div><Link to={`/payments/remittances/${encodeURIComponent(ref)}`} className="text-brand-700 hover:underline"><Ref>{ref}</Ref></Link></div>
+                      <a href={api.remittancePrintUrl(ref)} target="_blank" rel="noreferrer" className="inline-flex h-8 items-center gap-1.5 rounded-md border border-line-strong px-2.5 text-[13px] font-medium text-ink-800 hover:bg-ink-50"><Printer size={14} /> Print</a>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </Panel>
+        )}
+
+        {tab === "workflow" && (claim ? <ClaimWorkflow claimId={d.claim_id} claimType={claim.claim_type} /> : <EmptyState title="No workflow" body="This determination has no claim record." />)}
+
+        {tab === "history" && <DataTable columns={HISTORY_COLUMNS} rows={history} rowKey={(h) => String(h.id)} />}
+
+        {tab === "technical" && (
+          <div className="grid gap-4 lg:grid-cols-2">
+            <Panel title="Determination record" description="What produced this result. The same inputs under these versions give the same answer.">
+              <Facts items={[
+                { label: "Engine", value: <Ref>{d.engine_version}</Ref> }, { label: "Ruleset effective", value: d.ruleset_effective },
+                { label: "Reference edition", value: d.reference_edition }, { label: "Risk score", value: d.score },
+                { label: "Accident corroboration", value: `${d.convergence} of 100` }, { label: "Accident match", value: d.accident_action },
+                { label: "Silent signals", value: d.shadow_signals.length ? d.shadow_signals.map(reasonLabel).join(", ") : "None" },
+                { label: "Disposition code", value: <Ref>{d.disposition}</Ref> },
+              ]} />
+            </Panel>
+            <Panel title="Submitted record" description="The claim exactly as stored. It is never rewritten.">
+              <pre className="max-h-96 overflow-auto rounded-md bg-ink-900 p-3 font-mono text-xs leading-relaxed text-ink-100">{JSON.stringify(claim?.raw ?? {}, null, 2)}</pre>
+            </Panel>
+          </div>
+        )}
+      </div>
+
+      <ConfirmDialog
+        open={confirming} onClose={() => setConfirming(false)} onConfirm={redetermine} busy={busy}
+        title="Re-determine this claim" confirmLabel="Re-determine"
+        description="The engine runs again over the stored claim, using today's reference data and signal settings. A new determination is added; the claim itself does not change."
+        reason={{ label: "Reason for re-determining", required: true, placeholder: "For example: tariff corrected, or signal promoted" }}
+      />
     </div>
   );
 }

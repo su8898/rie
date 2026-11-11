@@ -1,663 +1,249 @@
-// Intelligence — party fraud analytics (read-only, any logged-in user).
-//
-// Five section tabs over the /api/parties/* endpoints:
-//   Providers  — sortable cohort table + per-row component breakdown expander.
-//   Attorneys  — cohort table with claim-type mix + late-lodgement share.
-//   Claimants  — recurrence (a token appearing across >= 2 accidents).
-//   Fairness   — disparate-impact by cohort + the four-fifths ratio + pass/fail.
-//   Risk sweep — threshold input -> flagged parties across providers/attorneys.
-//
-// Scores are cohort-relative (a party is ranked within its own archetype, and
-// value percentiles are within-cohort — the false-positive control) and
-// n-guarded: confidence "LOW_N" means too few claims to score (shown as a muted
-// "low-n" tag, score suppressed). A mostly clean corpus scoring LOW everywhere
-// is the expected read, not an error. Domain-logic §7.
+// Party intelligence. How each practice and attorney compares with others like it, which
+// claimants appear on more than one accident, and whether the findings fall evenly across kinds
+// of practice. A rating is a prompt to look closer. It starts nothing by itself.
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { ApiError, api } from "../api";
-import {
-  Bar,
-  Card,
-  CodePill,
-  Empty,
-  ErrorBox,
-  Loading,
-  LowNTag,
-  Pagination,
-  RatingChip,
-  SearchInput,
-  matchQ,
-  usePaged,
-} from "../components/ui";
-import { num, rand } from "../format";
-import type {
-  Attorney,
-  Fairness,
-  Claimant,
-  Provider,
-  RiskSweep,
-} from "../types";
+import { DataTable, Pager, type Column, type Sort } from "../ds/DataTable";
+import { CLAIM_TYPES, PARTY_RATING, humanise } from "../ds/labels";
+import { Dialog } from "../ds/overlays";
+import { Badge, Button, EmptyState, ErrorBlock, Field, Input, PageHeader, Panel, Ref, Select, Stat, Tabs } from "../ds/primitives";
+import { rand } from "../format";
+import type { Attorney, Claimant, Fairness, Provider, RiskComponents, RiskSweep } from "../types";
+import { useListParams } from "./work/shared";
 
-type Tab = "providers" | "attorneys" | "claimants" | "fairness" | "sweep";
-
-const TABS: { key: Tab; label: string }[] = [
-  { key: "providers", label: "Providers" },
-  { key: "attorneys", label: "Attorneys" },
-  { key: "claimants", label: "Claimants" },
-  { key: "fairness", label: "Fairness" },
-  { key: "sweep", label: "Risk sweep" },
+type Tab = "practices" | "attorneys" | "claimants" | "fairness" | "list";
+const GROUPS: Record<string, string> = { GENERAL: "General practice", SPECIALIST: "Specialist", MATERIALS: "Mostly medicines and materials" };
+const COMPONENTS: { key: keyof RiskComponents; label: string; help: string; weight: number }[] = [
+  { key: "behavioural", label: "Findings on its claims", help: "How many of its claims are rated high or medium risk.", weight: 40 },
+  { key: "cohort_outlier", label: "Prices against similar parties", help: "How far its average line value sits above others in its group.", weight: 20 },
+  { key: "over_servicing", label: "Over-servicing", help: "How often its claims carry a finding that is not about price.", weight: 20 },
+  { key: "history", label: "History", help: "Past recoveries and open cases. Not fed yet, so this is zero for now.", weight: 20 },
 ];
+const message = (e: unknown, fallback: string) => (e instanceof ApiError ? e.message : fallback);
+const rating = (r: { rating: string; score: number; confidence: string; n_claims: number }) => r.confidence === "LOW_N"
+  ? <div><Badge>Too few claims</Badge><div className="mt-1 text-xs text-ink-500">{r.n_claims} claim{r.n_claims === 1 ? "" : "s"}; 5 are needed</div></div>
+  : <div><Badge tone={PARTY_RATING[r.rating]?.tone ?? "neutral"} dot>{PARTY_RATING[r.rating]?.label ?? r.rating}</Badge><div className="tnum mt-1 text-xs text-ink-500">Score {r.score} of 100</div></div>;
 
-export default function IntelligencePage() {
-  const [tab, setTab] = useState<Tab>("providers");
-
-  return (
-    <div className="space-y-4">
-      <header>
-        <h1 className="text-xl font-semibold text-slate-900">Intelligence</h1>
-        <p className="mt-0.5 max-w-3xl text-sm text-slate-500">
-          Party fraud analytics over the accident graph (§7). Scores are{" "}
-          <span className="font-medium text-slate-600">cohort-relative</span>: a
-          party is ranked against its own archetype — a neurosurgeon is not held
-          to a GP's numbers — and value percentiles are read{" "}
-          <span className="font-medium text-slate-600">within cohort</span>, the
-          false-positive control that keeps a legitimate specialty from looking
-          anomalous. Scores are <span className="font-medium text-slate-600">n-guarded</span>:{" "}
-          <span className="font-medium text-slate-600">LOW_N</span> means too few
-          claims to score, so the score is suppressed, not assumed clean. A mostly
-          clean corpus scoring LOW everywhere is the expected read, not a bug.
-        </p>
-      </header>
-
-      {/* Section tabs */}
-      <div className="flex gap-1 border-b border-slate-200">
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            onClick={() => setTab(t.key)}
-            className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium transition ${
-              tab === t.key
-                ? "border-slate-900 text-slate-900"
-                : "border-transparent text-slate-500 hover:text-slate-800"
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
-
-      {tab === "providers" && <ProvidersTab />}
-      {tab === "attorneys" && <AttorneysTab />}
-      {tab === "claimants" && <ClaimantsTab />}
-      {tab === "fairness" && <FairnessTab />}
-      {tab === "sweep" && <SweepTab />}
-    </div>
-  );
-}
-
-// Generic fetch hook for a read-only endpoint.
-function useFetch<T>(fn: () => Promise<T>, deps: unknown[] = []) {
+function useData<T>(loader: () => Promise<T>, fallback: string, deps: unknown[] = []) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const run = useCallback(fn, deps);
   useEffect(() => {
-    let alive = true;
     setData(null);
-    setError(null);
-    run()
-      .then((d) => alive && setData(d))
-      .catch((e) =>
-        alive && setError(e instanceof ApiError ? e.message : "Failed to load"),
-      );
-    return () => {
-      alive = false;
-    };
-  }, [run]);
+    loader().then((d) => { setData(d); setError(null); }).catch((e) => setError(message(e, fallback)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
   return { data, error };
 }
 
-const th =
-  "px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500";
-
-// ── Providers ────────────────────────────────────────────────────────────────
-type ProvSort = "score" | "avg_value" | "n_claims" | "flag_rate";
-
-function ProvidersTab() {
-  const { data, error } = useFetch<Provider[]>(() => api.providers());
-  const [sort, setSort] = useState<ProvSort>("score");
-  const [expanded, setExpanded] = useState<string | null>(null);
-  const [q, setQ] = useState("");
-
-  const rows = useMemo(() => {
-    if (!data) return null;
-    return [...data]
-      .sort((a, b) => b[sort] - a[sort])
-      .filter((p) => matchQ(q, p.provider_id, p.archetype, p.rating));
-  }, [data, sort, q]);
-
-  const { page, setPage, pageCount, total, slice } = usePaged(rows ?? [], 20);
-
-  if (error) return <ErrorBox message={error} />;
-  if (data === null) return <Loading label="Scoring providers…" />;
-  if (data.length === 0)
-    return <Empty label="No providers in the corpus yet." />;
-
-  const SortHead = ({ k, label, align = "left" }: { k: ProvSort; label: string; align?: string }) => (
-    <th className={`${th} ${align === "right" ? "text-right" : "text-left"}`}>
-      <button
-        onClick={() => setSort(k)}
-        className={`transition hover:text-slate-800 ${sort === k ? "text-slate-900" : ""}`}
-      >
-        {label}
-        {sort === k ? " ↓" : ""}
-      </button>
-    </th>
-  );
-
+function Breakdown({ title, components, score, onClose }: { title: string; components: RiskComponents; score: number; onClose: () => void }) {
   return (
-    <Card
-      title="Providers — cohort-relative risk"
-      sub="Each provider is scored against its archetype (ER/trauma · hospital-based · rooms GP · allied/rehab · medico-legal expert · EMS), never the whole book — a specialty is its own cohort, not an anomaly. Value pct is the midrank percentile of average claim value within that cohort (the false-positive control). Score is a 0–100 composite of four components — behavioural, cohort-outlier, over-servicing and history (pricing and duplicate billing excluded as innocent, resolved at adjudication); expand a row to see the breakdown. Rows sort by any right-aligned column."
-      right={
-        <SearchInput
-          value={q}
-          onChange={setQ}
-          placeholder="Search provider, cohort, rating…"
-          className="w-64"
-        />
-      }
-    >
-      {total === 0 ? (
-        <Empty label="No providers match your search." />
-      ) : (
-    <div className="overflow-hidden rounded-md border border-slate-100">
-      <div className="overflow-x-auto">
-        <table className="min-w-full divide-y divide-slate-100 text-sm">
-          <thead className="bg-slate-50">
-            <tr>
-              <th className={th} />
-              <th className={`${th} text-left`}>Provider</th>
-              <th className={`${th} text-left`}>Cohort</th>
-              <SortHead k="n_claims" label="Claims" align="right" />
-              <SortHead k="avg_value" label="Avg value" align="right" />
-              <th className={`${th} text-left`}>Value pct</th>
-              <SortHead k="flag_rate" label="Flag %" align="right" />
-              <SortHead k="score" label="Score" align="right" />
-              <th className={`${th} text-left`}>Rating</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {slice.map((p) => {
-              const open = expanded === p.provider_id;
-              const lowN = p.confidence === "LOW_N";
-              return (
-                <Fragment key={p.provider_id}>
-                  <tr
-                    className="cursor-pointer hover:bg-slate-50"
-                    onClick={() =>
-                      setExpanded(open ? null : p.provider_id)
-                    }
-                  >
-                    <td className="px-3 py-2 text-slate-400">
-                      {open ? "▾" : "▸"}
-                    </td>
-                    <td className="px-3 py-2 font-mono text-[13px] text-slate-900">
-                      {p.provider_id}
-                    </td>
-                    <td className="px-3 py-2">
-                      <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium text-slate-600">
-                        {p.archetype}
-                      </span>
-                    </td>
-                    <td className="tnum px-3 py-2 text-right text-slate-700">
-                      {num(p.n_claims)}
-                    </td>
-                    <td className="tnum px-3 py-2 text-right text-slate-700">
-                      {rand(p.avg_value)}
-                    </td>
-                    <td className="px-3 py-2">
-                      <Bar value={p.value_percentile} />
-                    </td>
-                    <td className="tnum px-3 py-2 text-right text-slate-700">
-                      {p.flag_rate}%
-                    </td>
-                    <td className="tnum px-3 py-2 text-right font-semibold text-slate-900">
-                      {lowN ? "—" : p.score}
-                    </td>
-                    <td className="px-3 py-2">
-                      {lowN ? <LowNTag /> : <RatingChip rating={p.rating} />}
-                    </td>
-                  </tr>
-                  {open && (
-                    <tr className="bg-slate-50/60">
-                      <td />
-                      <td colSpan={8} className="px-3 py-3">
-                        <ComponentBars components={p.components} />
-                        <div className="mt-2 text-[11px] text-slate-400">
-                          {num(p.n_lines)} lines · {rand(p.billed)} billed ·
-                          red rate {p.red_rate}%
-                          {lowN && " · below robust-n threshold (score suppressed)"}
-                        </div>
-                      </td>
-                    </tr>
-                  )}
-                </Fragment>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-      <Pagination
-        page={page}
-        pageCount={pageCount}
-        total={total}
-        onPage={setPage}
-        unit="providers"
-      />
-    </div>
-      )}
-    </Card>
+    <Dialog open onClose={onClose} title={title} description={`Score ${score} of 100. The score is a weighted sum of four parts.`}>
+      <ul className="space-y-3">
+        {COMPONENTS.map((c) => (
+          <li key={c.key}>
+            <div className="flex items-baseline justify-between text-sm"><span className="font-medium text-ink-900">{c.label}</span><span className="tnum text-ink-700">{components[c.key]} of 100 <span className="text-ink-400">· weight {c.weight}%</span></span></div>
+            <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-ink-100"><div className="h-full rounded-full bg-ink-700" style={{ width: `${Math.min(100, components[c.key])}%` }} /></div>
+            <div className="mt-1 text-xs text-ink-500">{c.help}</div>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-4 text-[13px] text-ink-500">Pricing and duplicate billing are left out on purpose: they are corrected when the claim is assessed and are not evidence of fraud.</p>
+    </Dialog>
   );
 }
 
-function ComponentBars({
-  components,
-}: {
-  components: Provider["components"];
-}) {
-  const entries: [string, number][] = [
-    ["behavioural", components.behavioural],
-    ["cohort_outlier", components.cohort_outlier],
-    ["over_servicing", components.over_servicing],
-    ["history", components.history],
+export default function IntelligencePage() {
+  const { value, reset } = useListParams();
+  const t = value("tab");
+  const tab: Tab = t === "attorneys" || t === "claimants" || t === "fairness" || t === "list" ? t : "practices";
+  return (
+    <div>
+      <PageHeader
+        crumbs={[{ label: "Integrity" }, { label: "Party intelligence" }]}
+        title="Party intelligence"
+        subtitle="How each practice and attorney compares with others like it. A rating is a reason to look closer; it holds no claim and opens no case by itself."
+      />
+      <Tabs<Tab>
+        tabs={[{ key: "practices", label: "Practices" }, { key: "attorneys", label: "Attorneys" }, { key: "claimants", label: "Repeat claimants" }, { key: "fairness", label: "Fairness" }, { key: "list", label: "High-risk list" }]}
+        value={tab} onChange={(k) => reset(k === "practices" ? {} : { tab: k })}
+      />
+      <div className="mt-4">
+        {tab === "practices" && <Practices />}
+        {tab === "attorneys" && <Attorneys />}
+        {tab === "claimants" && <Claimants />}
+        {tab === "fairness" && <FairnessView />}
+        {tab === "list" && <HighRisk />}
+      </div>
+    </div>
+  );
+}
+
+function Practices() {
+  const navigate = useNavigate();
+  const { value, page, pageSize, set } = useListParams();
+  const { data, error } = useData<Provider[]>(api.providers, "The practices could not be loaded.");
+  const [open, setOpen] = useState<Provider | null>(null);
+  const sort: Sort = { key: value("sort") || "score", direction: value("dir") === "asc" ? "asc" : "desc" };
+  const all = data ?? [];
+  const shown = useMemo(() => {
+    const needle = value("q").trim().toLowerCase();
+    const list = all.filter((p) => (!needle || p.provider_id.toLowerCase().includes(needle)) && (!value("rating") || (p.confidence === "OK" && p.rating === value("rating"))) && (!value("group") || p.cohort === value("group")) && (value("rated") !== "yes" || p.confidence === "OK"));
+    const key = (p: Provider) => sort.key === "billed" ? p.billed : sort.key === "claims" ? p.n_claims : sort.key === "value" ? p.avg_value : p.score;
+    return [...list].sort((a, b) => (key(a) - key(b)) * (sort.direction === "asc" ? 1 : -1));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [all, value("q"), value("rating"), value("group"), value("rated"), sort.key, sort.direction]);
+  const filtered = ["q", "rating", "group", "rated"].some((k) => value(k));
+  const rated = all.filter((p) => p.confidence === "OK");
+
+  const columns: Column<Provider>[] = [
+    { key: "practice", header: "Practice", render: (p) => <div><Ref className="font-medium text-brand-700">{p.provider_id}</Ref><div className="text-xs text-ink-500">{GROUPS[p.cohort] ?? humanise(p.cohort)}</div></div> },
+    { key: "claims", header: "Claims", align: "right", sortable: true, render: (p) => <span className="tnum">{p.n_claims}</span> },
+    { key: "billed", header: "Billed", align: "right", sortable: true, render: (p) => <span className="tnum text-ink-800">{rand(p.billed)}</span> },
+    { key: "value", header: "Average line", align: "right", sortable: true, render: (p) => <div><div className="tnum text-ink-800">{rand(p.avg_value)}</div><div className="tnum text-xs text-ink-500">Above {Math.round(p.value_percentile)}% of its group</div></div> },
+    { key: "findings", header: "Claims with a finding", align: "right", render: (p) => <div><div className="tnum text-ink-800">{p.flag_rate}%</div>{p.red_rate > 0 && <div className="tnum text-xs text-bad-fg">{p.red_rate}% high risk</div>}</div> },
+    { key: "score", header: "Rating", sortable: true, render: (p) => rating(p) },
+    { key: "why", header: "", align: "right", render: (p) => p.confidence === "OK" ? <Button size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); setOpen(p); }}>How it is scored</Button> : null },
+  ];
+  if (error) return <ErrorBlock message={error} />;
+  return (
+    <>
+      <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Stat label="Practices billing" value={data ? all.length : "…"} />
+        <Stat label="With enough claims to rate" value={data ? rated.length : "…"} hint="5 claims or more" />
+        <Stat label="Rated high or critical" value={data ? rated.filter((p) => p.rating === "HIGH" || p.rating === "CRITICAL").length : "…"} tone={rated.some((p) => p.rating === "HIGH" || p.rating === "CRITICAL") ? "bad" : undefined} />
+        <Stat label="On watch or elevated" value={data ? rated.filter((p) => p.rating === "WATCH" || p.rating === "ELEVATED").length : "…"} tone="warn" />
+      </div>
+      <div className="mb-3 grid gap-2 rounded-lg border border-line bg-white p-3 shadow-panel sm:grid-cols-2 lg:grid-cols-5">
+        <Input className="lg:col-span-2" placeholder="Practice number" aria-label="Search practices" value={value("q")} onChange={(e) => set({ q: e.target.value })} />
+        <Select aria-label="Rating" value={value("rating")} onChange={(e) => set({ rating: e.target.value })}>
+          <option value="">Any rating</option>
+          {Object.entries(PARTY_RATING).map(([k, r]) => <option key={k} value={k}>{r.label}</option>)}
+        </Select>
+        <Select aria-label="Group" value={value("group")} onChange={(e) => set({ group: e.target.value })}>
+          <option value="">Any group</option>
+          {Object.entries(GROUPS).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+        </Select>
+        <Select aria-label="Show" value={value("rated")} onChange={(e) => set({ rated: e.target.value })}>
+          <option value="">Rated or not</option><option value="yes">Only those with a rating</option>
+        </Select>
+        {filtered && <div className="flex items-center lg:col-span-5"><Button size="sm" variant="ghost" icon={X} onClick={() => set({ q: null, rating: null, group: null, rated: null })}>Clear filters</Button></div>}
+      </div>
+      <DataTable
+        columns={columns} rows={shown.slice((page - 1) * pageSize, page * pageSize)} rowKey={(p) => p.provider_id} loading={data === null}
+        sort={sort} onSort={(s) => set({ sort: s.key === "score" ? null : s.key, dir: s.direction === "asc" ? "asc" : null }, true)}
+        onRowClick={(p) => navigate(`/practices/${encodeURIComponent(p.provider_id)}`)}
+        empty={<EmptyState title={filtered ? "No practice matches" : "No practice has billed yet"} body={filtered ? "Change or clear the filters." : "Practices appear here once they bill the Fund."} />}
+        footer={<Pager page={page} pageSize={pageSize} total={shown.length} unit="practices" onPage={(p) => set({ page: p > 1 ? String(p) : null }, true)} onPageSize={(n) => set({ size: n === 25 ? null : String(n) })} />}
+      />
+      {open && <Breakdown title={`How practice ${open.provider_id} is scored`} components={open.components} score={open.score} onClose={() => setOpen(null)} />}
+    </>
+  );
+}
+
+function Attorneys() {
+  const { value, page, pageSize, set } = useListParams();
+  const { data, error } = useData<Attorney[]>(api.attorneys, "The attorneys could not be loaded.");
+  const [open, setOpen] = useState<Attorney | null>(null);
+  const all = data ?? [];
+  const shown = useMemo(() => all.filter((a) => a.attorney.toLowerCase().includes(value("q").trim().toLowerCase())), [all, value("q")]); // eslint-disable-line react-hooks/exhaustive-deps
+  const columns: Column<Attorney>[] = [
+    { key: "attorney", header: "Attorney", render: (a) => <div><div className="font-medium text-ink-900">{a.attorney}</div><div className="text-xs text-ink-500">{humanise(a.cohort)}</div></div> },
+    { key: "claims", header: "Claims", align: "right", render: (a) => <span className="tnum">{a.n_claims}</span> },
+    { key: "mix", header: "Kinds of claim", render: (a) => <span className="text-[13px] text-ink-700">{Object.entries(a.claim_type_mix).map(([k, n]) => `${n} ${(CLAIM_TYPES[k] ?? humanise(k)).toLowerCase()}`).join(", ") || "—"}</span> },
+    { key: "late", header: "Lodged late", align: "right", render: (a) => <span className={a.late_lodgement_share > 0 ? "tnum text-warn-fg" : "tnum text-ink-700"}>{a.late_lodgement_share}%</span> },
+    { key: "score", header: "Rating", render: (a) => rating(a) },
+    { key: "why", header: "", align: "right", render: (a) => a.confidence === "OK" ? <Button size="sm" variant="ghost" onClick={() => setOpen(a)}>How it is scored</Button> : null },
+  ];
+  if (error) return <ErrorBlock message={error} />;
+  return (
+    <>
+      <div className="mb-3 rounded-lg border border-line bg-white p-3 shadow-panel"><div className="sm:w-80"><Input placeholder="Attorney" aria-label="Search attorneys" value={value("q")} onChange={(e) => set({ q: e.target.value })} /></div></div>
+      <DataTable
+        columns={columns} rows={shown.slice((page - 1) * pageSize, page * pageSize)} rowKey={(a) => a.attorney} loading={data === null}
+        empty={<EmptyState title={value("q") ? "No attorney matches" : "No claim names an attorney yet"} body={value("q") ? "Change the search." : "Attorneys appear here once claims they lodged are received."} />}
+        footer={<Pager page={page} pageSize={pageSize} total={shown.length} unit="attorneys" onPage={(p) => set({ page: p > 1 ? String(p) : null }, true)} onPageSize={(n) => set({ size: n === 25 ? null : String(n) })} />}
+      />
+      {open && <Breakdown title={`How ${open.attorney} is scored`} components={open.components} score={open.score} onClose={() => setOpen(null)} />}
+    </>
+  );
+}
+
+function Claimants() {
+  const { data, error } = useData<Claimant[]>(api.claimants, "The claimants could not be loaded.");
+  const columns: Column<Claimant>[] = [
+    { key: "who", header: "Claimant reference", render: (c) => <Link to={`/claims?q=${encodeURIComponent(c.party_token)}`} className="font-medium text-brand-700 hover:underline"><Ref>{c.party_token}</Ref></Link> },
+    { key: "n", header: "Accidents", align: "right", render: (c) => <span className="tnum font-medium text-ink-900">{c.n_accidents}</span> },
+    { key: "which", header: "Accident records", render: (c) => <Ref className="text-[13px] text-ink-700">{c.accidents.join(", ")}</Ref> },
+  ];
+  if (error) return <ErrorBlock message={error} />;
+  return (
+    <DataTable
+      columns={columns} rows={data ?? []} rowKey={(c) => c.party_token} loading={data === null}
+      empty={<EmptyState title="No claimant appears on more than one accident" body="A claimant is listed here when the same person is a party to two or more accidents." />}
+      footer={<span className="text-[13px] text-ink-500">{(data ?? []).length} claimants on two or more accidents. The reference stands in for the person's identity, which is never shown here.</span>}
+    />
+  );
+}
+
+function FairnessView() {
+  const { data, error } = useData<Fairness>(api.fairness, "The fairness figures could not be loaded.");
+  if (error) return <ErrorBlock message={error} />;
+  const columns: Column<Fairness["by_cohort"][number]>[] = [
+    { key: "group", header: "Group of practices", render: (c) => <span className="font-medium text-ink-900">{GROUPS[c.cohort] ?? humanise(c.cohort)}</span> },
+    { key: "claims", header: "Claims", align: "right", render: (c) => <span className="tnum">{c.n_claims}</span> },
+    { key: "rate", header: "Claims with a finding", align: "right", render: (c) => <span className="tnum text-ink-800">{c.flag_rate}%</span> },
+    { key: "impact", header: "Against the overall rate", align: "right", render: (c) => <span className="tnum text-ink-800">{c.impact == null ? "—" : `${c.impact} times`}</span> },
+    { key: "verdict", header: "", render: (c) => c.small ? <Badge>Too few claims to judge</Badge> : c.review ? <Badge tone="warn">Needs a look</Badge> : <Badge tone="ok">Within range</Badge> },
   ];
   return (
-    <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-      {entries.map(([k, v]) => (
-        <div key={k} className="flex items-center gap-3">
-          <span className="w-32 text-[11px] text-slate-500">
-            {k.replace(/_/g, " ")}
-          </span>
-          <Bar value={v} tone="score" width="w-32" />
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// ── Attorneys ────────────────────────────────────────────────────────────────
-function AttorneysTab() {
-  const { data, error } = useFetch<Attorney[]>(() => api.attorneys());
-  const [q, setQ] = useState("");
-  const filtered = useMemo(
-    () => (data ?? []).filter((a) => matchQ(q, a.attorney, a.cohort, a.rating)),
-    [data, q],
-  );
-  const { page, setPage, pageCount, total, slice } = usePaged(filtered, 20);
-  if (error) return <ErrorBox message={error} />;
-  if (data === null) return <Loading label="Scoring attorneys…" />;
-  if (data.length === 0)
-    return (
-      <Empty label="No attorney-attributed claims in the corpus yet." />
-    );
-
-  return (
-    <Card
-      title="Attorneys — practice-level tells"
-      sub="Firms cohorted by practice type (personal-injury boutique · high-volume RAF practice · general practice) and scored within cohort. Two tells lead: the claim-type mix (a book skewed to one head is a concentration signal) and the late-lodgement share (claims filed near the s23 prescription window — a chaser's tell). Per §7, attorney scoring ships with the fairness report (POPIA); read it alongside the Fairness tab."
-      right={
-        <SearchInput
-          value={q}
-          onChange={setQ}
-          placeholder="Search attorney, cohort, rating…"
-          className="w-64"
-        />
-      }
-    >
-      {total === 0 ? (
-        <Empty label="No attorneys match your search." />
-      ) : (
-    <div className="overflow-hidden rounded-md border border-slate-100">
-      <div className="overflow-x-auto">
-        <table className="min-w-full divide-y divide-slate-100 text-sm">
-          <thead className="bg-slate-50">
-            <tr>
-              <th className={`${th} text-left`}>Attorney</th>
-              <th className={`${th} text-left`}>Cohort</th>
-              <th className={`${th} text-right`}>Claims</th>
-              <th className={`${th} text-left`}>Claim-type mix</th>
-              <th className={`${th} text-right`}>Late lodgement</th>
-              <th className={`${th} text-right`}>Score</th>
-              <th className={`${th} text-left`}>Rating</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {slice.map((a) => {
-              const lowN = a.confidence === "LOW_N";
-              return (
-                <tr key={a.attorney} className="hover:bg-slate-50">
-                  <td className="px-3 py-2 font-mono text-[13px] text-slate-900">
-                    {a.attorney}
-                  </td>
-                  <td className="px-3 py-2">
-                    <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium text-slate-600">
-                      {a.cohort}
-                    </span>
-                  </td>
-                  <td className="tnum px-3 py-2 text-right text-slate-700">
-                    {num(a.n_claims)}
-                  </td>
-                  <td className="px-3 py-2">
-                    <div className="flex flex-wrap gap-1">
-                      {Object.entries(a.claim_type_mix).map(([t, n]) => (
-                        <span
-                          key={t}
-                          className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600"
-                        >
-                          {t} ·{" "}
-                          <span className="tnum font-medium">{n}</span>
-                        </span>
-                      ))}
-                    </div>
-                  </td>
-                  <td className="tnum px-3 py-2 text-right text-slate-700">
-                    {a.late_lodgement_share}%
-                  </td>
-                  <td className="tnum px-3 py-2 text-right font-semibold text-slate-900">
-                    {lowN ? "—" : a.score}
-                  </td>
-                  <td className="px-3 py-2">
-                    {lowN ? <LowNTag /> : <RatingChip rating={a.rating} />}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
+        <Stat label="Overall" value={data ? `${data.overall_flag_rate ?? 0}%` : "…"} hint="Of claims carry a finding" />
+        <Stat label="Lowest group against highest" value={data ? data.four_fifths_ratio : "…"} tone={data ? (data.pass ? "ok" : "bad") : undefined} hint={data ? (data.pass ? "At or above 0.8: findings fall evenly" : "Below 0.8: one group is flagged far more") : undefined} />
+        <Stat label="Groups needing a look" value={data ? data.by_cohort.filter((c) => c.review).length : "…"} />
       </div>
-      <Pagination
-        page={page}
-        pageCount={pageCount}
-        total={total}
-        onPage={setPage}
-        unit="attorneys"
-      />
+      <DataTable columns={columns} rows={data?.by_cohort ?? []} rowKey={(c) => c.cohort} loading={data === null} empty={<EmptyState title="Nothing to compare yet" body="Figures appear once practices have billed." />} />
+      <Panel title="How to read this">
+        <p className="text-sm text-ink-700">Practices are grouped by how they bill, and each group's share of claims with a finding is compared with the overall share. A group flagged much more often than the rest may be over-scrutinised; one flagged much less may be under-scrutinised. Either is marked for a look once the group has at least {data?.min_group ?? 5} claims and its rate falls below {data?.impact_low ?? 0.8} times or above {data?.impact_high ?? 1.25} times the overall rate.</p>
+      </Panel>
     </div>
-      )}
-    </Card>
   );
 }
 
-// ── Claimants (recurrence) ───────────────────────────────────────────────────
-function ClaimantsTab() {
-  const { data, error } = useFetch<Claimant[]>(() => api.claimants());
-  const [q, setQ] = useState("");
-  const filtered = useMemo(
-    () =>
-      (data ?? []).filter((c) =>
-        matchQ(q, c.party_token, c.accidents.join(" ")),
-      ),
-    [data, q],
-  );
-  const { page, setPage, pageCount, total, slice } = usePaged(filtered, 25);
-  if (error) return <ErrorBox message={error} />;
-  if (data === null) return <Loading label="Scanning recurrence…" />;
-  if (data.length === 0)
-    return (
-      <Empty label="No recurring claimants (no token spans two or more accidents)." />
-    );
-
+function HighRisk() {
+  const { value, set } = useListParams();
+  const threshold = value("score") !== "" && Number(value("score")) >= 0 && Number(value("score")) <= 100 ? Number(value("score")) : 55;
+  const [draft, setDraft] = useState(String(threshold));
+  const { data, error } = useData<RiskSweep>(() => api.riskSweep(threshold), "The list could not be loaded.", [threshold]);
+  const columns: Column<RiskSweep["flagged"][number]>[] = [
+    { key: "who", header: "Party", render: (h) => h.type === "provider"
+      ? <div><Link to={`/practices/${encodeURIComponent(h.id)}`} className="font-medium text-brand-700 hover:underline"><Ref>{h.id}</Ref></Link><div className="text-xs text-ink-500">Practice</div></div>
+      : <div><div className="font-medium text-ink-900">{h.id}</div><div className="text-xs text-ink-500">Attorney</div></div> },
+    { key: "claims", header: "Claims", align: "right", render: (h) => <span className="tnum">{h.n_claims}</span> },
+    { key: "score", header: "Rating", render: (h) => rating(h) },
+    { key: "next", header: "", align: "right", render: (h) => <Link to={h.type === "provider" ? `/claims?provider_id=${encodeURIComponent(h.id)}` : `/claims?q=${encodeURIComponent(h.id)}`} className="text-[13px] text-brand-700 hover:underline">See its claims</Link> },
+  ];
   return (
-    <Card
-      title="Claimants — recurrence across accidents"
-      sub="Claimants are not profiled — the only signal is recurrence: one party token (a resolved P_* identity) appearing across two or more accidents on the graph. Most recurrence is innocent (a person can be in two crashes), so this is a ring-detection input, a thread to pull, not a verdict — weighed with the OAR and party combinations behind it (§7). Only tokens spanning ≥2 accidents appear."
-      right={
-        <SearchInput
-          value={q}
-          onChange={setQ}
-          placeholder="Search party token or accident id…"
-          className="w-64"
-        />
-      }
-    >
-      {total === 0 ? (
-        <Empty label="No claimants match your search." />
-      ) : (
-    <div className="overflow-hidden rounded-md border border-slate-100">
-      <table className="min-w-full divide-y divide-slate-100 text-sm">
-        <thead className="bg-slate-50">
-          <tr>
-            <th className={`${th} text-left`}>Party token</th>
-            <th className={`${th} text-right`}>Accidents</th>
-            <th className={`${th} text-left`}>Accident ids</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-slate-100">
-          {slice.map((c) => (
-            <tr key={c.party_token} className="hover:bg-slate-50">
-              <td className="px-3 py-2 font-mono text-[13px] text-slate-900">
-                {c.party_token}
-              </td>
-              <td className="tnum px-3 py-2 text-right font-semibold text-slate-800">
-                {c.n_accidents}
-              </td>
-              <td className="px-3 py-2">
-                <div className="flex flex-wrap gap-1">
-                  {c.accidents.map((id) => (
-                    <CodePill key={id}>{id}</CodePill>
-                  ))}
-                </div>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <Pagination
-        page={page}
-        pageCount={pageCount}
-        total={total}
-        onPage={setPage}
-        unit="claimants"
-      />
-    </div>
-      )}
-    </Card>
-  );
-}
-
-// ── Fairness ─────────────────────────────────────────────────────────────────
-function FairnessTab() {
-  const { data, error } = useFetch<Fairness>(() => api.fairness());
-  if (error) return <ErrorBox message={error} />;
-  if (data === null) return <Loading label="Computing disparate impact…" />;
-
-  return (
-    <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-      <div className="lg:col-span-2">
-        <Card
-          title="Disparate impact — provider cohort"
-          sub="The share of each cohort's claims the engine flags. Fairness asks whether that rate is even across cohorts — a question, not a verdict, and BOTH tails matter: a cohort flagged far above the book may signal bias, one far below may be where bad actors hide under-scrutiny. Provider archetype ships as the fairness axis from day one (§7, §11)."
-        >
-          {data.by_cohort.length === 0 ? (
-            <div className="text-sm text-slate-400">No cohorts yet.</div>
-          ) : (
-            <table className="min-w-full divide-y divide-slate-100 text-sm">
-              <thead>
-                <tr>
-                  <th className={`${th} text-left`}>Cohort</th>
-                  <th className={`${th} text-right`}>Claims</th>
-                  <th className={`${th} text-left`}>Flag rate</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {data.by_cohort.map((c) => (
-                  <tr key={c.cohort}>
-                    <td className="px-3 py-2">
-                      <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium text-slate-600">
-                        {c.cohort}
-                      </span>
-                    </td>
-                    <td className="tnum px-3 py-2 text-right text-slate-700">
-                      {num(c.n_claims)}
-                    </td>
-                    <td className="px-3 py-2">
-                      <Bar value={c.flag_rate} width="w-40" />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </Card>
+    <>
+      <div className="mb-3 flex flex-wrap items-end gap-3 rounded-lg border border-line bg-white p-3 shadow-panel">
+        <Field label="Score at or above" hint="0 to 100. 55 is where a rating becomes High.">
+          <Input type="number" min={0} max={100} className="w-32" value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") set({ score: draft === "55" ? null : draft }); }} />
+        </Field>
+        <Button onClick={() => set({ score: draft === "55" ? null : draft })}>Show</Button>
       </div>
-
-      <Card
-        title="Four-fifths ratio"
-        sub="min ÷ max cohort flag rate; the 4/5ths rule flags disparate impact below 0.80."
-      >
-        <div className="flex flex-col items-center py-4">
-          <div className="tnum text-5xl font-bold text-slate-900">
-            {data.four_fifths_ratio.toFixed(2)}
-          </div>
-          <div className="mt-3">
-            {data.pass ? (
-              <span className="inline-flex items-center rounded-md bg-emerald-100 px-3 py-1 text-sm font-semibold text-emerald-800 ring-1 ring-inset ring-emerald-600/20">
-                PASS · ≥ 0.80
-              </span>
-            ) : (
-              <span className="inline-flex items-center rounded-md bg-rose-100 px-3 py-1 text-sm font-semibold text-rose-800 ring-1 ring-inset ring-rose-600/20">
-                FAIL · &lt; 0.80
-              </span>
-            )}
-          </div>
-          <p className="mt-3 text-center text-[11px] leading-relaxed text-slate-400">
-            A headline gauge only — the cohort table beside it is the finer,
-            two-tailed instrument.
-          </p>
-        </div>
-      </Card>
-    </div>
-  );
-}
-
-// ── Risk sweep ───────────────────────────────────────────────────────────────
-function SweepTab() {
-  const [threshold, setThreshold] = useState(55);
-  const [result, setResult] = useState<RiskSweep | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const { page, setPage, pageCount, total, slice } = usePaged(
-    result?.flagged ?? [],
-    25,
-  );
-
-  const runSweep = useCallback((t: number) => {
-    setBusy(true);
-    setError(null);
-    api
-      .riskSweep(t)
-      .then((r) => setResult(r))
-      .catch((e) =>
-        setError(e instanceof ApiError ? e.message : "Sweep failed"),
-      )
-      .finally(() => setBusy(false));
-  }, []);
-
-  // Run once on mount at the default threshold.
-  useEffect(() => {
-    runSweep(55);
-  }, [runSweep]);
-
-  return (
-    <Card
-      title="Risk sweep — one threshold across every party"
-      sub="Sweeps providers and attorneys together and returns every party whose composite score sits at or above the threshold, worst-first. This is the operator's dial on where the review line falls: raise it for the shortest, highest-conviction worklist; lower it to widen the net. In production a sweep auto-opens a REVIEW case per party over the line, anchored to its worst claim and idempotent (§7). LOW_N parties are excluded — an unscored party never crosses a threshold."
-      right={
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="w-28">
-            <label className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-slate-400">
-              Score threshold
-            </label>
-            <input
-              type="number"
-              min={0}
-              max={100}
-              value={threshold}
-              onChange={(e) => setThreshold(Number(e.target.value))}
-              className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-slate-500 focus:ring-1 focus:ring-slate-500"
-            />
-          </div>
-          <button
-            onClick={() => runSweep(threshold)}
-            disabled={busy}
-            className="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-40"
-          >
-            {busy ? "Sweeping…" : "Run sweep"}
-          </button>
-          {result && (
-            <span className="pb-1.5 text-sm text-slate-500">
-              <span className="tnum font-semibold text-slate-800">
-                {result.n}
-              </span>{" "}
-              part{result.n === 1 ? "y" : "ies"} at/above{" "}
-              {result.threshold}
-            </span>
-          )}
-        </div>
-      }
-    >
-      {error ? (
-        <ErrorBox message={error} />
-      ) : !result ? (
-        <Loading label="Running sweep…" />
-      ) : result.flagged.length === 0 ? (
-        <Empty label="No parties at or above the threshold — a clean sweep." />
-      ) : (
-        <div className="overflow-hidden rounded-md border border-slate-100">
-          <table className="min-w-full divide-y divide-slate-100 text-sm">
-            <thead className="bg-slate-50">
-              <tr>
-                <th className={`${th} text-left`}>Type</th>
-                <th className={`${th} text-left`}>Party</th>
-                <th className={`${th} text-right`}>Claims</th>
-                <th className={`${th} text-right`}>Score</th>
-                <th className={`${th} text-left`}>Rating</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {slice.map((f) => (
-                <tr key={`${f.type}:${f.id}`} className="hover:bg-slate-50">
-                  <td className="px-3 py-2">
-                    <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium text-slate-600">
-                      {f.type}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2 font-mono text-[13px] text-slate-900">
-                    {f.id}
-                  </td>
-                  <td className="tnum px-3 py-2 text-right text-slate-700">
-                    {num(f.n_claims)}
-                  </td>
-                  <td className="tnum px-3 py-2 text-right font-semibold text-slate-900">
-                    {f.score}
-                  </td>
-                  <td className="px-3 py-2">
-                    <RatingChip rating={f.rating} />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <Pagination
-            page={page}
-            pageCount={pageCount}
-            total={total}
-            onPage={setPage}
-            unit="flagged"
-          />
-        </div>
+      <div className="mb-3 rounded-lg border border-info-line bg-info-bg px-4 py-3 text-sm text-info-fg">
+        This list is for looking, not acting. Being on it holds no claim and opens no case. To act on a party, open a case in <Link to="/cases" className="font-medium underline">Cases</Link> so a person makes and records the decision.
+      </div>
+      {error ? <ErrorBlock message={error} /> : (
+        <DataTable
+          columns={columns} rows={data?.flagged ?? []} rowKey={(h) => `${h.type}:${h.id}`} loading={data === null}
+          empty={<EmptyState title={`No party scores ${threshold} or more`} body="Lower the score to see more." />}
+          footer={<span className="text-[13px] text-ink-500">{data?.n ?? 0} practices and attorneys score {threshold} or more, highest first</span>}
+        />
       )}
-    </Card>
+    </>
   );
 }

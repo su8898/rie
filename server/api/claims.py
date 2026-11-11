@@ -5,17 +5,17 @@ from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response
-from sqlalchemy import desc, func, or_, select
+from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from pydantic import BaseModel
 
 from .. import (
-    admin_service, lifecycle_service, litigation_service, merits_service, models, offers_service,
-    serious_injury_service, undertaking_service,
+    admin_service, claims_query, lifecycle_service, litigation_service, merits_service, models, offers_service,
+    serious_injury_service, undertaking_service, work_query,
 )
 from ..db import get_db
-from ..models import ClaimRecord, Determination, latest_determination_ids
+from ..models import ClaimRecord, Determination
 from ..pipeline_service import DuplicateClaim, assess_and_store
 from ..pseudonymise import pseudonymise_ingest
 from ..validation import SubmissionError, validate_submission
@@ -93,24 +93,28 @@ def rescore(claim_id: str, body: RescoreIn = RescoreIn(), db: Session = Depends(
 def list_claims(response: Response, db: Session = Depends(get_db), user: dict = Depends(current_user),
                 band: str | None = None, disposition: str | None = None,
                 q: str | None = None, needs_review: bool | None = None,
+                claim_type: str | None = None, eligible: bool | None = None,
+                provider_id: str | None = None, lodged_from: date | None = None,
+                lodged_to: date | None = None,
+                sort: str = Query("received", pattern="^(received|claim|lodged|payable|score)$"),
+                direction: str = Query("desc", pattern="^(asc|desc)$"),
                 limit: int = Query(50, le=200), offset: int = 0) -> list[dict]:
     """One row per claim — its LATEST determination (a rescore supersedes, it does not add a
-    row here). `X-Total-Count` carries the full filtered count so the UI can page server-side."""
-    stmt = select(Determination).where(Determination.id.in_(latest_determination_ids()))
-    if band:
-        stmt = stmt.where(Determination.band == band)
-    if disposition:
-        stmt = stmt.where(Determination.disposition == disposition)
-    if needs_review is not None:
-        stmt = stmt.where(Determination.needs_review.is_(needs_review))
-    if q and q.strip():
-        like = f"%{q.strip()}%"
-        stmt = stmt.where(or_(Determination.claim_id.ilike(like),
-                              Determination.accident_id.ilike(like)))
-    total = db.scalar(select(func.count()).select_from(stmt.subquery()))
-    response.headers["X-Total-Count"] = str(total or 0)
-    rows = db.scalars(stmt.order_by(desc(Determination.id)).limit(limit).offset(offset))
-    return [_det_dict(r) for r in rows]
+    row here), with the claim's type, dates, billed total and billing practices. `X-Total-Count`
+    carries the full filtered count so the UI can page server-side."""
+    rows, total = claims_query.list_claims(
+        db, band=band, disposition=disposition, q=q, needs_review=needs_review,
+        claim_type=claim_type, eligible=eligible, provider_id=provider_id,
+        lodged_from=lodged_from, lodged_to=lodged_to, sort=sort, direction=direction,
+        limit=limit, offset=offset)
+    response.headers["X-Total-Count"] = str(total)
+    return [{**_det_dict(det),
+             "claim_type": claim.claim_type if claim else None,
+             "party_token": claim.party_token if claim else None,
+             "accident_date": claim.accident_date.isoformat() if claim else None,
+             "lodged_on": claim.lodged_on.isoformat() if claim else None,
+             "billed": extra["billed"], "providers": extra["providers"]}
+            for det, claim, extra in rows]
 
 
 @router.get("/{claim_id}")
@@ -120,7 +124,15 @@ def get_claim(claim_id: str, db: Session = Depends(get_db),
                     .order_by(desc(Determination.id)))
     if det is None:
         raise HTTPException(status_code=404, detail="claim not found")
-    return {"claim": _claim_dict(db.get(ClaimRecord, claim_id)), "determination": _det_dict(det)}
+    return {"claim": _claim_dict(db.get(ClaimRecord, claim_id)), "determination": _det_dict(det),
+            **claims_query.claim_extras(db, claim_id)}
+
+
+@router.get("/{claim_id}/workflow/history")
+def workflow_history(claim_id: str, db: Session = Depends(get_db),
+                     user: dict = Depends(current_user)) -> list[dict]:
+    """Every workflow step taken on the claim, across all its machines, newest first."""
+    return work_query.claim_workflow_history(db, claim_id)
 
 
 @router.get("/{claim_id}/workflow")
